@@ -1,0 +1,14 @@
+# Copyright (c) 2025 Glavo
+#
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+[workspace]
+resolver = "3"
+members = ["janex-cli"]
+
+[workspace.package]
+version = "0.1.0"
+authors = ["Glavo"]
+edition = "2024"
