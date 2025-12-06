@@ -9,3 +9,6 @@ members = ["janex-cli"]
 version = "0.1.0"
 authors = ["Glavo"]
 edition = "2024"
+
+[workspace.dependencies]
+clap = "4.5.53"
