@@ -2,13 +2,7 @@
 # SPDX-License-Identifier: MPL-2.0
 
 [package]
-name = "janex-cli"
+name = "janex-core"
 version.workspace = true
 edition.workspace = true
 
-[[bin]]
-name = "janex"
-path = "src/main.rs"
-
-[dependencies]
-clap.workspace = true
