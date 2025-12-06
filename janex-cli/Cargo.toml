@@ -11,4 +11,6 @@ name = "janex"
 path = "src/main.rs"
 
 [dependencies]
+janex-core = { path = "../janex-core" }
+
 clap.workspace = true
