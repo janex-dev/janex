@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Glavo
 // SPDX-License-Identifier: MPL-2.0
 
+use crate::byteorder::BigEndian;
 use crate::error::Error;
 use crate::io::{ArrayDataReader, DataReader};
 
@@ -27,7 +28,7 @@ impl ClassFile {
     pub const MAGIC_NUMBER: u32 = 0xCAFEBABE;
 
     /// Parses a class file from the given bytes.
-    pub fn parse(reader: &mut impl DataReader) -> Result<ClassFile, Error> {
+    pub fn parse(reader: &mut impl DataReader<BigEndian>) -> Result<ClassFile, Error> {
         let magic = reader.read_u32()?;
         if magic != Self::MAGIC_NUMBER {
             return Err(Error::InvalidMagicNumber(magic));
@@ -78,7 +79,7 @@ impl ClassFile {
 
     /// Reads the constant pool from the class file.
     fn read_constant_pool(
-        reader: &mut impl DataReader,
+        reader: &mut impl DataReader<BigEndian>,
         constant_pool_count: u16,
     ) -> Result<Box<[ConstantPoolInfo]>, Error> {
         let mut constant_pool = Vec::with_capacity(constant_pool_count as usize);
@@ -100,7 +101,7 @@ impl ClassFile {
     }
 
     fn read_members(
-        reader: &mut impl DataReader,
+        reader: &mut impl DataReader<BigEndian>,
         members_count: u16,
     ) -> Result<Box<[MemberInfo]>, Error> {
         let mut fields = Vec::with_capacity(members_count as usize);
@@ -122,7 +123,7 @@ impl ClassFile {
     }
 
     fn read_attributes(
-        reader: &mut impl DataReader,
+        reader: &mut impl DataReader<BigEndian>,
         attributes_count: u16,
     ) -> Result<Box<[AttributeInfo]>, Error> {
         let mut attributes = Vec::with_capacity(attributes_count as usize);
@@ -318,7 +319,7 @@ impl ConstantPoolInfo {
         }
     }
 
-    pub fn read_constant(reader: &mut impl DataReader) -> Result<ConstantPoolInfo, Error> {
+    pub fn read_constant(reader: &mut impl DataReader<BigEndian>) -> Result<ConstantPoolInfo, Error> {
         let tag = reader.read_u8()?;
         Ok(match tag {
             Self::TAG_Utf8 => {

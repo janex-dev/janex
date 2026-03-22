@@ -6,3 +6,4 @@ pub mod packer;
 pub mod classfile;
 pub mod io;
 pub mod error;
+pub mod byteorder;

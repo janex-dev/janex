@@ -1,10 +1,11 @@
 // Copyright (c) 2026 Glavo
 // SPDX-License-Identifier: MPL-2.0
 
+use crate::byteorder::ByteOrder;
 use crate::error::Error;
 
-/// A reader for reading big-endian data.
-pub trait DataReader {
+/// A reader for reading data.
+pub trait DataReader<BO: ByteOrder> {
     fn read_array<const N: usize>(&mut self) -> Result<[u8; N], Error>;
 
     fn read_u8_array(&mut self, size: usize) -> Result<Box<[u8]>, Error>;
@@ -13,7 +14,7 @@ pub trait DataReader {
         Ok(self
             .read_u8_array(size * 2)?
             .chunks_exact(2)
-            .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+            .map(|chunk| BO::read_u16(chunk))
             .collect())
     }
 
@@ -24,12 +25,12 @@ pub trait DataReader {
 
     fn read_u16(&mut self) -> Result<u16, Error> {
         let bytes = self.read_array::<2>()?;
-        Ok(u16::from_be_bytes(bytes))
+        Ok(BO::u16_from_bytes(bytes))
     }
 
     fn read_u32(&mut self) -> Result<u32, Error> {
         let bytes = self.read_array::<4>()?;
-        Ok(u32::from_be_bytes(bytes))
+        Ok(BO::u32_from_bytes(bytes))
     }
 }
 
@@ -44,7 +45,7 @@ impl<'a> ArrayDataReader<'a> {
     }
 }
 
-impl DataReader for ArrayDataReader<'_> {
+impl<BO: ByteOrder> DataReader<BO> for ArrayDataReader<'_> {
     fn read_array<const N: usize>(&mut self) -> Result<[u8; N], Error> {
         if self.bytes.len() >= N {
             let (head, tail) = self.bytes.split_at(N);
