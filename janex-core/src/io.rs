@@ -3,6 +3,7 @@
 
 use crate::error::Error;
 
+/// A reader for reading big-endian data.
 pub trait DataReader {
     fn read_array<const N: usize>(&mut self) -> Result<[u8; N], Error>;
 
@@ -32,7 +33,7 @@ pub trait DataReader {
     }
 }
 
-/// A reader for reading big-endian data.
+/// A implementation of [`DataReader`] that reads from a slice of bytes.
 pub struct ArrayDataReader<'a> {
     bytes: &'a [u8],
 }
