@@ -71,6 +71,7 @@ impl ClassFile {
         })
     }
 
+    /// Parses a class file from the given bytes.
     pub fn parse_from_bytes(bytes: &[u8]) -> Result<ClassFile, Error> {
         Self::parse(&mut ArrayDataReader::new(bytes))
     }
