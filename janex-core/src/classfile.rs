@@ -13,8 +13,9 @@ pub struct ClassFile {
     pub this_class: u16,
     pub super_class: u16,
     pub interfaces: Box<[u16]>,
-    pub fields: Box<[u16]>,
-    pub methods: Box<[u16]>,
+    pub fields: Box<[MemberInfo]>,
+    pub methods: Box<[MemberInfo]>,
+    pub attributes_count: u16,
     pub attributes: Box<[AttributeInfo]>,
 }
 
@@ -45,10 +46,10 @@ impl ClassFile {
         let interfaces = reader.read_u16_array(interfaces_count as usize)?;
 
         let fields_count = reader.read_u16()?;
-        let fields = reader.read_u16_array(fields_count as usize)?;
+        let fields = Self::read_members(&mut reader, fields_count)?;
 
         let methods_count = reader.read_u16()?;
-        let methods = reader.read_u16_array(methods_count as usize)?;
+        let methods = Self::read_members(&mut reader, methods_count)?;
 
         let attributes_count = reader.read_u16()?;
         let attributes = Self::read_attributes(&mut reader, attributes_count)?;
@@ -64,6 +65,7 @@ impl ClassFile {
             interfaces,
             fields,
             methods,
+            attributes_count,
             attributes,
         })
     }
@@ -91,6 +93,28 @@ impl ClassFile {
         Ok(constant_pool.into())
     }
 
+    fn read_members(
+        reader: &mut DataReader,
+        members_count: u16,
+    ) -> Result<Box<[MemberInfo]>, Error> {
+        let mut fields = Vec::with_capacity(members_count as usize);
+        for _ in 0..members_count {
+            let access_flags = reader.read_u16()?;
+            let name_index = reader.read_u16()?;
+            let descriptor_index = reader.read_u16()?;
+            let attributes_count = reader.read_u16()?;
+            let attributes = Self::read_attributes(reader, attributes_count)?;
+            fields.push(MemberInfo {
+                access_flags,
+                name_index,
+                descriptor_index,
+                attributes_count,
+                attributes,
+            });
+        }
+        Ok(fields.into())
+    }
+
     fn read_attributes(
         reader: &mut DataReader,
         attributes_count: u16,
@@ -115,64 +139,131 @@ impl ClassFile {
 /// See [JVM Spec §4.4](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4).
 pub enum ConstantPoolInfo {
     Padding,
+    /// The CONSTANT_Utf8_info structure is used to represent constant string values.
+    ///
+    /// See [JVM Spec §4.4.7](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.7)
     Utf8 {
         length: u16,
         bytes: Box<[u8]>,
     },
+
+    /// The CONSTANT_Integer_info structure represents 4-byte integer constants.
+    ///
+    /// See [JVM Spec §4.4.4](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.4)
     Integer {
         bytes: u32,
     },
+
+    /// The CONSTANT_Float_info structure represents 4-byte floating-point constants.
+    ///
+    /// See [JVM Spec §4.4.4](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.4)
     Float {
         bytes: u32,
     },
+
+    /// The CONSTANT_Long_info structure represents 8-byte integer constants.
+    ///
+    /// See [JVM Spec §4.4.5](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.5)
     Long {
         high_bytes: u32,
         low_bytes: u32,
     },
+
+    /// The CONSTANT_Double_info structure represents 8-byte floating-point constants.
+    ///
+    /// See [JVM Spec §4.4.5](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.5)
     Double {
         high_bytes: u32,
         low_bytes: u32,
     },
+
+    /// The CONSTANT_Class_info structure is used to represent a class or an interface.
+    ///
+    /// See [JVM Spec §4.4.1](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.1)
     Class {
         name_index: u16,
     },
+
+    /// The CONSTANT_String_info structure is used to represent string constants.
+    ///
+    /// See [JVM Spec §4.4.3](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.3)
     String {
         string_index: u16,
     },
+
+    /// The CONSTANT_Fieldref_info structure is used to represent a field reference.
+    ///
+    /// See [JVM Spec §4.4.2](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.2)
     Fieldref {
         class_index: u16,
         name_and_type_index: u16,
     },
+
+    /// The CONSTANT_Methodref_info structure is used to represent a method reference.
+    ///
+    /// See [JVM Spec §4.4.2](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.2)
     Methodref {
         class_index: u16,
         name_and_type_index: u16,
     },
+
+    /// The CONSTANT_InterfaceMethodref_info structure is used to represent an interface method reference.
+    ///
+    /// See [JVM Spec §4.4.2](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.2)
     InterfaceMethodref {
         class_index: u16,
         name_and_type_index: u16,
     },
+
+    /// The CONSTANT_NameAndType_info structure is used to represent a field or method, without indicating which class or interface type it belongs to.
+    ///
+    /// See [JVM Spec §4.4.6](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.6)
     NameAndType {
         name_index: u16,
         descriptor_index: u16,
     },
+
+    /// The CONSTANT_MethodHandle_info structure is used to represent a method handle.
+    ///
+    /// See [JVM Spec §4.4.8](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.8)
     MethodHandle {
         reference_kind: u8,
         reference_index: u16,
     },
+
+    /// The CONSTANT_MethodType_info structure is used to represent a method descriptor.
+    ///
+    /// See [JVM Spec §4.4.9](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.9)
     MethodType {
         descriptor_index: u16,
     },
+
+    /// The CONSTANT_Dynamic_info structure is used to represent a dynamically-computed constant.
+    ///
+    /// See [JVM Spec §4.4.10](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.10)
     Dynamic {
         bootstrap_method_attr_index: u16,
         name_and_type_index: u16,
     },
+
+    /// The CONSTANT_InvokeDynamic_info structure is used to represent an invokedynamic instruction.
+    ///
+    /// See [JVM Spec §4.4.10](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.10)
     InvokeDynamic {
         bootstrap_method_attr_index: u16,
         name_and_type_index: u16,
     },
+
+    /// The CONSTANT_Module_info structure is used to represent a module.
+    ///
+    /// See [JVM Spec §4.4.11](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.11)
     Module {
         name_index: u16,
     },
+
+    /// The CONSTANT_Package_info structure is used to represent a package.
+    ///
+    /// See [JVM Spec §4.4.12](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.12)
     Package {
         name_index: u16,
     },
@@ -336,6 +427,18 @@ impl ConstantPoolInfo {
     }
 }
 
+/// A field or method in the class file format.
+///
+/// See [JVM Spec §4.5](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.5)
+/// and [JVM Spec §4.6](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.6).
+pub struct MemberInfo {
+    pub access_flags: u16,
+    pub name_index: u16,
+    pub descriptor_index: u16,
+    pub attributes_count: u16,
+    pub attributes: Box<[AttributeInfo]>,
+}
+
 /// An attribute in the class file format.
 ///
 /// See [JVM Spec §4.7](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.7).
@@ -405,7 +508,7 @@ impl<'a> DataReader<'a> {
             self.bytes = tail;
             Ok(head
                 .chunks_exact(2)
-                .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+                .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
                 .collect())
         } else {
             Err(Error::UnexpectedEndOfFile)
