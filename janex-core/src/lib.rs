@@ -4,3 +4,4 @@
 mod platform;
 mod packer;
 mod classfile;
+pub mod io;
