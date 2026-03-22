@@ -1,7 +1,8 @@
 // Copyright (c) 2025 Glavo
 // SPDX-License-Identifier: MPL-2.0
 
-mod platform;
-mod packer;
-mod classfile;
+pub mod platform;
+pub mod packer;
+pub mod classfile;
 pub mod io;
+pub mod error;

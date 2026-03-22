@@ -1,7 +1,8 @@
 // Copyright (c) 2026 Glavo
 // SPDX-License-Identifier: MPL-2.0
 
-use crate::io::DataReader;
+use crate::error::Error;
+use crate::io::{ArrayDataReader, DataReader};
 
 /// A class file in the JVM class file format.
 ///
@@ -26,9 +27,7 @@ impl ClassFile {
     pub const MAGIC_NUMBER: u32 = 0xCAFEBABE;
 
     /// Parses a class file from the given bytes.
-    pub fn parse(bytes: &[u8]) -> Result<ClassFile, Error> {
-        let mut reader = DataReader::new(bytes);
-
+    pub fn parse(reader: &mut impl DataReader) -> Result<ClassFile, Error> {
         let magic = reader.read_u32()?;
         if magic != Self::MAGIC_NUMBER {
             return Err(Error::InvalidMagicNumber(magic));
@@ -38,7 +37,7 @@ impl ClassFile {
         let major_version = reader.read_u16()?;
 
         let constant_pool_count = reader.read_u16()?;
-        let constant_pool = Self::read_constant_pool(&mut reader, constant_pool_count)?;
+        let constant_pool = Self::read_constant_pool(reader, constant_pool_count)?;
 
         let access_flags = reader.read_u16()?;
         let this_class = reader.read_u16()?;
@@ -48,13 +47,13 @@ impl ClassFile {
         let interfaces = reader.read_u16_array(interfaces_count as usize)?;
 
         let fields_count = reader.read_u16()?;
-        let fields = Self::read_members(&mut reader, fields_count)?;
+        let fields = Self::read_members(reader, fields_count)?;
 
         let methods_count = reader.read_u16()?;
-        let methods = Self::read_members(&mut reader, methods_count)?;
+        let methods = Self::read_members(reader, methods_count)?;
 
         let attributes_count = reader.read_u16()?;
-        let attributes = Self::read_attributes(&mut reader, attributes_count)?;
+        let attributes = Self::read_attributes(reader, attributes_count)?;
 
         Ok(ClassFile {
             minor_version,
@@ -74,7 +73,7 @@ impl ClassFile {
 
     /// Reads the constant pool from the class file.
     fn read_constant_pool(
-        reader: &mut DataReader,
+        reader: &mut impl DataReader,
         constant_pool_count: u16,
     ) -> Result<Box<[ConstantPoolInfo]>, Error> {
         let mut constant_pool = Vec::with_capacity(constant_pool_count as usize);
@@ -96,7 +95,7 @@ impl ClassFile {
     }
 
     fn read_members(
-        reader: &mut DataReader,
+        reader: &mut impl DataReader,
         members_count: u16,
     ) -> Result<Box<[MemberInfo]>, Error> {
         let mut fields = Vec::with_capacity(members_count as usize);
@@ -118,7 +117,7 @@ impl ClassFile {
     }
 
     fn read_attributes(
-        reader: &mut DataReader,
+        reader: &mut impl DataReader,
         attributes_count: u16,
     ) -> Result<Box<[AttributeInfo]>, Error> {
         let mut attributes = Vec::with_capacity(attributes_count as usize);
@@ -314,7 +313,7 @@ impl ConstantPoolInfo {
         }
     }
 
-    pub fn read_constant(reader: &mut DataReader) -> Result<ConstantPoolInfo, Error> {
+    pub fn read_constant(reader: &mut impl DataReader) -> Result<ConstantPoolInfo, Error> {
         let tag = reader.read_u8()?;
         Ok(match tag {
             Self::TAG_Utf8 => {
@@ -448,11 +447,4 @@ pub struct AttributeInfo {
     pub attribute_name_index: u16,
     pub attribute_length: u32,
     pub info: Box<[u8]>,
-}
-
-/// Errors that can occur when parsing a class file.
-pub enum Error {
-    UnexpectedEndOfFile,
-    InvalidMagicNumber(u32),
-    UnknownConstantPoolInfo { tag: u8 },
 }
