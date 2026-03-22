@@ -71,6 +71,10 @@ impl ClassFile {
         })
     }
 
+    pub fn parse_from_bytes(bytes: &[u8]) -> Result<ClassFile, Error> {
+        Self::parse(&mut ArrayDataReader::new(bytes))
+    }
+
     /// Reads the constant pool from the class file.
     fn read_constant_pool(
         reader: &mut impl DataReader,
