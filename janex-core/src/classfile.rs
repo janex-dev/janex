@@ -24,34 +24,34 @@ impl ClassFile {
 
     /// Parses a class file from the given bytes.
     pub fn parse(bytes: &[u8]) -> Result<ClassFile, Error> {
-        let mut parser = ClassFileParser { bytes };
+        let mut reader = DataReader { bytes };
 
-        let magic = parser.read_u32()?;
+        let magic = reader.read_u32()?;
         if magic != Self::MAGIC_NUMBER {
             return Err(Error::InvalidMagicNumber(magic));
         }
 
-        let minor_version = parser.read_u16()?;
-        let major_version = parser.read_u16()?;
+        let minor_version = reader.read_u16()?;
+        let major_version = reader.read_u16()?;
 
-        let constant_pool_count = parser.read_u16()?;
-        let constant_pool = Self::read_constant_pool(&mut parser, constant_pool_count)?;
+        let constant_pool_count = reader.read_u16()?;
+        let constant_pool = Self::read_constant_pool(&mut reader, constant_pool_count)?;
 
-        let access_flags = parser.read_u16()?;
-        let this_class = parser.read_u16()?;
-        let super_class = parser.read_u16()?;
+        let access_flags = reader.read_u16()?;
+        let this_class = reader.read_u16()?;
+        let super_class = reader.read_u16()?;
 
-        let interfaces_count = parser.read_u16()?;
-        let interfaces = parser.read_u16_array(interfaces_count as usize)?;
+        let interfaces_count = reader.read_u16()?;
+        let interfaces = reader.read_u16_array(interfaces_count as usize)?;
 
-        let fields_count = parser.read_u16()?;
-        let fields = parser.read_u16_array(fields_count as usize)?;
+        let fields_count = reader.read_u16()?;
+        let fields = reader.read_u16_array(fields_count as usize)?;
 
-        let methods_count = parser.read_u16()?;
-        let methods = parser.read_u16_array(methods_count as usize)?;
+        let methods_count = reader.read_u16()?;
+        let methods = reader.read_u16_array(methods_count as usize)?;
 
-        let attributes_count = parser.read_u16()?;
-        let attributes = Self::read_attributes(&mut parser, attributes_count)?;
+        let attributes_count = reader.read_u16()?;
+        let attributes = Self::read_attributes(&mut reader, attributes_count)?;
 
         Ok(ClassFile {
             minor_version,
@@ -70,7 +70,7 @@ impl ClassFile {
 
     /// Reads the constant pool from the class file.
     fn read_constant_pool(
-        parser: &mut ClassFileParser,
+        reader: &mut DataReader,
         constant_pool_count: u16,
     ) -> Result<Box<[ConstantPoolInfo]>, Error> {
         let mut constant_pool = Vec::with_capacity(constant_pool_count as usize);
@@ -83,7 +83,7 @@ impl ClassFile {
                     ConstantPoolInfo::Long { .. } | ConstantPoolInfo::Double { .. } => {
                         constant_pool.push(ConstantPoolInfo::Padding)
                     }
-                    _ => constant_pool.push(ConstantPoolInfo::read_constant(parser)?),
+                    _ => constant_pool.push(ConstantPoolInfo::read_constant(reader)?),
                 }
             }
         }
@@ -92,14 +92,14 @@ impl ClassFile {
     }
 
     fn read_attributes(
-        parser: &mut ClassFileParser,
+        reader: &mut DataReader,
         attributes_count: u16,
     ) -> Result<Box<[AttributeInfo]>, Error> {
         let mut attributes = Vec::with_capacity(attributes_count as usize);
         for _ in 0..attributes_count {
-            let attribute_name_index = parser.read_u16()?;
-            let attribute_length = parser.read_u32()?;
-            let info = parser.read_u8_array(attribute_length as usize)?;
+            let attribute_name_index = reader.read_u16()?;
+            let attribute_length = reader.read_u32()?;
+            let info = reader.read_u8_array(attribute_length as usize)?;
             attributes.push(AttributeInfo {
                 attribute_name_index,
                 attribute_length,
@@ -221,112 +221,112 @@ impl ConstantPoolInfo {
         }
     }
 
-    pub fn read_constant(parser: &mut ClassFileParser) -> Result<ConstantPoolInfo, Error> {
-        let tag = parser.read_u8()?;
+    pub fn read_constant(reader: &mut DataReader) -> Result<ConstantPoolInfo, Error> {
+        let tag = reader.read_u8()?;
         Ok(match tag {
             Self::TAG_Utf8 => {
-                let length = parser.read_u16()?;
-                let bytes = parser.read_u8_array(length as usize)?;
+                let length = reader.read_u16()?;
+                let bytes = reader.read_u8_array(length as usize)?;
                 ConstantPoolInfo::Utf8 { length, bytes }
             }
             Self::TAG_Integer => {
-                let bytes = parser.read_u32()?;
+                let bytes = reader.read_u32()?;
                 ConstantPoolInfo::Integer { bytes }
             }
             Self::TAG_Float => {
-                let bytes = parser.read_u32()?;
+                let bytes = reader.read_u32()?;
                 ConstantPoolInfo::Float { bytes }
             }
             Self::TAG_Long => {
-                let high_bytes = parser.read_u32()?;
-                let low_bytes = parser.read_u32()?;
+                let high_bytes = reader.read_u32()?;
+                let low_bytes = reader.read_u32()?;
                 ConstantPoolInfo::Long {
                     high_bytes,
                     low_bytes,
                 }
             }
             Self::TAG_Double => {
-                let high_bytes = parser.read_u32()?;
-                let low_bytes = parser.read_u32()?;
+                let high_bytes = reader.read_u32()?;
+                let low_bytes = reader.read_u32()?;
                 ConstantPoolInfo::Double {
                     high_bytes,
                     low_bytes,
                 }
             }
             Self::TAG_Class => {
-                let name_index = parser.read_u16()?;
+                let name_index = reader.read_u16()?;
                 ConstantPoolInfo::Class { name_index }
             }
             Self::TAG_String => {
-                let string_index = parser.read_u16()?;
+                let string_index = reader.read_u16()?;
                 ConstantPoolInfo::String { string_index }
             }
             Self::TAG_Fieldref => {
-                let class_index = parser.read_u16()?;
-                let name_and_type_index = parser.read_u16()?;
+                let class_index = reader.read_u16()?;
+                let name_and_type_index = reader.read_u16()?;
                 ConstantPoolInfo::Fieldref {
                     class_index,
                     name_and_type_index,
                 }
             }
             Self::TAG_Methodref => {
-                let class_index = parser.read_u16()?;
-                let name_and_type_index = parser.read_u16()?;
+                let class_index = reader.read_u16()?;
+                let name_and_type_index = reader.read_u16()?;
                 ConstantPoolInfo::Methodref {
                     class_index,
                     name_and_type_index,
                 }
             }
             Self::TAG_InterfaceMethodref => {
-                let class_index = parser.read_u16()?;
-                let name_and_type_index = parser.read_u16()?;
+                let class_index = reader.read_u16()?;
+                let name_and_type_index = reader.read_u16()?;
                 ConstantPoolInfo::InterfaceMethodref {
                     class_index,
                     name_and_type_index,
                 }
             }
             Self::TAG_NameAndType => {
-                let name_index = parser.read_u16()?;
-                let descriptor_index = parser.read_u16()?;
+                let name_index = reader.read_u16()?;
+                let descriptor_index = reader.read_u16()?;
                 ConstantPoolInfo::NameAndType {
                     name_index,
                     descriptor_index,
                 }
             }
             Self::TAG_MethodHandle => {
-                let reference_kind = parser.read_u8()?;
-                let reference_index = parser.read_u16()?;
+                let reference_kind = reader.read_u8()?;
+                let reference_index = reader.read_u16()?;
                 ConstantPoolInfo::MethodHandle {
                     reference_kind,
                     reference_index,
                 }
             }
             Self::TAG_MethodType => {
-                let descriptor_index = parser.read_u16()?;
+                let descriptor_index = reader.read_u16()?;
                 ConstantPoolInfo::MethodType { descriptor_index }
             }
             Self::TAG_Dynamic => {
-                let bootstrap_method_attr_index = parser.read_u16()?;
-                let name_and_type_index = parser.read_u16()?;
+                let bootstrap_method_attr_index = reader.read_u16()?;
+                let name_and_type_index = reader.read_u16()?;
                 ConstantPoolInfo::Dynamic {
                     bootstrap_method_attr_index,
                     name_and_type_index,
                 }
             }
             Self::TAG_InvokeDynamic => {
-                let bootstrap_method_attr_index = parser.read_u16()?;
-                let name_and_type_index = parser.read_u16()?;
+                let bootstrap_method_attr_index = reader.read_u16()?;
+                let name_and_type_index = reader.read_u16()?;
                 ConstantPoolInfo::InvokeDynamic {
                     bootstrap_method_attr_index,
                     name_and_type_index,
                 }
             }
             Self::TAG_Module => {
-                let name_index = parser.read_u16()?;
+                let name_index = reader.read_u16()?;
                 ConstantPoolInfo::Module { name_index }
             }
             Self::TAG_Package => {
-                let name_index = parser.read_u16()?;
+                let name_index = reader.read_u16()?;
                 ConstantPoolInfo::Package { name_index }
             }
             _ => {
@@ -345,22 +345,21 @@ pub struct AttributeInfo {
     pub info: Box<[u8]>,
 }
 
+/// Errors that can occur when parsing a class file.
 pub enum Error {
     UnexpectedEndOfFile,
     InvalidMagicNumber(u32),
     UnknownConstantPoolInfo { tag: u8 },
 }
 
-/// A parser for the class file format.
-///
-/// All methods in this parser are big-endian.
-struct ClassFileParser<'a> {
+/// A reader for reading big-endian data.
+struct DataReader<'a> {
     bytes: &'a [u8],
 }
 
-impl<'a> ClassFileParser<'a> {
-    fn new(bytes: &'a [u8]) -> ClassFileParser<'a> {
-        ClassFileParser { bytes }
+impl<'a> DataReader<'a> {
+    fn new(bytes: &'a [u8]) -> DataReader<'a> {
+        DataReader { bytes }
     }
 
     fn read_array<const N: usize>(&mut self) -> Result<[u8; N], Error> {
