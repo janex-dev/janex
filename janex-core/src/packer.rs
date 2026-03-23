@@ -1,7 +1,14 @@
 // Copyright (c) 2026 Glavo
 // SPDX-License-Identifier: MPL-2.0
 
-pub struct PackerConfigGroup {}
+pub struct PackerConfigGroup {
+    pub jvm_properties: Vec<String>,
+    pub add_reads: Vec<String>,
+    pub add_exports: Vec<String>,
+    pub add_opens: Vec<String>,
+    pub enable_native_access: Vec<String>,
+    pub extra_jvm_options: Vec<String>,
+}
 
 pub enum PackerConfigField {
     End,
@@ -20,6 +27,11 @@ pub enum PackerConfigField {
 }
 
 impl PackerConfigField {
+    /// Magic number for each config field.
+    ///
+    /// This is used to identify the start of a config field in the packed file.
+    pub const MAGIC_NUMBER: u32 = 0x00505247;
+
     pub const END: u8 = 0;
     pub const CONDITION: u8 = 1;
     pub const MAIN_CLASS: u8 = 2;
@@ -32,7 +44,7 @@ impl PackerConfigField {
     pub const ADD_OPENS: u8 = 9;
     pub const ENABLE_NATIVE_ACCESS: u8 = 10;
     pub const EXTRA_JVM_OPTIONS: u8 = 11;
-    pub const SUB_GROUPS: u8 = 255;
+    pub const SUB_GROUPS: u8 = 127;
 
     pub const fn id(&self) -> u8 {
         match self {
