@@ -18,11 +18,7 @@ pub enum PackerConfigField {
     ModulePath,
     ClassPath,
     JvmProperties,
-    AddReads,
-    AddExports,
-    AddOpens,
-    EnableNativeAccess,
-    ExtraJvmOptions,
+    JvmOptions,
     SubGroups,
 }
 
@@ -39,11 +35,7 @@ impl PackerConfigField {
     pub const MODULE_PATH: u8 = 4;
     pub const CLASS_PATH: u8 = 5;
     pub const JVM_PROPERTIES: u8 = 6;
-    pub const ADD_READS: u8 = 7;
-    pub const ADD_EXPORTS: u8 = 8;
-    pub const ADD_OPENS: u8 = 9;
-    pub const ENABLE_NATIVE_ACCESS: u8 = 10;
-    pub const EXTRA_JVM_OPTIONS: u8 = 11;
+    pub const JVM_OPTIONS: u8 = 7;
     pub const SUB_GROUPS: u8 = 127;
 
     pub const fn id(&self) -> u8 {
@@ -55,11 +47,7 @@ impl PackerConfigField {
             PackerConfigField::ModulePath => Self::MODULE_PATH,
             PackerConfigField::ClassPath => Self::CLASS_PATH,
             PackerConfigField::JvmProperties => Self::JVM_PROPERTIES,
-            PackerConfigField::AddReads => Self::ADD_READS,
-            PackerConfigField::AddExports => Self::ADD_EXPORTS,
-            PackerConfigField::AddOpens => Self::ADD_OPENS,
-            PackerConfigField::EnableNativeAccess => Self::ENABLE_NATIVE_ACCESS,
-            PackerConfigField::ExtraJvmOptions => Self::EXTRA_JVM_OPTIONS,
+            PackerConfigField::JvmOptions => Self::JVM_OPTIONS,
             PackerConfigField::SubGroups => Self::SUB_GROUPS,
         }
     }
