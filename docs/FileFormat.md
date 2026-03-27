@@ -183,14 +183,14 @@ Where:
 
 ```rust
 struct ResourceGroup {
-    magic_number: u8, // 0xeb
+    magic_number:    u8, // 0xeb
     compress_method: u8,
-    reserved: u16,
+    reserved:        u16,
 
     uncompressed_size: u32,
-    compressed_size: u32,
-    resources_count: u32,
-    checksum: u64,
+    compressed_size:   u32,
+    resources_count:   u32,
+    checksum:          u64,
 
     compressed_resources: [byte; compressed_size],
 }
