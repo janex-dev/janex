@@ -7,7 +7,7 @@ Each Janex file contains the following:
 1. A set of classpath and module-path entries. Entries are divided into local entries and remote entries. Local entries are a group of class files and resource files packaged within the Janex file, while remote entries are Maven GAV coordinates that are resolved and downloaded by the Janex tool at runtime.
 2. A set of boot metadata, which includes information such as the required Java version and JVM arguments for the program. The Janex tool selects an appropriate Java runtime environment based on this information and starts the program with the necessary JVM arguments.
 
-When launching a Janex format file, the **Janex Launcher** reads the boot metadata to find a suitable Java runtime based on the metadata,
+When launching a Janex program, the **Janex Launcher** reads the launcher metadata to find a suitable Java runtime based on the metadata,
 acquires appropriate JVM arguments according to the conditions, and starts a Java process using these JVM arguments.
 
 In the Java process, Janex needs to load a **Janex Boot** provided as a JAR, which provides a custom ClassLoader for `Janex` to load classes from the Janex file.
@@ -104,7 +104,7 @@ Its structure is as follows:
 BootMetadata {
     u4 magic_number; // 0x544f4f42 ("BOOT")
     u4 group_count;
-    ByteArrayPool stringsPool;
+    StringPool stringPool;
     ResourceGroup[group_count] groups;
 }
 ```
@@ -113,6 +113,32 @@ Where:
 
 - `magic_number`: Used to identify the start of the metadata, with a value of `0x544f4f42` (i.e., the string `"BOOT"`);
 - `group_count`: Number of groups;
-- `stringsPool`: String pool used to store string data, its structure is shown below;
+- `stringPool`: String pool used to store string data, its structure is shown below;
 - `groups`: An array of groups, each describing a module or class.
+
+The `StringPool` structure is as follows:
+
+```
+StringPool {
+    u1 magic_number; // 0xf0
+    u1 compress_method;
+    u2 resvered;
+    u4 count;
+    u4 uncompressed_bytes_size;
+    u4 compressed_bytes_size;
+    u2[count] sizes; 
+    byte[compressed_length] compressed_bytes;
+}
+```
+
+Where:
+
+- `magic_number`: Used to identify the start of the string pool;
+- `compress_method`: Compression method used to compress the string pool;
+- `resvered`: Reserved field, currently unused;
+- `count`: Number of strings in the string pool;
+- `uncompressed_bytes_size`: Total size of the uncompressed string pool data;
+- `compressed_bytes_size`: Total size of the compressed string pool data;
+- `sizes`: An array of string sizes.
+- `compressed_bytes`: Compressed string pool data.
 
