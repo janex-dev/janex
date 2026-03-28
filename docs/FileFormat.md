@@ -208,7 +208,7 @@ struct StringPool {
     uncompressed_bytes_size: u32,
     compressed_bytes_size:  u32,
     sizes: [u16; count],
-    compressed_bytes: CompressedData<u8, compress_method, compressed_bytes_size:>,
+    compressed_bytes: CompressedData<u8, compress_method, compressed_bytes_size>,
 }
 ```
 
