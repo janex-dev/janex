@@ -244,7 +244,7 @@ struct Resource {
     uncompressed_size: u64,
     compressed_size: u64,
     content_offset: u64,
-    path: [byte; path_length], // UTF-8
+    path: String,
     optional_fields: List<ResourceField>,
 }
 ```
