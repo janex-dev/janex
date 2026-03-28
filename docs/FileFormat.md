@@ -234,13 +234,12 @@ Where:
 struct Resource {
     magic_number: u8, // 0x1b
     compress_method: CompressMethod,
-    path_length: u16,
     reserved: [u8; 4],
     uncompressed_size: u64,
     compressed_size: u64,
     content_offset: u64,
-    path: String,
     optional_fields_count: u64,
+    path: String,
     optional_fields: [ResourceField; optional_fields_count],
 }
 ```
@@ -263,11 +262,6 @@ The supported optional fields of a resource are:
 
 ```rust
 enum ResourceField {
-    /// Resource list end marker.
-    End {
-        id: u8, // 0x00
-    },
-    
     /// XXH64 checksum of the resource body.
     Checksum {
         id: u8, // 0x01
@@ -367,9 +361,6 @@ enum ConfigField {
 
 ```rust
 enum ResourceGroupReference {
-    End {
-       id: u8, // 0x00 
-    },   
     Local { 
         id: u8, // 0x01
         group_index: u64,
