@@ -41,9 +41,6 @@ struct MyStruct {
 
 Here, `length` is a 32-bit unsigned integer, and `data` is a byte array of length `length`.
 
-`List<T>` represents a variable-length list, where `T` is the type of elements in the list.
-The `T` type must define a special value to indicate the end of the list, and this value cannot appear in the list.
-
 ### String
 
 Janex uses UTF-8 encoding for strings:
