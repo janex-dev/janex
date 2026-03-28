@@ -8,6 +8,10 @@ pub struct PackerConfigGroup {
     pub extra_jvm_options: Vec<String>,
 }
 
+impl PackerConfigGroup {
+    pub const MAGIC_NUMBER: u64 = 0x5052475f464e4f43;
+}
+
 pub enum PackerConfigField {
     End,
     Condition,
@@ -20,11 +24,6 @@ pub enum PackerConfigField {
 }
 
 impl PackerConfigField {
-    /// Magic number for each config field.
-    ///
-    /// This is used to identify the start of a config field in the packed file.
-    pub const MAGIC_NUMBER: u64 = 0x5052475f464e4f43;
-
     pub const END: u8 = 0;
     pub const CONDITION: u8 = 1;
     pub const MAIN_CLASS: u8 = 2;
