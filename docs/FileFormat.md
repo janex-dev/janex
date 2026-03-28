@@ -315,7 +315,8 @@ struct LauncherMetadata {
 ```rust
 struct ConfigGroup {
     magic_number: u32, // 0x505247 ("GRP\0")
-    fields: List<ConfigField>,
+    fields_count: u64,
+    fields: [ConfigField; fields_count],
 }
 ```
 
@@ -323,10 +324,6 @@ struct ConfigGroup {
 
 ```rust
 enum ConfigField {
-    End {
-        id: u8, // 0x00
-    },
-    
     Condition {
         id: u8, // 0x01
         condition: String,
@@ -344,22 +341,26 @@ enum ConfigField {
     
     ModulePath {
         id: u8, // 0x04
-        items: List<ResourceGroupReference>
+        items_count: u64,
+        items: [ResourceGroupReference; items_count]
     },
 
     ClassPath {
         id: u8, // 0x05
-        items: List<ResourceGroupReference>
+        items_count: u64,
+        items: [ResourceGroupReference; items_count]
     },
     
     JvmOptions {
         id: u8, // 0x06
-        options: List<String> // Ends with an empty string
+        options_count: u64,
+        options: [String; options_count]
     },
     
     SubGroups {
         id: u8, // 0xff
-        groups: List<ConfigGroup> // Ends with a group with no fields
+        subgroups_count: u64,
+        groups: [ConfigGroup; subgroups_count]
     }
 }
 ```
