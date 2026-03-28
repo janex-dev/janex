@@ -63,7 +63,7 @@ fn read_compressed_integer(reader: &mut impl Read) -> Result<CompressedInteger, 
         value |= ((byte & 0x7F) as u64) << (i * 7);
     }
     
-    value |= (byte as u64) << (i * 7);
+    value |= (reader.read_u8()? as u64) << 56;
     Ok(value)
 }
 ```
