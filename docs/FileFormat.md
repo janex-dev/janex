@@ -46,9 +46,9 @@ Here, `length` is a 32-bit unsigned integer, and `data` is a byte array of lengt
 `List<T>` represents a variable-length list, where `T` is the type of elements in the list.
 The `T` type must define a special value to indicate the end of the list, and this value cannot appear in the list.
 
-### Compress Method
+### Compress
 
-Janex uses the following enum (1 bytes) to record the compression method to be used:
+Janex uses the following enum to record the compression method to be used:
 
 ```rust
 #[repr(u8)]
@@ -65,6 +65,19 @@ Where:
 - `CLASSFILE`: A compression algorithm developed specifically for class files, which uses a shared string pool and
   Zstandard compression algorithm for compression;
 - `ZSTD`: Zstandard compression.
+
+We use this structure to represent compressed data:
+
+```rust
+struct CompressedData<T, CM: CompressMethod, CS: usize> {
+}
+```
+
+Where:
+
+- `T`: The type of data to be compressed;
+- `CM`: The compression method to be used;
+- `CS`: The compressed size of the data.
 
 ## Janex File Structure
 
@@ -156,13 +169,13 @@ The `StringPool` structure is as follows:
 ```rust
 struct StringPool {
     magic_number:    u8, // 0xf0
-    compress_method: u8,
+    compress_method: CompressMethod,
     reserved:        u16,
     count:           u32,
     uncompressed_bytes_size: u32,
     compressed_bytes_size:  u32,
     sizes: [u16; count],
-    compressed_bytes: [byte; compressed_length],
+    compressed_bytes: CompressedData<byte, compress_method, compressed_bytes_size:>,
 }
 ```
 
@@ -184,15 +197,15 @@ Where:
 ```rust
 struct ResourceGroup {
     magic_number:    u8, // 0xeb
-    compress_method: u8,
-    reserved:        u16,
+    compress_method: CompressMethod,
+    reserved:        [byte; 48],
 
-    uncompressed_size: u32,
-    compressed_size:   u32,
-    resources_count:   u32,
+    uncompressed_size: u64,
+    compressed_size:   u64,
+    resources_count:   u64,
     checksum:          u64,
 
-    compressed_resources: [byte; compressed_size],
+    compressed_resources: CompressedData<[Resource; resources_count], compress_method, compressed_size>,
 }
 ```
 
@@ -205,4 +218,77 @@ Where:
 - `compressed_size`: Total size of the compressed resource group data;
 - `resources_count`: Number of resources in the resource group;
 - `checksum`: XXH64 checksum of the resource group;
-- `compressed_resources`: Compressed resource group data. 
+- `compressed_resources`: Compressed resource data. 
+
+#### `Resource`
+
+`Resource` is used to represent a class file or resource file. `Resource` only contains metadata, and the actual file content is in `data_pool`.
+
+```rust
+struct Resource {
+    magic_number: u8, // 0x1b
+    compress_method: CompressMethod,
+    path_length: u16,
+    reserved: [byte; 4],
+    uncompressed_size: u64,
+    compressed_size: u64,
+    content_offset: u64,
+    path: [byte; path_length], // UTF-8
+    optional_fields: List<ResourceField>,
+}
+```
+
+Where:
+
+- `magic_number`: Used to identify the start of the resource;
+- `compress_method`: Compression method used to compress the resource body;
+- `path_length`: Length of the resource path;
+- `reserved`: Reserved field, currently unused;
+- `uncompressed_size`: Size of the uncompressed resource;
+- `compressed_size`: Size of the compressed resource;
+- `content_offset`: Offset of the resource content in `data_pool`;
+- `path`: Resource path;
+- `optional_fields`: Optional fields of the resource;
+
+#### `ResourceField`
+
+The supported optional fields of a resource are:
+
+```rust
+enum ResourceField {
+    /// Resource list end marker.
+    End {
+        id: u8, // 0x00
+    },
+    
+    /// XXH64 checksum of the resource body.
+    Checksum {
+        id: u8, // 0x01
+        checksum: u64,
+    },
+    
+    /// File creation time.
+    FileCreateTime {
+        id: u8, // 0x02
+        
+        /// File create time epoch in milliseconds.
+        timestamp: u64,
+    },
+    
+    /// File modification time.
+    FileModifyTime {
+        id: u8, // 0x03
+        
+        /// File modify time epoch in milliseconds.
+        timestamp: u64,
+    },
+    
+    /// File access time.
+    FileAccessTime {
+        id: u8, // 0x04
+        
+        /// File access time epoch in milliseconds.
+        timestamp: u64,
+    },
+}
+```
