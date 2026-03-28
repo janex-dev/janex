@@ -74,7 +74,7 @@ Janex uses UTF-8 encoding for strings:
 
 ```rust
 struct String {
-    length: u32,
+    length: CompressedInteger,
     data: [u8; length],
 }
 ```
