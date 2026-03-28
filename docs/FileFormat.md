@@ -46,6 +46,17 @@ Here, `length` is a 32-bit unsigned integer, and `data` is a byte array of lengt
 `List<T>` represents a variable-length list, where `T` is the type of elements in the list.
 The `T` type must define a special value to indicate the end of the list, and this value cannot appear in the list.
 
+### String
+
+Janex uses UTF-8 encoding for strings:
+
+```rust
+struct String {
+    length: u32,
+    data: [byte; length],
+}
+```
+
 ### Compress
 
 Janex uses the following enum to record the compression method to be used:
@@ -290,5 +301,67 @@ enum ResourceField {
         /// File access time epoch in milliseconds.
         timestamp: u64,
     },
+}
+```
+
+### `LauncherMetadata`
+
+```rust
+struct LauncherMetadata {
+    root_group: ConfigGroup,
+}
+```
+
+#### `ConfigGroup`
+
+```rust
+struct ConfigGroup {
+    magic_number: u8, // ("CONF_GRP")
+    fields: List<ConfigField>,
+}
+```
+
+#### `ConfigField`
+
+```rust
+enum ConfigField {
+    End {
+        id: u8, // 0x00
+    },
+    
+    Condition {
+        id: u8, // 0x01
+        condition: String,
+    },
+    
+    MainClass {
+        id: u8, // 0x02
+        value: String,
+    },
+    
+    MainModule {
+        id: u8, // 0x03
+        value: String,
+    },
+    
+    ModulePath {
+        id: u8, // 0x04
+        items: List<ResourceGroupReference>
+    },
+
+    ClassPath {
+        id: u8, // 0x05
+        items: List<ResourceGroupReference>
+    },
+    
+    JvmOptions {
+        id: u8, // 0x06
+        options: List<String> // Ends with an empty string
+    },
+    
+    SubGroups {
+        id: u8, // 0xff
+        groups: List<ConfigGroup> // Ends with a group with no fields
+    }
 }
 ```

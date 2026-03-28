@@ -2,11 +2,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
 pub struct PackerConfigGroup {
-    pub jvm_properties: Vec<String>,
-    pub add_reads: Vec<String>,
-    pub add_exports: Vec<String>,
-    pub add_opens: Vec<String>,
-    pub enable_native_access: Vec<String>,
+    pub main_class: String,
+    pub main_module: String,
+    pub condition: String,
     pub extra_jvm_options: Vec<String>,
 }
 
@@ -17,7 +15,6 @@ pub enum PackerConfigField {
     MainModule,
     ModulePath,
     ClassPath,
-    JvmProperties,
     JvmOptions,
     SubGroups,
 }
@@ -34,9 +31,8 @@ impl PackerConfigField {
     pub const MAIN_MODULE: u8 = 3;
     pub const MODULE_PATH: u8 = 4;
     pub const CLASS_PATH: u8 = 5;
-    pub const JVM_PROPERTIES: u8 = 6;
-    pub const JVM_OPTIONS: u8 = 7;
-    pub const SUB_GROUPS: u8 = 127;
+    pub const JVM_OPTIONS: u8 = 6;
+    pub const SUB_GROUPS: u8 = 0xff;
 
     pub const fn id(&self) -> u8 {
         match self {
@@ -46,7 +42,6 @@ impl PackerConfigField {
             PackerConfigField::MainModule => Self::MAIN_MODULE,
             PackerConfigField::ModulePath => Self::MODULE_PATH,
             PackerConfigField::ClassPath => Self::CLASS_PATH,
-            PackerConfigField::JvmProperties => Self::JVM_PROPERTIES,
             PackerConfigField::JvmOptions => Self::JVM_OPTIONS,
             PackerConfigField::SubGroups => Self::SUB_GROUPS,
         }
