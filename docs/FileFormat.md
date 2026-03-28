@@ -30,7 +30,7 @@ and uses `f32`/`f64` to represent 32/64-bit floating-point numbers.
 
 ### Complex Data Types
 
-This document uses pseudo-code similar to Rust structs to represent complex data types. For example:
+This document uses pseudocode similar to Rust structs to represent complex data types. For example:
 
 ```rust
 struct MyStruct {
@@ -40,6 +40,33 @@ struct MyStruct {
 ```
 
 Here, `length` is a 32-bit unsigned integer, and `data` is a byte array of length `length`.
+
+### Compressed Integer
+
+Janex uses `CompressedInteger` to efficiently store integers in some structures.
+
+```rust
+type CompressedInteger = u64;
+```
+
+In the file, `CompressedInteger` is stored as a sequence of one to nine bytes, parsed as follows:
+
+```rust
+fn read_compressed_integer(reader: &mut impl Read) -> Result<CompressedInteger, io::Error> {
+    let mut value = 0u64;
+    for i in 0..8 {
+        let byte = reader.read_u8()?;
+        if byte < 0x80 {
+            value |= (byte as u64) << (i * 7);
+            return Ok(value);
+        }
+        value |= ((byte & 0x7F) as u64) << (i * 7);
+    }
+    
+    value |= (byte as u64) << (i * 7);
+    Ok(value)
+}
+```
 
 ### String
 
