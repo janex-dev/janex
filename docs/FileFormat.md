@@ -365,3 +365,23 @@ enum ConfigField {
     }
 }
 ```
+
+#### `ResourceGroupReference`
+
+```rust
+enum ResourceGroupReference {
+    End {
+       id: u8, // 0x00 
+    },   
+    Local { 
+        id: u8, // 0x01
+        group_index: u64,
+        
+    },
+    Maven {
+        id: u8, // 0x02
+        gav: String,
+        repository: String,
+    }
+}
+```
