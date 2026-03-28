@@ -316,7 +316,7 @@ struct LauncherMetadata {
 
 ```rust
 struct ConfigGroup {
-    magic_number: u8, // ("CONF_GRP")
+    magic_number: u64, // 0x5052475f464e4f43 ("CONF_GRP")
     fields: List<ConfigField>,
 }
 ```
