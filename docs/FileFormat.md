@@ -243,7 +243,8 @@ struct Resource {
     compressed_size: u64,
     content_offset: u64,
     path: String,
-    optional_fields: List<ResourceField>,
+    optional_fields_count: u64,
+    optional_fields: [ResourceField; optional_fields_count],
 }
 ```
 
