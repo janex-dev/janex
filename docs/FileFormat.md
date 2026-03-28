@@ -177,7 +177,7 @@ The `StringPool` structure is as follows:
 
 ```rust
 struct StringPool {
-    magic_number:    u8, // 0xf0
+    magic_number:    u64, // 0x4c4f4f505f525453 ("STR_POOL")
     compress_method: CompressMethod,
     reserved:        u16,
     count:           u32,
