@@ -138,6 +138,9 @@ Where:
   is shown below;
 - `file_end`: File end metadata used to describe the size, offset, etc. of the file, its structure is shown below.
 
+All offsets in the following sections are calculated relative to the start of the `JanexFile` structure.
+A real Janex file may have additional data attached before or after this structure; such data is ignored when computing offsets.
+
 ### `FileEnd` Structure
 
 The Janex file is designed to allow arbitrary custom data to be attached at the head of the file (e.g., executable files
