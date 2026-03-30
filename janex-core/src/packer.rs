@@ -9,7 +9,7 @@ pub struct PackerConfigGroup {
 }
 
 impl PackerConfigGroup {
-    pub const MAGIC_NUMBER: u64 = 0x5052475f464e4f43;
+    pub const MAGIC_NUMBER: u32 = 0x505247;
 }
 
 pub enum PackerConfigField {
