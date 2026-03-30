@@ -275,7 +275,6 @@ Where:
 
 - `magic_number`: Used to identify the start of the resource;
 - `compress_method`: Compression method used to compress the resource body;
-- `path_length`: Length of the resource path;
 - `reserved`: Reserved field, currently unused;
 - `uncompressed_size`: Size of the uncompressed resource;
 - `compressed_size`: Size of the compressed resource;
