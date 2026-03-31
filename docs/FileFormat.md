@@ -150,14 +150,15 @@ follows:
 
 ```rust
 struct FileEnd {
-    magic_number:  u64, // 0x0000_0058_454e_414a ("JANEX\0\0\0")
+    magic_number:  u32, // 0x444e45 ("END\0")
     major_version: u32,
     minor_version: u32,
+    reserved:      [u8; 4],
     flags:         u64,
     file_size:     u64,
     boot_metadata_offset:     u64,
     launcher_metadata_offset: u64,
-    reserved: [u8; 32],
+    reserved:      [u8; 32],
 }
 ```
 
