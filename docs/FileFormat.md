@@ -232,7 +232,7 @@ Where:
 
 ```rust
 struct ResourceGroup {
-    magic_number:    u8, // 0xeb
+    magic_number:    u32, // 0x47534552 ("RESG")
     compress_method: CompressMethod,
     reserved:        [u8; 48],
 
@@ -262,7 +262,7 @@ Where:
 
 ```rust
 struct Resource {
-    magic_number: u8, // 0x1b
+    magic_number: u32, // 0x534552 ("RES\0")
     compress_method: CompressMethod,
     reserved: [u8; 4],
     uncompressed_size: CompressedInteger,
