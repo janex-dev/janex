@@ -255,7 +255,6 @@ struct ResourceGroup {
     uncompressed_size: CompressedInteger,
     compressed_size: CompressedInteger,
     resources_count: CompressedInteger,
-    checksum: u64,
 
     compressed_resources: CompressedData<[Resource; resources_count], compress_method, compressed_size>,
 }
@@ -269,7 +268,6 @@ Where:
 - `uncompressed_size`: Total size of the uncompressed resource group data;
 - `compressed_size`: Total size of the compressed resource group data;
 - `resources_count`: Number of resources in the resource group;
-- `checksum`: XXH64 checksum of the resource group;
 - `compressed_resources`: Compressed resource data.
 
 #### `Resource`
