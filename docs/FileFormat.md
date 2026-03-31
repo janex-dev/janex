@@ -49,7 +49,23 @@ Janex uses `CompressedInteger` to efficiently store integers in some structures.
 type CompressedInteger = u64;
 ```
 
-In the file, `CompressedInteger` is stored as a sequence of one to nine bytes, parsed as follows:
+In the file, `CompressedInteger` is stored as a sequence of one to nine bytes.
+The first byte (header byte) `x` contains the length of the compressed integer, and the trailing bytes are read as a
+little-endian integer `y`.
+
+`CompressedInteger` value rules are as follows:
+
+| First Byte    | Trailing Bytes | Value                                |
+|---------------|:---------------|--------------------------------------|
+| `0b0xxx_xxxx` | `0`            | `H`                                  |
+| `0b10xx_xxxx` | `1`            | `((x & 0b0011_1111) << (8 * 1)) + y` |
+| `0b110x_xxxx` | `2`            | `((x & 0b0001_1111) << (8 * 2)) + y` |
+| `0b1110_xxxx` | `3`            | `((x & 0b0000_1111) << (8 * 3)) + y` |
+| `0b1111_0xxx` | `4`            | `((x & 0b0000_0111) << (8 * 4)) + y` |
+| `0b1111_10xx` | `5`            | `((x & 0b0000_0111) << (8 * 5)) + y` |
+| `0b1111_110x` | `6`            | `((x & 0b0000_0011) << (8 * 6)) + y` |
+| `0b1111_1110` | `7`            | `y`                                  |
+| `0b1111_1111` | `8`            | `y`                                  |
 
 ```rust
 fn read_compressed_integer(reader: &mut impl Read) -> Result<CompressedInteger, io::Error> {
@@ -62,7 +78,7 @@ fn read_compressed_integer(reader: &mut impl Read) -> Result<CompressedInteger, 
         }
         value |= ((byte & 0x7F) as u64) << (i * 7);
     }
-    
+
     value |= (reader.read_u8()? as u64) << 56;
     Ok(value)
 }
@@ -102,8 +118,7 @@ Where:
 We use this structure to represent compressed data:
 
 ```rust
-struct CompressedData<T, CM: CompressMethod, CS: usize> {
-}
+struct CompressedData<T, CM: CompressMethod, CS: usize> {}
 ```
 
 Where:
@@ -139,7 +154,8 @@ Where:
 - `file_end`: File end metadata used to describe the size, offset, etc. of the file, its structure is shown below.
 
 All offsets in the following sections are calculated relative to the start of the `JanexFile` structure.
-A real Janex file may have additional data attached before or after this structure; such data is ignored when computing offsets.
+A real Janex file may have additional data attached before or after this structure; such data is ignored when computing
+offsets.
 
 ### `FileEnd` Structure
 
@@ -150,14 +166,14 @@ follows:
 
 ```rust
 struct FileEnd {
-    magic_number:  u32, // 0x444e45 ("END\0")
+    magic_number: u32, // 0x444e45 ("END\0")
     major_version: u32,
     minor_version: u32,
-    flags:         u32,
-    file_size:     u64,
-    boot_metadata_offset:     u64,
+    flags: u32,
+    file_size: u64,
+    boot_metadata_offset: u64,
     launcher_metadata_offset: u64,
-    reserved:      [u8; 40],
+    reserved: [u8; 40],
 }
 ```
 
@@ -185,8 +201,8 @@ Its structure is as follows:
 ```rust
 struct BootMetadata {
     magic_number: u32, // 0x544f4f42 ("BOOT")
-    string_pool:  StringPool,
-    group_count:  CompressedInteger,
+    string_pool: StringPool,
+    group_count: CompressedInteger,
     groups: [ResourceGroup; group_count],
 }
 ```
@@ -204,12 +220,12 @@ The `StringPool` structure is as follows:
 
 ```rust
 struct StringPool {
-    magic_number:    u32, // 0x4c4f4f50 ("POOL")
+    magic_number: u32, // 0x4c4f4f50 ("POOL")
     compress_method: CompressMethod,
-    reserved:        u16,
-    count:           CompressedInteger,
+    reserved: u16,
+    count: CompressedInteger,
     uncompressed_bytes_size: CompressedInteger,
-    compressed_bytes_size:  CompressedInteger,
+    compressed_bytes_size: CompressedInteger,
     sizes: [CompressedInteger; count],
     compressed_bytes: CompressedData<u8, compress_method, compressed_bytes_size>,
 }
@@ -232,14 +248,14 @@ Where:
 
 ```rust
 struct ResourceGroup {
-    magic_number:    u32, // 0x47534552 ("RESG")
+    magic_number: u32, // 0x47534552 ("RESG")
     compress_method: CompressMethod,
-    reserved:        [u8; 48],
+    reserved: [u8; 48],
 
     uncompressed_size: CompressedInteger,
-    compressed_size:   CompressedInteger,
-    resources_count:   CompressedInteger,
-    checksum:          u64,
+    compressed_size: CompressedInteger,
+    resources_count: CompressedInteger,
+    checksum: u64,
 
     compressed_resources: CompressedData<[Resource; resources_count], compress_method, compressed_size>,
 }
@@ -254,11 +270,12 @@ Where:
 - `compressed_size`: Total size of the compressed resource group data;
 - `resources_count`: Number of resources in the resource group;
 - `checksum`: XXH64 checksum of the resource group;
-- `compressed_resources`: Compressed resource data. 
+- `compressed_resources`: Compressed resource data.
 
 #### `Resource`
 
-`Resource` is used to represent a class file or resource file. `Resource` only contains metadata, and the actual file content is in `data_pool`.
+`Resource` is used to represent a class file or resource file. `Resource` only contains metadata, and the actual file
+content is in `data_pool`.
 
 ```rust
 struct Resource {
@@ -297,27 +314,27 @@ enum ResourceField {
         id: u8, // 0x01
         checksum: u64,
     },
-    
+
     /// File creation time.
     FileCreateTime {
         id: u8, // 0x02
-        
+
         /// File create time epoch in milliseconds.
         timestamp: u64,
     },
-    
+
     /// File modification time.
     FileModifyTime {
         id: u8, // 0x03
-        
+
         /// File modify time epoch in milliseconds.
         timestamp: u64,
     },
-    
+
     /// File access time.
     FileAccessTime {
         id: u8, // 0x04
-        
+
         /// File access time epoch in milliseconds.
         timestamp: u64,
     },
@@ -350,17 +367,17 @@ enum ConfigField {
         id: u8, // 0x01
         condition: String,
     },
-    
+
     MainClass {
         id: u8, // 0x02
         value: String,
     },
-    
+
     MainModule {
         id: u8, // 0x03
         value: String,
     },
-    
+
     ModulePath {
         id: u8, // 0x04
         items_count: CompressedInteger,
@@ -372,13 +389,13 @@ enum ConfigField {
         items_count: CompressedInteger,
         items: [ResourceGroupReference; items_count]
     },
-    
+
     JvmOptions {
         id: u8, // 0x06
         options_count: CompressedInteger,
         options: [String; options_count]
     },
-    
+
     SubGroups {
         id: u8, // 0xff
         subgroups_count: u64,
@@ -391,10 +408,10 @@ enum ConfigField {
 
 ```rust
 enum ResourceGroupReference {
-    Local { 
+    Local {
         id: u8, // 0x01
         group_index: CompressedInteger,
-        
+
     },
     Maven {
         id: u8, // 0x02
