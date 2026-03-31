@@ -185,8 +185,8 @@ Its structure is as follows:
 ```rust
 struct BootMetadata {
     magic_number: u32, // 0x544f4f42 ("BOOT")
-    group_count:  u32,
     string_pool:  StringPool,
+    group_count:  CompressedInteger,
     groups: [ResourceGroup; group_count],
 }
 ```
@@ -207,10 +207,10 @@ struct StringPool {
     magic_number:    u32, // 0x4c4f4f50 ("POOL")
     compress_method: CompressMethod,
     reserved:        u16,
-    count:           u32,
-    uncompressed_bytes_size: u32,
-    compressed_bytes_size:  u32,
-    sizes: [u16; count],
+    count:           CompressedInteger,
+    uncompressed_bytes_size: CompressedInteger,
+    compressed_bytes_size:  CompressedInteger,
+    sizes: [CompressedInteger; count],
     compressed_bytes: CompressedData<u8, compress_method, compressed_bytes_size>,
 }
 ```
@@ -236,9 +236,9 @@ struct ResourceGroup {
     compress_method: CompressMethod,
     reserved:        [u8; 48],
 
-    uncompressed_size: u64,
-    compressed_size:   u64,
-    resources_count:   u64,
+    uncompressed_size: CompressedInteger,
+    compressed_size:   CompressedInteger,
+    resources_count:   CompressedInteger,
     checksum:          u64,
 
     compressed_resources: CompressedData<[Resource; resources_count], compress_method, compressed_size>,
@@ -265,11 +265,11 @@ struct Resource {
     magic_number: u8, // 0x1b
     compress_method: CompressMethod,
     reserved: [u8; 4],
-    uncompressed_size: u64,
-    compressed_size: u64,
-    content_offset: u64,
-    optional_fields_count: u64,
+    uncompressed_size: CompressedInteger,
+    compressed_size: CompressedInteger,
+    content_offset: CompressedInteger,
     path: String,
+    optional_fields_count: CompressedInteger,
     optional_fields: [ResourceField; optional_fields_count],
 }
 ```
@@ -283,6 +283,7 @@ Where:
 - `compressed_size`: Size of the compressed resource;
 - `content_offset`: Offset of the resource content in `data_pool`;
 - `path`: Resource path;
+- `optional_fields_count`: Number of optional fields;
 - `optional_fields`: Optional fields of the resource;
 
 #### `ResourceField`
@@ -336,7 +337,7 @@ struct LauncherMetadata {
 ```rust
 struct ConfigGroup {
     magic_number: u32, // 0x505247 ("GRP\0")
-    fields_count: u64,
+    fields_count: CompressedInteger,
     fields: [ConfigField; fields_count],
 }
 ```
@@ -362,19 +363,19 @@ enum ConfigField {
     
     ModulePath {
         id: u8, // 0x04
-        items_count: u64,
+        items_count: CompressedInteger,
         items: [ResourceGroupReference; items_count]
     },
 
     ClassPath {
         id: u8, // 0x05
-        items_count: u64,
+        items_count: CompressedInteger,
         items: [ResourceGroupReference; items_count]
     },
     
     JvmOptions {
         id: u8, // 0x06
-        options_count: u64,
+        options_count: CompressedInteger,
         options: [String; options_count]
     },
     
@@ -392,7 +393,7 @@ enum ConfigField {
 enum ResourceGroupReference {
     Local { 
         id: u8, // 0x01
-        group_index: u64,
+        group_index: CompressedInteger,
         
     },
     Maven {
