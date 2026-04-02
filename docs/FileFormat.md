@@ -342,43 +342,62 @@ struct ConfigGroup {
 
 #### `ConfigField`
 
+Basic structure of a configuration field:
+
+```rust
+struct ConfigField {
+    field_type: u32,
+    length: CompressedInteger,
+    content: [u8; length]
+}
+```
+
+Supported fields:
+
 ```rust
 enum ConfigField {
     Condition {
-        id: u8, // 0x01
+        field_type: u32, // 0x444e4f43 ("COND")
+        length: CompressedInteger,
         condition: String,
     },
 
     MainClass {
-        id: u8, // 0x02
+        field_type: u32, // 0x534c434d ("MCLS") 
+        length: CompressedInteger,
         value: String,
     },
 
     MainModule {
-        id: u8, // 0x03
+        field_type: u32, // 0x444f4d4d ("MMOD")
+        length: CompressedInteger,
         value: String,
     },
 
     ModulePath {
-        id: u8, // 0x04
+        field_type: u32, // 0x50444f4d ("MODP")
+        length: CompressedInteger,
         items_count: CompressedInteger,
         items: [ResourceGroupReference; items_count]
     },
 
     ClassPath {
-        id: u8, // 0x05
+        field_type: u32, // 0x50534c43 ("CLSP")
+        length: CompressedInteger,
         items_count: CompressedInteger,
         items: [ResourceGroupReference; items_count]
     },
 
     JvmOptions {
-        id: u8, // 0x06
+        field_type: u32, // 0x54504f4a ("JOPT")
+        length: CompressedInteger,
         options_count: CompressedInteger,
         options: [String; options_count]
     },
 
     SubGroups {
-        id: u8, // 0xff
+        field_type: u32, // 0x50524753 ("SGRP")
+        length: CompressedInteger,
         subgroups_count: u64,
         groups: [ConfigGroup; subgroups_count]
     }
