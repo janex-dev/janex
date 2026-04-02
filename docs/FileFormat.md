@@ -164,8 +164,7 @@ The `FileEnd` structure is a total of 80 bytes.
 
 Where:
 
-- `magic_number`: Used to identify the start of the file end, with a value of `0x0000_0058_454e_414a` (i.e., the string
-  `"JANEX\0\0\0"`);
+- `magic_number`: Used to identify the start of the file end, with a value of `0x444e45` (i.e., the string `"END\0"`);
 - `major_version`: The major version number of the Janex file format;
 - `minor_version`: The minor version number of the Janex file format;
 - `flags`: File flags, currently unused, reserved as `0`;
