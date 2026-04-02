@@ -334,7 +334,7 @@ struct LauncherMetadata {
 
 ```rust
 struct ConfigGroup {
-    magic_number: u32, // 0x505247 ("GRP\0")
+    magic_number: u32, // 0x50524743 ("CGRP")
     fields_count: CompressedInteger,
     fields: [ConfigField; fields_count],
 }
