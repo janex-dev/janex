@@ -56,7 +56,7 @@ The lower seven bits of every byte contain integer data, and the highest bit in 
 If the highest bit is `0`, means that the current byte is the last byte of the integer;
 If the highest bit is `1`, means that the current byte is not the last byte of the integer, and the next byte is the continuation of the integer.
 
-Reading `CompressedInteger` should follow the following algorithm:
+Reading `CompressedInteger` should follow the following algorithm (error handling is omitted, such as reporting an error for integers exceeding 64 bits):
 
 ```rust
 fn read_compressed_integer(read: &mut impl Read) -> Result<u64, Error> {
