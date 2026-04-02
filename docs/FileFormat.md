@@ -238,7 +238,6 @@ struct ResourceGroup {
     uncompressed_size: CompressedInteger,
     compressed_size: CompressedInteger,
     resources_count: CompressedInteger,
-
     compressed_resources: CompressedData<[Resource; resources_count], compress_method, compressed_size>,
 }
 ```
