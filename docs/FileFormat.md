@@ -49,23 +49,30 @@ Janex uses `CompressedInteger` to efficiently store integers in some structures.
 type CompressedInteger = u64;
 ```
 
-In the file, `CompressedInteger` is stored as a sequence of one to nine bytes.
-The first byte (header byte) `x` contains the length of the compressed integer, and the trailing bytes are read as a
-little-endian integer `y`.
+In the file, `CompressedInteger` is stored as one or more byte sequences.
 
-`CompressedInteger` value rules are as follows:
+The lower seven bits of every byte contain integer data, and the highest bit in every byte is the continuation flag.
 
-| First Byte    | Trailing Bytes | Value                                |
-|---------------|:---------------|--------------------------------------|
-| `0b0xxx_xxxx` | `0`            | `x`                                  |
-| `0b10xx_xxxx` | `1`            | `((x & 0b0011_1111) << (8 * 1)) + y` |
-| `0b110x_xxxx` | `2`            | `((x & 0b0001_1111) << (8 * 2)) + y` |
-| `0b1110_xxxx` | `3`            | `((x & 0b0000_1111) << (8 * 3)) + y` |
-| `0b1111_0xxx` | `4`            | `((x & 0b0000_0111) << (8 * 4)) + y` |
-| `0b1111_10xx` | `5`            | `((x & 0b0000_0011) << (8 * 5)) + y` |
-| `0b1111_110x` | `6`            | `((x & 0b0000_0001) << (8 * 6)) + y` |
-| `0b1111_1110` | `7`            | `y`                                  |
-| `0b1111_1111` | `8`            | `y`                                  |
+If the highest bit is `0`, means that the current byte is the last byte of the integer;
+If the highest bit is `1`, means that the current byte is not the last byte of the integer, and the next byte is the continuation of the integer.
+
+Reading `CompressedInteger` should follow the following algorithm:
+
+```rust
+fn read_compressed_integer(read: &mut impl Read) -> Result<u64, Error> {
+    let mut result: u64 = 0;
+    
+    for i in 0..10 {
+        let byte = read.read_u8()?;
+        let low_bits = byte & 0x7F;
+        result |= (low_bits as u64) << (7 * i);
+        if byte == low_bits {
+            break;
+        } 
+    }
+    result
+}
+```
 
 ### String
 
