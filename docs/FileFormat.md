@@ -318,6 +318,14 @@ enum ResourceField {
         /// File access time epoch in milliseconds.
         timestamp: u64,
     },
+
+    /// Custom field.
+    Custom {
+        id: u8, // 0x7F
+        name: String,
+        length: CompressedInteger,
+        content: [u8; length],
+    }
 }
 ```
 
