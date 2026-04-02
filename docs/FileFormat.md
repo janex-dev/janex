@@ -448,14 +448,14 @@ enum ConfigField {
 ```rust
 enum ResourceGroupReference {
     Local {
-        id: u8, // 0x01
+        ref_type: u32, // 0x00434f4c ("LOC\0")
         group_index: CompressedInteger,
 
     },
     Maven {
-        id: u8, // 0x02
-        gav: String,
+        ref_type: u32, // 0x00564147 ("GAV\0")
         repository: String,
+        gav: String,
     }
 }
 ```
