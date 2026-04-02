@@ -265,7 +265,7 @@ struct Resource {
     uncompressed_size: CompressedInteger,
     compressed_size: CompressedInteger,
     content_offset: CompressedInteger,
-    path: String,
+    path: ResourcePath,
     optional_fields_count: CompressedInteger,
     optional_fields: [ResourceField; optional_fields_count],
 }
@@ -282,6 +282,38 @@ Where:
 - `path`: Resource path;
 - `optional_fields_count`: Number of optional fields;
 - `optional_fields`: Optional fields of the resource;
+
+
+#### `ResourcePath`
+
+`ResourcePath` stores resource paths separated by `/` in an optimized way. Its structure is as follows:
+
+```rust
+struct ResourcePath {
+    length: CompressedInteger,
+    content: ResourcePathContent,
+}
+```
+
+`ResourcePathContent` has two layouts.
+
+When `length` is `0`, use `StringBody`, storing the path directly in the `ResourcePath` structure;
+When `length` is not `0`, use `RefBody`, storing two indices of character names in the `StringPool`.
+
+```rust
+enum ResourcePathContent {
+    /// When `length` is not `0`
+    StringBody {
+        body: [u8; length],
+    },
+    
+    /// When `length` is `0`
+    RefBody {
+        directory_index: CompressedInteger,
+        file_name_index: CompressedInteger,
+    }
+}
+```
 
 #### `ResourceField`
 
