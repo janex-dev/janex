@@ -67,23 +67,6 @@ little-endian integer `y`.
 | `0b1111_1110` | `7`            | `y`                                  |
 | `0b1111_1111` | `8`            | `y`                                  |
 
-```rust
-fn read_compressed_integer(reader: &mut impl Read) -> Result<CompressedInteger, io::Error> {
-    let mut value = 0u64;
-    for i in 0..8 {
-        let byte = reader.read_u8()?;
-        if byte < 0x80 {
-            value |= (byte as u64) << (i * 7);
-            return Ok(value);
-        }
-        value |= ((byte & 0x7F) as u64) << (i * 7);
-    }
-
-    value |= (reader.read_u8()? as u64) << 56;
-    Ok(value)
-}
-```
-
 ### String
 
 Janex uses UTF-8 encoding for strings:
