@@ -405,7 +405,7 @@ enum ConfigField {
     SubGroups {
         field_type: u32, // 0x50524753 ("SGRP")
         length: CompressedInteger,
-        subgroups_count: u64,
+        subgroups_count: CompressedInteger,
         groups: [ConfigGroup; subgroups_count]
     }
 }
