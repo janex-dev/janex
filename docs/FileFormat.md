@@ -103,6 +103,26 @@ struct Vec<T> {
 Janex uses the following enum to record the compression method to be used:
 
 ```rust
+#[repr(CompressedInteger)]
+enum CompressMethod {
+    /// No compression.
+    NONE = 0,
+
+    /// A compression algorithm developed specifically for class files,
+    /// which uses a shared string pool and another compression algorithm for compression;
+    CLASSFILE = 1,
+
+    /// Zstandard compression.
+    ZSTD = 2,
+}
+```
+
+
+### Compress
+
+Janex uses the following enum to record the compression method to be used:
+
+```rust
 #[repr(u8)]
 enum CompressMethod {
     /// No compression.
@@ -203,6 +223,7 @@ Its structure is as follows:
 struct BootMetadata {
     magic_number: u32, // 0x544f4f42 ("BOOT")
     string_pool: StringPool,
+    entries: Vec<BootMetadataEntry>,
     groups: Vec<ResourceGroup>,
 }
 ```
@@ -214,20 +235,44 @@ Where:
 - `string_pool`: String pool used to store string data, its structure is shown below;
 - `groups`: An array of groups, each describing a module or class.
 
+#### `BootMetadataEntry`
+
+Basic structure of a configuration field:
+
+```rust
+struct BootMetadataEntry {
+    entry_type: u32,
+    content: Vec<u8>
+}
+```
+
+Supported entries:
+
+```rust
+enum BootMetadataEntry {
+    StringPool {
+        entry_type: u32, // 0x4c4f4f50 ("POOL")
+        length: CompressedInteger,
+        
+        compress_method: CompressMethod,
+        reserved: u16,
+        count: CompressedInteger,
+        uncompressed_bytes_size: CompressedInteger,
+        compressed_bytes_size: CompressedInteger,
+        sizes: [CompressedInteger; count],
+        compressed_bytes: CompressedData<u8, compress_method, compressed_bytes_size>,
+    },
+}
+```
+
+
 #### `StringPool`
 
 The `StringPool` structure is as follows:
 
 ```rust
 struct StringPool {
-    magic_number: u32, // 0x4c4f4f50 ("POOL")
-    compress_method: CompressMethod,
-    reserved: u16,
-    count: CompressedInteger,
-    uncompressed_bytes_size: CompressedInteger,
-    compressed_bytes_size: CompressedInteger,
-    sizes: [CompressedInteger; count],
-    compressed_bytes: CompressedData<u8, compress_method, compressed_bytes_size>,
+    
 }
 ```
 
@@ -432,6 +477,12 @@ enum ConfigField {
 
     ClassPath {
         field_type: u32, // 0x50534c43 ("CLSP")
+        length: CompressedInteger,
+        items: Vec<ResourceGroupReference>,
+    },
+    
+    Agents {
+        field_type: u32, // 0x544e4741 ("AGNT")
         length: CompressedInteger,
         items: Vec<ResourceGroupReference>,
     },
