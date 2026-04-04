@@ -225,6 +225,10 @@ Supported entries:
 enum BootMetadataEntry {
     /// A shared string pool used for class file compression algorithms and resource paths.
     /// 
+    /// Currently, strings in the string pool cannot contain '\0' or code points greater than U+FFFF, 
+    /// to ensure consistent results when using standard UTF-8 and modified UTF-8 encoding.
+    /// In the future, this restriction may be lifted.
+    /// 
     /// Each `BootMetadata` can only have one `StringPool`.
     StringPool {
         /// The entry type of the string pool entry.
@@ -234,12 +238,7 @@ enum BootMetadataEntry {
         
         /// The length of the payload.
         length: vuint,
-
-        /// Whether it only contains ASCII strings and does not contain the '\0' character.
-        /// 
-        /// Currently, must be `true`, so we can ensure all strings are consistent for standard UTF-8 and modified UTF-8.
-        is_ascii: bool,
-        
+       
         /// Reserved field, currently unused.
         /// 
         /// All bytes must be `0`.
@@ -249,7 +248,7 @@ enum BootMetadataEntry {
         count: vuint,
         
         /// The total size of the string pool data.
-        sizes: [u8; count],
+        sizes: [vuint; count],
         
         /// The compressed size of the string pool bytes.
         compress_method: CompressMethod,
