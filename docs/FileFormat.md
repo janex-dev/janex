@@ -290,28 +290,6 @@ enum BootMetadataEntry {
 }
 ```
 
-
-#### `StringPool`
-
-The `StringPool` structure is as follows:
-
-```rust
-struct StringPool {
-    
-}
-```
-
-Where:
-
-- `magic_number`: Used to identify the start of the string pool;
-- `compress_method`: Compression method used to compress the string pool;
-- `reserved`: Reserved field, currently unused;
-- `count`: Number of strings in the string pool;
-- `uncompressed_bytes_size`: Total size of the uncompressed string pool data;
-- `compressed_bytes_size`: Total size of the compressed string pool data;
-- `sizes`: An array of string sizes.
-- `compressed_bytes`: Compressed string pool data.
-
 #### `ResourceGroup`
 
 `ResourceGroup` is a group of metadata of class files or resource files.
