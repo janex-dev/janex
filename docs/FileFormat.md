@@ -272,26 +272,30 @@ enum BootMetadataEntry {
 
 ```rust
 struct ResourceGroup {
+    /// The magic number of the resource group.
+    /// 
+    /// Always 0x47534552 ("RESG").
     magic_number: u32, // 0x47534552 ("RESG")
-    compress_method: CompressMethod,
+    
+    /// Reserved field, all bytes must be `0`.
     reserved: [u8; 48],
-
-    uncompressed_size: vuint,
-    compressed_size: vuint,
+    
+    /// The number of resources in the resource group.
     resources_count: vuint,
+    
+    /// The compress method used to compress the resource group.
+    compress_method: CompressMethod,
+    
+    /// The total size of the resource group data.
+    uncompressed_size: vuint,
+    
+    /// The compressed size of the resource group data.
+    compressed_size: vuint,
+    
+    /// The compressed resource group data.
     compressed_resources: [u8; compressed_size], // [Resource; resources_count]
 }
 ```
-
-Where:
-
-- `magic_number`: Used to identify the start of the resource group;
-- `compress_method`: Compression method used to compress the resource group;
-- `reserved`: Reserved field, currently unused;
-- `uncompressed_size`: Total size of the uncompressed resource group data;
-- `compressed_size`: Total size of the compressed resource group data;
-- `resources_count`: Number of resources in the resource group;
-- `compressed_resources`: Compressed resource data.
 
 #### `Resource`
 
