@@ -189,19 +189,19 @@ Its structure is as follows:
 
 ```rust
 struct BootMetadata {
+    /// The magic number of the boot metadata.
+    /// 
+    /// Always 0x544f4f42 ("BOOT").
     magic_number: u32, // 0x544f4f42 ("BOOT")
-    string_pool: StringPool,
+   
+   
+    /// The entries of the boot metadata.
     entries: Vec<BootMetadataEntry>,
+   
+    /// The resource groups of the boot metadata.
     groups: Vec<ResourceGroup>,
 }
 ```
-
-Where:
-
-- `magic_number`: Used to identify the start of the metadata, with a value of `0x544f4f42` (i.e., the string `"BOOT"`);
-- `group_count`: Number of groups;
-- `string_pool`: String pool used to store string data, its structure is shown below;
-- `groups`: An array of groups, each describing a module or class.
 
 #### `BootMetadataEntry`
 
