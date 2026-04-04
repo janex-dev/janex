@@ -54,21 +54,23 @@ In the file, `CompressedInteger` is stored as one or more byte sequences.
 The lower seven bits of every byte contain integer data, and the highest bit in every byte is the continuation flag.
 
 If the highest bit is `0`, means that the current byte is the last byte of the integer;
-If the highest bit is `1`, means that the current byte is not the last byte of the integer, and the next byte is the continuation of the integer.
+If the highest bit is `1`, means that the current byte is not the last byte of the integer, and the next byte is the
+continuation of the integer.
 
-Reading `CompressedInteger` should follow the following algorithm (error handling is omitted, such as reporting an error for integers exceeding 64 bits):
+Reading `CompressedInteger` should follow the following algorithm (error handling is omitted, such as reporting an error
+for integers exceeding 64 bits):
 
 ```rust
 fn read_compressed_integer(read: &mut impl Read) -> Result<u64, Error> {
     let mut result: u64 = 0;
-    
+
     for i in 0..10 {
         let byte = read.read_u8()?;
         let low_bits = byte & 0x7F;
         result |= (low_bits as u64) << (7 * i);
         if byte == low_bits {
             break;
-        } 
+        }
     }
     result
 }
@@ -85,6 +87,17 @@ struct String {
 }
 ```
 
+### Dynamic Array
+
+Janex uses the following structure to store arrays of variable length:
+
+```rust
+struct Vec<T> {
+    length: CompressedInteger,
+    data: [T; length],
+}
+```
+
 ### Compress
 
 Janex uses the following enum to record the compression method to be used:
@@ -92,18 +105,17 @@ Janex uses the following enum to record the compression method to be used:
 ```rust
 #[repr(u8)]
 enum CompressMethod {
+    /// No compression.
     NONE = 0,
+
+    /// A compression algorithm developed specifically for class files,
+    /// which uses a shared string pool and another compression algorithm for compression;
     CLASSFILE = 1,
+
+    /// Zstandard compression.
     ZSTD = 2,
 }
 ```
-
-Where:
-
-- `NONE`: No compression;
-- `CLASSFILE`: A compression algorithm developed specifically for class files, which uses a shared string pool and
-  Zstandard compression algorithm for compression;
-- `ZSTD`: Zstandard compression.
 
 We use this structure to represent compressed data:
 
@@ -191,8 +203,7 @@ Its structure is as follows:
 struct BootMetadata {
     magic_number: u32, // 0x544f4f42 ("BOOT")
     string_pool: StringPool,
-    group_count: CompressedInteger,
-    groups: [ResourceGroup; group_count],
+    groups: Vec<ResourceGroup>,
 }
 ```
 
@@ -272,8 +283,7 @@ struct Resource {
     compressed_size: CompressedInteger,
     content_offset: CompressedInteger,
     path: ResourcePath,
-    optional_fields_count: CompressedInteger,
-    optional_fields: [ResourceField; optional_fields_count],
+    optional_fields: Vec<ResourceField>,
 }
 ```
 
@@ -286,9 +296,7 @@ Where:
 - `compressed_size`: Size of the compressed resource;
 - `content_offset`: Offset of the resource content in `data_pool`;
 - `path`: Resource path;
-- `optional_fields_count`: Number of optional fields;
 - `optional_fields`: Optional fields of the resource;
-
 
 #### `ResourcePath`
 
@@ -312,7 +320,7 @@ enum ResourcePathContent {
     StringBody {
         body: [u8; length],
     },
-    
+
     /// When `length` is `0`
     RefBody {
         directory_index: CompressedInteger,
@@ -361,8 +369,7 @@ enum ResourceField {
     Custom {
         id: u8, // 0x7F
         name: String,
-        length: CompressedInteger,
-        content: [u8; length],
+        content: Vec<u8>,
     }
 }
 ```
@@ -380,8 +387,7 @@ struct LauncherMetadata {
 ```rust
 struct ConfigGroup {
     magic_number: u32, // 0x50524743 ("CGRP")
-    fields_count: CompressedInteger,
-    fields: [ConfigField; fields_count],
+    fields: Vec<ConfigField>,
 }
 ```
 
@@ -392,8 +398,7 @@ Basic structure of a configuration field:
 ```rust
 struct ConfigField {
     field_type: u32,
-    length: CompressedInteger,
-    content: [u8; length]
+    content: Vec<u8>
 }
 ```
 
@@ -422,29 +427,25 @@ enum ConfigField {
     ModulePath {
         field_type: u32, // 0x50444f4d ("MODP")
         length: CompressedInteger,
-        items_count: CompressedInteger,
-        items: [ResourceGroupReference; items_count]
+        items: Vec<ResourceGroupReference>,
     },
 
     ClassPath {
         field_type: u32, // 0x50534c43 ("CLSP")
         length: CompressedInteger,
-        items_count: CompressedInteger,
-        items: [ResourceGroupReference; items_count]
+        items: Vec<ResourceGroupReference>,
     },
 
     JvmOptions {
         field_type: u32, // 0x54504f4a ("JOPT")
         length: CompressedInteger,
-        options_count: CompressedInteger,
-        options: [String; options_count]
+        options: Vec<String>
     },
 
     SubGroups {
         field_type: u32, // 0x50524753 ("SGRP")
         length: CompressedInteger,
-        subgroups_count: CompressedInteger,
-        groups: [ConfigGroup; subgroups_count]
+        subgroups: Vec<ConfigGroup>
     }
 }
 ```
