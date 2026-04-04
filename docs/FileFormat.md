@@ -63,7 +63,7 @@ Reading `vuint` should follow the following algorithm (error handling is omitted
 for integers exceeding 64 bits):
 
 ```rust
-fn read_compressed_integer(read: &mut impl Read) -> Result<u64, Error> {
+fn read_vuint(read: &mut impl Read) -> Result<vuint, Error> {
     let mut result: u64 = 0;
 
     for i in 0..10 {
