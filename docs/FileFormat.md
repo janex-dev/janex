@@ -111,7 +111,7 @@ enum CompressMethod {
     NONE = 0,
 
     /// A compression algorithm developed specifically for class files,
-    /// which uses a shared string pool and another compression algorithm for compression;
+    /// It will put some strings from the constant pool into the shared constant pool.
     CLASSFILE = 1,
 
     /// Zstandard compression.
