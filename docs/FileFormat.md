@@ -209,7 +209,12 @@ Basic structure of a configuration field:
 
 ```rust
 struct BootMetadataEntry {
+    /// The entry type of the configuration field.
+    /// 
+    /// The entry type is a 32-bit unsigned integer that identifies the type of the configuration field.
     entry_type: u32,
+    
+    /// The payload of the configuration field.
     content: Vec<u8>
 }
 ```
@@ -222,7 +227,12 @@ enum BootMetadataEntry {
     /// 
     /// Each `BootMetadata` can only have one `StringPool`.
     StringPool {
+        /// The entry type of the string pool entry.
+        /// 
+        /// Always 0x4c4f4f50 ("POOL").
         entry_type: u32, // 0x4c4f4f50 ("POOL")
+        
+        /// The length of the payload.
         length: vuint,
 
         /// Whether it only contains ASCII strings and does not contain the '\0' character.
