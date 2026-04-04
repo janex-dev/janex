@@ -43,15 +43,15 @@ struct MyStruct {
 
 Here, `length` is a 32-bit unsigned integer, and `data` is a byte array of length `length`.
 
-### Compressed Integer
+### Variable-length integers
 
-Janex uses `CompressedInteger` to efficiently store integers in some structures.
+Janex uses `vuint` to efficiently store integers in some structures.
 
 ```rust
-type CompressedInteger = u64;
+type vuint = u64;
 ```
 
-In the file, `CompressedInteger` is stored as one or more byte sequences.
+In the file, `vuint` is stored as one or more byte sequences.
 
 The lower seven bits of every byte contain integer data, and the highest bit in every byte is the continuation flag.
 
@@ -59,7 +59,7 @@ If the highest bit is `0`, means that the current byte is the last byte of the i
 If the highest bit is `1`, means that the current byte is not the last byte of the integer, and the next byte is the
 continuation of the integer.
 
-Reading `CompressedInteger` should follow the following algorithm (error handling is omitted, such as reporting an error
+Reading `vuint` should follow the following algorithm (error handling is omitted, such as reporting an error
 for integers exceeding 64 bits):
 
 ```rust
@@ -84,7 +84,7 @@ Janex uses UTF-8 encoding for strings:
 
 ```rust
 struct String {
-    length: CompressedInteger,
+    length: vuint,
     data: [u8; length],
 }
 ```
@@ -95,7 +95,7 @@ Janex uses the following structure to store arrays of variable length:
 
 ```rust
 struct Vec<T> {
-    length: CompressedInteger,
+    length: vuint,
     data: [T; length],
 }
 ```
@@ -105,7 +105,7 @@ struct Vec<T> {
 Janex uses the following enum to record the compression method to be used:
 
 ```rust
-#[repr(CompressedInteger)]
+#[repr(vuint)]
 enum CompressMethod {
     /// No compression.
     NONE = 0,
@@ -257,7 +257,7 @@ enum BootMetadataEntry {
     /// Each `BootMetadata` can only have one `StringPool`.
     StringPool {
         entry_type: u32, // 0x4c4f4f50 ("POOL")
-        length: CompressedInteger,
+        length: vuint,
 
         /// Whether it only contains ASCII strings and does not contain the '\0' character.
         /// 
@@ -270,7 +270,7 @@ enum BootMetadataEntry {
         reserved: [u8; 8],
         
         /// The number of strings in the string pool.
-        count: CompressedInteger,
+        count: vuint,
         
         /// The total size of the string pool data.
         sizes: [u8; count],
@@ -279,10 +279,10 @@ enum BootMetadataEntry {
         compress_method: CompressMethod,
         
         /// The compressed size of the string pool bytes.
-        uncompressed_bytes_size: CompressedInteger,
+        uncompressed_bytes_size: vuint,
         
         /// The compressed string pool bytes.
-        compressed_bytes_size: CompressedInteger,
+        compressed_bytes_size: vuint,
         
         /// The compressed string pool bytes.
         compressed_bytes: [u8; compressed_bytes_size],
@@ -300,9 +300,9 @@ struct ResourceGroup {
     compress_method: CompressMethod,
     reserved: [u8; 48],
 
-    uncompressed_size: CompressedInteger,
-    compressed_size: CompressedInteger,
-    resources_count: CompressedInteger,
+    uncompressed_size: vuint,
+    compressed_size: vuint,
+    resources_count: vuint,
     compressed_resources: CompressedData<[Resource; resources_count], compress_method, compressed_size>,
 }
 ```
@@ -327,9 +327,9 @@ struct Resource {
     magic_number: u32, // 0x534552 ("RES\0")
     compress_method: CompressMethod,
     reserved: [u8; 4],
-    uncompressed_size: CompressedInteger,
-    compressed_size: CompressedInteger,
-    content_offset: CompressedInteger,
+    uncompressed_size: vuint,
+    compressed_size: vuint,
+    content_offset: vuint,
     path: ResourcePath,
     optional_fields: Vec<ResourceField>,
 }
@@ -352,7 +352,7 @@ Where:
 
 ```rust
 struct ResourcePath {
-    length: CompressedInteger,
+    length: vuint,
     content: ResourcePathContent,
 }
 ```
@@ -371,8 +371,8 @@ enum ResourcePathContent {
 
     /// When `length` is `0`
     RefBody {
-        directory_index: CompressedInteger,
-        file_name_index: CompressedInteger,
+        directory_index: vuint,
+        file_name_index: vuint,
     }
 }
 ```
@@ -456,49 +456,49 @@ Supported fields:
 enum ConfigField {
     Condition {
         field_type: u32, // 0x444e4f43 ("COND")
-        length: CompressedInteger,
+        length: vuint,
         condition: String,
     },
 
     MainClass {
         field_type: u32, // 0x534c434d ("MCLS") 
-        length: CompressedInteger,
+        length: vuint,
         value: String,
     },
 
     MainModule {
         field_type: u32, // 0x444f4d4d ("MMOD")
-        length: CompressedInteger,
+        length: vuint,
         value: String,
     },
 
     ModulePath {
         field_type: u32, // 0x50444f4d ("MODP")
-        length: CompressedInteger,
+        length: vuint,
         items: Vec<ResourceGroupReference>,
     },
 
     ClassPath {
         field_type: u32, // 0x50534c43 ("CLSP")
-        length: CompressedInteger,
+        length: vuint,
         items: Vec<ResourceGroupReference>,
     },
     
     Agents {
         field_type: u32, // 0x544e4741 ("AGNT")
-        length: CompressedInteger,
+        length: vuint,
         items: Vec<ResourceGroupReference>,
     },
 
     JvmOptions {
         field_type: u32, // 0x54504f4a ("JOPT")
-        length: CompressedInteger,
+        length: vuint,
         options: Vec<String>
     },
 
     SubGroups {
         field_type: u32, // 0x50524753 ("SGRP")
-        length: CompressedInteger,
+        length: vuint,
         subgroups: Vec<ConfigGroup>
     }
 }
@@ -510,7 +510,7 @@ enum ConfigField {
 enum ResourceGroupReference {
     Local {
         ref_type: u32, // 0x00434f4c ("LOC\0")
-        group_index: CompressedInteger,
+        group_index: vuint,
 
     },
     Maven {
