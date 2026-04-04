@@ -225,10 +225,6 @@ Supported entries:
 enum BootMetadataEntry {
     /// A shared string pool used for class file compression algorithms and resource paths.
     /// 
-    /// Currently, strings in the string pool cannot contain '\0' or code points greater than U+FFFF, 
-    /// to ensure consistent results when using standard UTF-8 and modified UTF-8 encoding.
-    /// In the future, this restriction may be lifted.
-    /// 
     /// Each `BootMetadata` can only have one `StringPool`.
     StringPool {
         /// The entry type of the string pool entry.
