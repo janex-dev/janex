@@ -28,6 +28,8 @@ This document uses `u8`/`u16`/`u32`/`u64` to represent 8/16/32/64-bit unsigned i
 uses `i8`/`i16`/`i32`/`i64` to represent 8/16/32/64-bit signed integers,
 and uses `f32`/`f64` to represent 32/64-bit floating-point numbers.
 
+`bool` is represented by `u8`, `true` is non-zero, and `false` is zero.
+
 ### Complex Data Types
 
 This document uses pseudocode similar to Rust structs to represent complex data types. For example:
@@ -250,17 +252,40 @@ Supported entries:
 
 ```rust
 enum BootMetadataEntry {
+    /// A shared string pool used for class file compression algorithms and resource paths.
+    /// 
+    /// Each `BootMetadata` can only have one `StringPool`.
     StringPool {
         entry_type: u32, // 0x4c4f4f50 ("POOL")
         length: CompressedInteger,
+
+        /// Whether it only contains ASCII strings and does not contain the '\0' character.
+        /// 
+        /// Currently, must be `true`, so we can ensure all strings are consistent for standard UTF-8 and modified UTF-8.
+        is_ascii: bool,
         
-        compress_method: CompressMethod,
-        reserved: u16,
+        /// Reserved field, currently unused.
+        /// 
+        /// All bytes must be `0`.
+        reserved: [u8; 8],
+        
+        /// The number of strings in the string pool.
         count: CompressedInteger,
+        
+        /// The total size of the string pool data.
+        sizes: [u8; count],
+        
+        /// The compressed size of the string pool bytes.
+        compress_method: CompressMethod,
+        
+        /// The compressed size of the string pool bytes.
         uncompressed_bytes_size: CompressedInteger,
+        
+        /// The compressed string pool bytes.
         compressed_bytes_size: CompressedInteger,
-        sizes: [CompressedInteger; count],
-        compressed_bytes: CompressedData<u8, compress_method, compressed_bytes_size>,
+        
+        /// The compressed string pool bytes.
+        compressed_bytes: [u8; compressed_bytes_size],
     },
 }
 ```
