@@ -538,6 +538,7 @@ struct Java {
     arch: String,
 }
 
+/// The Java version information.
 struct JavaVersion {
     /// The full version string.
     full: String,
@@ -568,11 +569,16 @@ struct JavaVersion {
 The `Platform` struct contains the operating system and CPU architecture information:
 
 ```rust
+/// The platform information.
 struct Platform {
+    /// The operating system information.
     os: OperatingSystem,
+   
+    /// The CPU architecture information.
     cpu: CPU,
 }
 
+/// The operating system information.
 struct OperatingSystem {
    /// The name of the operating system.
    name: String,
@@ -583,6 +589,13 @@ struct OperatingSystem {
    version: String,
 }
 
+struct OperatingSystemVersion {
+    /// The full version string.
+    full: String,
+   
+    /// The major version number.
+    major: uint,
+}
 
 struct CPU {
     /// The name of the CPU architecture.
