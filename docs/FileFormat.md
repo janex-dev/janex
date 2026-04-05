@@ -511,47 +511,81 @@ and other information based on conditions.
 
 Users can use [Common Expression Language (CEL)](https://cel.dev/overview/cel-overview) to declare these requirements when building a Janex file.
 
-At runtime, Janex provides a value named `janex`, whose type is the `Janex` in the following:
+### Environment
+
+At runtime, Janex provides some values for assertions in conditions.
 
 ```rust
-struct Janex {
-   java: Java,
-   platform: Platform,
-}
+let java: Java = ...;
+let platform: Platform = ...;
+```
 
+The `Java` struct contains the Java version information:
+
+```rust
+/// The Java information.
 struct Java {
-   /// The Java version.
-   version: JavaVersion,
+    /// The Java version.
+    version: JavaVersion,
+   
+    /// The vendor of the Java runtime environment.
+    vendor: String,   
+
+    /// The operating system of the Java runtime environment.
+    os: OperatingSystem,
+   
+    /// The architecture of the Java runtime environment.
+    arch: String,
 }
 
 struct JavaVersion {
-   /// The full version string.
-   full: String,
+    /// The full version string.
+    full: String,
    
-   /// The feature version of the Java version.
-   feature: uint,
-   
-   /// The interim version of the Java version.
-   interim: uint,
-   
-   /// The update version of the Java version.
-   update: uint,
-   
-   /// The patch version of the Java version.
-   patch: uint,
-   
-   /// The optional pre-release information.
-   pre: String,
-   
-   /// The build number.
-   build: uint,
-   
-   /// The optional additional identifying build information.
-   optional: String,
+    /// The feature version of the Java version.
+    feature: uint,
+    
+    /// The interim version of the Java version.
+    interim: uint,
+    
+    /// The update version of the Java version.
+    update: uint,
+    
+    /// The patch version of the Java version.
+    patch: uint,
+    
+    /// The optional pre-release information.
+    pre: String,
+    
+    /// The build number.
+    build: uint,
+    
+    /// The optional additional identifying build information.
+    optional: String,
+}
+```
+
+The `Platform` struct contains the operating system and CPU architecture information:
+
+```rust
+struct Platform {
+    os: OperatingSystem,
+    cpu: CPU,
 }
 
-struct Platform {
-   os: OperatingSystem,
-   arch: Architecture,
+struct OperatingSystem {
+   /// The name of the operating system.
+   name: String,
+   
+   /// The version of the operating system.
+   /// 
+   /// If the operating system does not have a version, this field will be empty.
+   version: String,
+}
+
+
+struct CPU {
+    /// The name of the CPU architecture.
+    arch: String,
 }
 ```
