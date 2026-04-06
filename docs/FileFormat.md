@@ -619,11 +619,14 @@ enum ConfigField {
 
 ```rust
 enum ResourceGroupReference {
+    /// A reference to a local resource group.
     Local {
         ref_type: u32, // 0x00434f4c ("LOC\0")
         group_index: vuint,
 
     },
+    
+    /// A reference to a Maven artifact.
     Maven {
         ref_type: u32, // 0x00564147 ("GAV\0")
         gav: String,
