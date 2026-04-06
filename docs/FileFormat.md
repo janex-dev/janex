@@ -242,7 +242,7 @@ enum BootMetadataEntry {
         /// The number of strings in the string pool.
         count: vuint,
 
-        /// The total size of the string pool data.
+        /// The size of each string in the string pool.
         sizes: [vuint; count],
 
         /// The compressed size of the string pool bytes.
@@ -333,8 +333,8 @@ struct ResourcePath {
 
 `ResourcePathContent` has two layouts.
 
-When `length` is `0`, use `StringBody`, storing the path directly in the `ResourcePath` structure;
-When `length` is not `0`, use `RefBody`, storing two indices of character names in the `StringPool`.
+When `length` is not `0`, use `StringBody`, storing the path directly in the `ResourcePath` structure;
+When `length` is `0`, use `RefBody`, storing two indices of character names in the `StringPool`.
 
 ```rust
 enum ResourcePathContent {
@@ -586,7 +586,7 @@ struct OperatingSystem {
    /// The version of the operating system.
    /// 
    /// If the operating system does not have a version, this field will be empty.
-   version: String,
+   version: OperatingSystemVersion,
 }
 
 struct OperatingSystemVersion {
