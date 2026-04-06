@@ -19,8 +19,8 @@ Its key features include:
   or CPU architecture), and the Janex Launcher will find a suitable installed Java runtime to run the program.
 - **Embedded JVM options**: Janex files can contain JVM options (such as `--add-exports`, `--enable-native-access`,
   `-D`, etc.) that are passed to the JVM at runtime.
-- **Conditional configuration**: Janex supports conditionally adding classpath entries, module path entries,
-  and JVM arguments based on runtime environment conditions using
+- **Conditional configuration**: Janex supports dynamic selection of Java runtimes, classpath entries,
+  module path entries, and JVM arguments based on runtime environment conditions using
   [Common Expression Language (CEL)](https://cel.dev/overview/cel-overview) expressions.
 - **Prepended data support**: The Janex format allows arbitrary custom data (such as PE/ELF executables or shell
   scripts) to be prepended to the file, enabling shebang support for direct execution on Unix-like systems and
