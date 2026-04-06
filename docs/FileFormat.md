@@ -196,9 +196,6 @@ struct BootMetadata {
 
     /// The entries of the boot metadata.
     entries: Vec<BootMetadataEntry>,
-
-    /// The resource groups of the boot metadata.
-    groups: Vec<ResourceGroup>,
 }
 ```
 
@@ -222,6 +219,22 @@ Supported entries:
 
 ```rust
 enum BootMetadataEntry {
+    /// Each `BootMetadata` can only have one `ResourceGroups`.
+    ///
+    /// If `ResourceGroups` uses `ResourcePathContent.RefBody`, then a `StringPool` must exist before this entry.
+    ResourceGroups {
+        /// The entry type of the string pool entry.
+        ///
+        /// Always 0x53505247 ("GRPS")
+        entry_type: u32, // 0x53505247 ("GRPS")
+
+        /// The bytes size of the payload.
+        length: vuint,
+
+        /// The resource groups of the boot metadata.
+        groups: Vec<ResourceGroup>,
+    },
+    
     /// A shared string pool used for class file compression algorithms and resource paths.
     ///
     /// Each `BootMetadata` can only have one `StringPool`.
@@ -231,7 +244,7 @@ enum BootMetadataEntry {
         /// Always 0x4c4f4f50 ("POOL").
         entry_type: u32, // 0x4c4f4f50 ("POOL")
 
-        /// The length of the payload.
+        /// The bytes size of the payload.
         length: vuint,
 
         /// Reserved field, currently unused.
