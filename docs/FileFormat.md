@@ -18,6 +18,11 @@ acquires appropriate JVM arguments according to the conditions, and starts a Jav
 In the Java process, Janex needs to load a **Janex Boot** provided as a JAR, which provides a custom ClassLoader for
 `Janex` to load classes from the Janex file.
 
+Before this, we already had a prototype, whose documentation includes design concepts and other content about this file. 
+For more information, please refer to [janex-dev/japp](https://github.com/janex-dev/japp).
+
+This document is an improvement based on the prototype, and we hope to make it safer, more stable, and easier to extend.
+
 ## Data Types
 
 ### Basic Data Types
