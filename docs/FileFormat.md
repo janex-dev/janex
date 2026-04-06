@@ -338,6 +338,11 @@ struct ResourceGroup {
     ///
     /// Always 0x47534552 ("RESG").
     magic_number: u32, // 0x47534552 ("RESG")
+    
+    /// The name of the resource group.
+    /// 
+    /// The name must be unique within the `ResourceGroups`.
+    name: String,
 
     /// Reserved field, all bytes must be `0`.
     reserved: [u8; 48],
@@ -627,14 +632,22 @@ enum ResourceGroupReference {
     /// A reference to a local resource group.
     Local {
         ref_type: u32, // 0x00434f4c ("LOC\0")
-        group_index: vuint,
+        
+        /// The name of the local resource group.
+        group_name: String,
     },
     
     /// A reference to a Maven artifact.
     Maven {
         ref_type: u32, // 0x00564147 ("GAV\0")
+        
+        /// The GAV of the Maven artifact.
         gav: String,
+        
+        /// The repository of the Maven artifact.
         repository: String,
+        
+        /// The checksum of the Maven artifact.
         checksum: String,
     }
 }
