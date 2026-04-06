@@ -69,17 +69,31 @@ for integers exceeding 64 bits):
 
 ```rust
 fn read_vuint(read: &mut impl Read) -> Result<vuint, Error> {
-    let mut result: u64 = 0;
+    let first = read.read_u8()?;
 
-    for i in 0..10 {
+    if first < 0x80 {
+        return Ok(first as u64);
+    }
+
+    let mut result = (first & 0x7F) as u64;
+
+    for i in 1..10 {
         let byte = read.read_u8()?;
         let low_bits = byte & 0x7F;
+
+        // the 10th byte can have at most 1 valid bit
+        if i == 9 && low_bits > 1 {
+            return Err(Error::InvalidVUInt);
+        }
+
         result |= (low_bits as u64) << (7 * i);
+
         if byte == low_bits {
-            break;
+            return Ok(result);
         }
     }
-    result
+
+    Err(Error::InvalidVUInt)
 }
 ```
 
