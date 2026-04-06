@@ -430,6 +430,8 @@ Supported fields:
 enum ConfigField {
     Condition {
         field_type: u32, // 0x444e4f43 ("COND")
+       
+        /// The bytes size of the payload.
         length: vuint,
        
         /// The CEL expression that determines whether the program can run.
@@ -440,42 +442,56 @@ enum ConfigField {
 
     MainClass {
         field_type: u32, // 0x534c434d ("MCLS") 
+        
+        /// The bytes size of the payload.
         length: vuint,
         value: String,
     },
 
     MainModule {
         field_type: u32, // 0x444f4d4d ("MMOD")
+
+        /// The bytes size of the payload.
         length: vuint,
         value: String,
     },
 
     ModulePath {
         field_type: u32, // 0x50444f4d ("MODP")
+
+        /// The bytes size of the payload.
         length: vuint,
         items: Vec<ResourceGroupReference>,
     },
 
     ClassPath {
         field_type: u32, // 0x50534c43 ("CLSP")
+
+        /// The bytes size of the payload.
         length: vuint,
         items: Vec<ResourceGroupReference>,
     },
 
     Agents {
         field_type: u32, // 0x544e4741 ("AGNT")
+
+        /// The bytes size of the payload.
         length: vuint,
         items: Vec<ResourceGroupReference>,
     },
 
     JvmOptions {
         field_type: u32, // 0x54504f4a ("JOPT")
+
+        /// The bytes size of the payload.
         length: vuint,
         options: Vec<String>
     },
 
     SubGroups {
         field_type: u32, // 0x50524753 ("SGRP")
+
+        /// The bytes size of the payload.
         length: vuint,
         subgroups: Vec<ConfigGroup>
     }
