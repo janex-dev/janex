@@ -438,24 +438,18 @@ enum ResourceField {
     /// File creation time.
     FileCreateTime {
         id: u8, // 0x02
-
-        /// File create time epoch in nanoseconds.
         timestamp: Timestamp,
     },
 
     /// File modification time.
     FileModifyTime {
         id: u8, // 0x03
-
-        /// File modify time epoch in nanoseconds.
         timestamp: Timestamp,
     },
 
     /// File access time.
     FileAccessTime {
         id: u8, // 0x04
-
-        /// File access time epoch in nanoseconds.
         timestamp: Timestamp,
     },
 
