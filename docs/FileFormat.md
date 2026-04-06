@@ -201,16 +201,16 @@ struct BootMetadata {
 
 #### `BootMetadataEntry`
 
-Basic structure of a configuration field:
+Basic structure of a entry:
 
 ```rust
 struct BootMetadataEntry {
-    /// The entry type of the configuration field.
+    /// The entry type of the entry.
     ///
-    /// The entry type is a 32-bit unsigned integer that identifies the type of the configuration field.
+    /// The entry type is a 32-bit unsigned integer that identifies the type of the entry.
     entry_type: u32,
 
-    /// The payload of the configuration field.
+    /// The payload of the entry.
     content: Vec<u8>
 }
 ```
@@ -420,7 +420,43 @@ enum ResourceField {
 
 ```rust
 struct LauncherMetadata {
-    root_group: ConfigGroup,
+    /// The entries of the launcher metadata.
+    entries: Vec<LauncherMetadataEntry>
+}
+```
+
+#### `LauncherMetadataEntry`
+
+Basic structure of a launcher metadata entry:
+
+```rust
+struct LauncherMetadataEntry {
+    /// The entry type of the entry.
+    ///
+    /// The entry type is a 32-bit unsigned integer that identifies the type of the configuration field.
+    entry_type: u32,
+
+    /// The payload of the configuration field.
+    content: Vec<u8>
+}
+```
+
+Supported entries:
+
+```rust
+enum LauncherMetadataEntry {
+    ROOT_GROUP {
+        /// The entry type of the entry.
+        /// 
+        /// Always 0x50524752 ("RGRP")
+        entry_type: u32, // 0x50524752 ("RGRP")
+        
+        /// The bytes size of the payload.
+        length: vuint,
+        
+        /// The root group of the launcher metadata.
+        root_group: ConfigGroup,
+    }
 }
 ```
 
