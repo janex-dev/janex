@@ -26,14 +26,13 @@ Its key features include:
   scripts) to be prepended to the file, enabling shebang support for direct execution on Unix-like systems and
   self-contained distribution with an embedded launcher.
 
-When launching a Janex program, the **Janex Launcher** reads the launcher metadata to find a suitable Java runtime based
-on the metadata,
-acquires appropriate JVM arguments according to the conditions, and starts a Java process using these JVM arguments.
+When launching a Janex program, the **Janex Launcher** reads the launcher metadata to find a suitable Java runtime,
+evaluates the appropriate conditions to determine the JVM arguments, and starts a Java process accordingly.
 
-In the Java process, Janex needs to load a **Janex Boot** provided as a JAR, which provides a custom ClassLoader for
-`Janex` to load classes from the Janex file.
+In the Java process, the **Janex Boot** (provided as a JAR on the class path) is loaded, which supplies a custom
+ClassLoader that reads classes and resources directly from the Janex file.
 
-Before this, we already had a prototype, whose documentation includes design concepts and other content about this file. 
+Before this, we already had a prototype, whose documentation includes design concepts and other content about this file.
 For more information, please refer to [janex-dev/japp](https://github.com/janex-dev/japp).
 
 This document is an improvement based on the prototype, and we hope to make it safer, more stable, and easier to extend.
@@ -48,7 +47,7 @@ This document uses `u8`/`u16`/`u32`/`u64` to represent 8/16/32/64-bit unsigned i
 uses `i8`/`i16`/`i32`/`i64` to represent 8/16/32/64-bit signed integers,
 and uses `f32`/`f64` to represent 32/64-bit floating-point numbers.
 
-`bool` is represented by `u8`, `true` is non-zero, and `false` is zero.
+`bool` is represented by `u8`, where `true` is any non-zero value and `false` is zero.
 
 ### Complex Data Types
 
@@ -65,19 +64,17 @@ Here, `length` is a 32-bit unsigned integer, and `data` is a byte array of lengt
 
 ### Variable-length integers
 
-Janex uses `vuint` to efficiently store integers in some structures.
+Janex uses `vuint` to efficiently encode unsigned integers in some structures.
 
 ```rust
 type vuint = u64;
 ```
 
-In the file, `vuint` is stored as one or more byte sequences.
+A `vuint` is stored in the file as one or more bytes. The lower seven bits of each byte carry integer
+data, and the most significant bit (MSB) of each byte serves as the continuation flag:
 
-The lower seven bits of every byte contain integer data, and the highest bit in every byte is the continuation flag.
-
-If the highest bit is `0`, means that the current byte is the last byte of the integer;
-If the highest bit is `1`, means that the current byte is not the last byte of the integer, and the next byte is the
-continuation of the integer.
+- If the MSB is `0`, the current byte is the last byte of the integer.
+- If the MSB is `1`, more bytes follow; the next byte continues the encoding.
 
 Reading `vuint` should follow the following algorithm:
 
@@ -113,58 +110,68 @@ fn read_vuint(read: &mut impl Read) -> Result<vuint, Error> {
 
 ### String
 
-Janex uses UTF-8 encoding for strings:
+Strings in Janex are length-prefixed and encoded in UTF-8. The `length` field stores the number of
+bytes, followed by the raw UTF-8 bytes:
 
 ```rust
 struct String {
+    /// The number of bytes in the string.
     length: vuint,
+    /// The raw UTF-8 encoded content of the string.
     data: [u8; length],
 }
 ```
 
 ### Dynamic Array
 
-Janex uses the following structure to store arrays of variable length:
+Janex uses the following structure to store dynamically sized arrays. The `length` field specifies the
+number of elements, followed by the elements themselves serialized in sequence:
 
 ```rust
 struct Vec<T> {
+    /// The number of elements in the array.
     length: vuint,
+    /// The array elements, each serialized according to the type `T`.
     data: [T; length],
 }
 ```
 
 ### Timestamp
 
-Janex uses a 96-bit high-precision timestamp:
+Janex uses a 96-bit high-precision timestamp capable of representing nanosecond-level accuracy.
+The timestamp is measured relative to the Unix epoch (`1970-01-01T00:00:00Z`):
 
 ```rust
 struct Timestamp {
-    /// The number of seconds from 1970-01-01T00:00:00Z.
+    /// The number of seconds elapsed since `1970-01-01T00:00:00Z`.
+    /// May be negative for timestamps before the epoch.
     epoch_second: i64,
-    
-    /// The number of nanoseconds after the epoch_second.
-    /// 
-    /// In the range of `[0, 1_000_000_000)`.
-    nanos: u32, 
+
+    /// The sub-second component of the timestamp, in nanoseconds.
+    ///
+    /// Must be in the range `[0, 1_000_000_000)`.
+    nanos: u32,
 }
 ```
 
 ### Compression
 
-Janex uses the following structure to represent compression metadata:
+Janex uses the following structure to represent compression metadata. It describes how a block of data
+was compressed and provides the information needed to decompress it:
 
 ```rust
 struct CompressInfo {
-    /// The compress method.
+    /// The compression method used to compress the data.
     method: CompressMethod,
 
-    /// The uncompressed size of the data.
+    /// The size of the original (uncompressed) data, in bytes.
     uncompressed_size: vuint,
-    
-    /// The compressed size of the data.
+
+    /// The size of the compressed data, in bytes.
     compressed_size: vuint,
-    
-    /// Optional options will be passed to the decompressor during decompression.
+
+    /// Optional method-specific parameters passed to the decompressor.
+    /// The interpretation of this field depends on the value of `method`.
     options: Vec<u8>,
 }
 ```
@@ -174,153 +181,198 @@ The supported compression methods are:
 ```rust
 #[repr(vuint)]
 enum CompressMethod {
-    /// No compression.
+    /// No compression. The data is stored as-is.
     NONE = 0,
 
-    /// Combine multiple compression algorithms.
-    /// 
-    /// Its `options` field is a `Vec<CompressInfo>` that contains the compression metadata of the combined algorithms. 
+    /// Composite compression: combines multiple compression algorithms applied in sequence.
+    ///
+    /// The `options` field contains a `Vec<CompressInfo>` that describes each layer of compression.
+    /// To decompress, the algorithms are applied in reverse order (innermost first).
     COMPOSITE = 1,
 
-    /// A compression algorithm developed specifically for class files,
-    /// It will put some strings from the constant pool into the shared constant pool.
+    /// A class-file-aware compression algorithm.
+    ///
+    /// This method extracts frequently occurring strings from Java class file constant pools
+    /// and places them into a shared `StringPool`, enabling cross-file string deduplication.
+    /// 
+    /// The modified class files are typically then compressed further using other compression algorithms,
+    /// such as Zstandard.
     CLASSFILE = 2,
 
-    /// Zstandard compression.
+    /// Zstandard (zstd) compression.
+    ///
+    /// See https://github.com/facebook/zstd for details.
     ZSTD = 3,
 }
 ```
 
-We use the following structure to represent compressed data:
+The `CompressedData<T>` structure pairs a `CompressInfo` header with its corresponding compressed byte
+payload. The type parameter `T` describes the logical type of the data after decompression:
 
 ```rust
 struct CompressedData<T> {
+    /// The compression metadata describing the method and sizes.
     info: CompressInfo,
+    
+    /// The compressed bytes. After decompression, the result has type `T`.
     data: [u8; info.compressed_size],
 }
 ```
 
 #### Class File Compression
 
-Janex typically extracts some strings from class files into a shared string pool and then compresses them using Zstandard.
+Janex typically extracts frequently occurring strings (such as common package names, type descriptors,
+and method signatures) from class file constant pools into a shared `StringPool`, then independently
+compresses both the modified class files and the string pool using Zstandard. This approach allows
+strings that appear across many class files to be stored only once, significantly reducing the total
+compressed size.
 
-The `CLASSFILE` compression algorithm largely preserves the class file format, but:
+The `CLASSFILE` compression algorithm largely preserves the standard class file format, but introduces
+the following modifications:
 
-1. The magic number of the compressed class file will be rewritten to `0x70CAFECA` (0xCA 0xFE 0xCA 0x70) to distinguish it from the original class file;
-2. The compressed class file will contain some new types of constants.
+1. The magic number of the transformed class file is rewritten to `0x70CAFECA`
+   (`0xCA 0xFE 0xCA 0x70` in file order) to distinguish it from an unmodified class file.
+2. The transformed class file may contain new constant types that reference entries in the shared
+   `StringPool` by index, replacing the original `CONSTANT_Utf8` entries.
 
 (TODO: More details about the class file compression algorithm)
 
 ## Janex File Structure
 
-The Janex file is the format for executable files generated by the Janex tool. Its overall structure is as follows:
+The Janex file is the binary format produced by the Janex build tool for packaging and distributing
+Java programs as self-contained executables. Its overall layout is as follows:
 
 ```rust
 struct JanexFile {
-    /// The magic number of the Janex file.
+    /// The magic number identifying this as a Janex file.
     ///
-    /// Always 0x0000_0058_454e_414a ("JANEX\0\0\0").
+    /// Always `0x0000_0058_454e_414a` ("JANEX\0\0\0").
     magic_number: u64, // 0x0000_0058_454e_414a ("JANEX\0\0\0")
 
-    /// Data pool used to store all information such as class files and resource files.
+    /// Raw byte storage pool for all class file and resource file contents.
+    /// Individual resources reference their data within this pool by byte offset.
     data_pool: [u8; ...],
 
-    /// Boot metadata used to describe the classes and modules that need to be loaded at startup.
+    /// Boot metadata describing the resource groups and the optional shared string pool.
+    /// Consumed by the Janex Boot ClassLoader at startup.
     boot_metadata: BootMetadata,
 
-    /// Launcher metadata used to describe the configuration information of the launcher.
+    /// Launcher metadata describing how to locate a suitable Java runtime and construct
+    /// the JVM launch command. Consumed by the Janex Launcher.
     launcher_metadata: LauncherMetadata,
 
     // TODO: Support for signature verification.
     signature: Option<Signature>,
-    
-    /// File end metadata used to describe the size, offset, etc. of the file.
+
+    /// End-of-file marker used to locate other sections.
     file_end: FileEnd,
 }
 ```
 
 ### `FileEnd` Structure
 
-The Janex file is designed to allow arbitrary custom data to be attached at the head of the file (e.g., executable files
-like PE/ELF, shell scripts, etc.),
-so the core metadata of the Janex file is located in the `file_end` field at the end of the file, its structure is as
-follows:
+Because the Janex format supports prepending arbitrary data to the file (such as PE/ELF executables or
+shell scripts), the file maybe cannot be parsed from the beginning.
+
+Instead, a fixed-size `FileEnd` structure is written at the end of the file.
+Readers locate it by seeking backwards from the end of the file,
+then use the offsets and lengths it records to find all other sections.
 
 ```rust
 struct FileEnd {
-    /// The magic number of the file end.
+    /// The magic number of the end-of-file marker.
     ///
-    /// Always 0x444e45 ("END\0").
+    /// Always `0x444e45` ("END\0").
     magic_number: u32, // 0x444e45 ("END\0")
 
     /// The major version number of the Janex file format.
+    /// 
+    /// Readers must reject files with an unsupported major version.
     major_version: u32,
 
     /// The minor version number of the Janex file format.
+    /// 
+    /// Readers should accept files with a higher minor version within the same major version,
+    /// ignoring any unknown fields or entries.
     minor_version: u32,
 
-    /// File flags, currently unused, reserved as `0`.
+    /// File-level flags. Currently unused and must be `0`.
     flags: u32,
 
-    /// The total size of the Janex file (including header and tail), the Janex tool uses it to locate the file header.
+    /// The total size of the `JanexFile` structure.
+    /// 
+    /// The reader uses this value together with the actual file size to determine
+    /// the byte offset at which the Janex content begins.
     file_size: u64,
 
-    /// The length of the `data_pool` field in the file.
+    /// The byte length of the `data_pool` section.
+    /// 
+    /// The `data_pool` begins immediately after the `magic_number` field of `JanexFile`.
     data_pool_length: u64,
-    
-    /// The offset of the `boot_metadata` field in the file.
+
+    /// The byte offset of the `boot_metadata` section from the start of the `JanexFile` structure.
     boot_metadata_offset: u64,
 
-    /// The length of the `boot_metadata` field in the file.
+    /// The byte length of the `boot_metadata` section.
     boot_metadata_length: u64,
 
-    /// The offset of the `launcher_metadata` field in the file.
+    /// The byte offset of the `launcher_metadata` section from the start of the `JanexFile` structure.
     launcher_metadata_offset: u64,
 
-    /// The length of the `launcher_metadata` field in the file.
+    /// The byte length of the `launcher_metadata` section.
     launcher_metadata_length: u64,
 
-    /// The offset of the `signature` field in the file.
+    /// The byte offset of the `signature` section from the start of the `JanexFile` structure.
+    /// 
+    /// If no signature is present, this field is `0`.
     signature_offset: u64,
-    
-    /// The length of the `signature` field in the file.
+
+    /// The byte length of the `signature` section.
+    /// 
+    /// If no signature is present, this field is `0`.
     signature_length: u64,
 
-    /// Reserved field. All bytes must be `0`.
+    /// Reserved for future use. All bytes must be `0`.
     reserved: [u8; 80],
 }
 ```
 
 ### `BootMetadata`
 
-Boot metadata is read by the Janex Boot.
+`BootMetadata` is the section read and interpreted by the Janex Boot component — a JAR that is
+placed on the class path and provides the custom ClassLoader used to load classes and resources from
+the Janex file.
 
-Its structure is as follows:
+It declares all resource groups contained in the file and, optionally, a shared string
+pool used by the class file compression algorithm.
 
 ```rust
 struct BootMetadata {
-    /// The magic number of the boot metadata.
+    /// The magic number identifying this as a boot metadata section.
     ///
-    /// Always 0x544f4f42 ("BOOT").
+    /// Always `0x544f4f42` ("BOOT").
     magic_number: u32, // 0x544f4f42 ("BOOT")
 
-    /// The entries of the boot metadata.
+    /// The list of boot metadata entries. Each entry carries a 4-byte type tag followed by its payload.
+    /// Unknown entry types must be skipped by readers.
     entries: Vec<BootMetadataEntry>,
 }
 ```
 
 #### `BootMetadataEntry`
 
-Basic structure of a entry:
+Each entry in `BootMetadata` begins with a 4-byte type tag (`entry_type`) that identifies the kind of
+entry, followed by a variable-length payload. Unknown entry types must be skipped by readers to allow
+forward compatibility.
+
+The raw (untyped) form of an entry is:
 
 ```rust
 struct BootMetadataEntry {
-    /// The entry type of the entry.
-    ///
-    /// The entry type is a 32-bit unsigned integer that identifies the type of the entry.
+    /// A 4-byte tag identifying the type of this entry.
     entry_type: u32,
 
-    /// The payload of the entry.
+    /// The payload bytes of this entry. Its interpretation depends on `entry_type`.
     content: Vec<u8>
 }
 ```
@@ -329,46 +381,51 @@ Supported entries:
 
 ```rust
 enum BootMetadataEntry {
-    /// Each `BootMetadata` can only have one `ResourceGroups`.
+    /// Declares all resource groups contained in this Janex file.
     ///
-    /// If `ResourceGroups` uses `ResourcePathContent.RefBody`, then a `StringPool` must exist before this entry.
+    /// Each `BootMetadata` may contain at most one `ResourceGroups` entry.
+    /// If any resource path within a group uses `RefBody` encoding, a `StringPool` entry
+    /// must appear before this entry in the `entries` list.
     ResourceGroups {
-        /// The entry type of the string pool entry.
+        /// The entry type tag for this variant.
         ///
-        /// Always 0x53505247 ("GRPS")
+        /// Always `0x53505247` ("GRPS").
         entry_type: u32, // 0x53505247 ("GRPS")
 
-        /// The bytes size of the payload.
+        /// The byte length of the payload that follows.
         length: vuint,
 
-        /// The resource groups of the boot metadata.
+        /// The list of resource groups contained in this Janex file.
         groups: Vec<ResourceGroup>,
     },
 
-    /// A shared string pool used for class file compression algorithms and resource paths.
+    /// A shared string pool used by the class file compression algorithm and `RefBody` resource paths.
     ///
-    /// Each `BootMetadata` can only have one `StringPool`.
+    /// The size of the `StringPool` is at least 1, and the first string (at index 0) is always an empty string.
+    /// 
+    /// Each `BootMetadata` may contain at most one `StringPool` entry.
+    /// When present, it must appear before the `ResourceGroups` entry.
     StringPool {
-        /// The entry type of the string pool entry.
+        /// The entry type tag for this variant.
         ///
-        /// Always 0x4c4f4f50 ("POOL").
+        /// Always `0x4c4f4f50` ("POOL").
         entry_type: u32, // 0x4c4f4f50 ("POOL")
 
-        /// The bytes size of the payload.
+        /// The byte length of the payload that follows.
         length: vuint,
 
-        /// Reserved field, currently unused.
-        ///
-        /// All bytes must be `0`.
+        /// Reserved for future use. All bytes must be `0`.
         reserved: [u8; 8],
 
-        /// The number of strings in the string pool.
+        /// The total number of strings stored in this pool.
         count: vuint,
 
-        /// The bytes size of each string in the string pool.
+        /// The uncompressed byte length of each string, in pool index order.
+        /// Used to locate individual strings within the decompressed byte buffer.
         sizes: [vuint; count],
 
-        /// The compressed string pool bytes.
+        /// The concatenated UTF-8 bytes of all pool strings, stored as compressed data.
+        /// After decompression, individual strings are extracted sequentially using the `sizes` array.
         bytes: CompressedData<[u8]>,
     },
 }
@@ -376,80 +433,93 @@ enum BootMetadataEntry {
 
 #### `ResourceGroup`
 
-`ResourceGroup` is a group of metadata of class files or resource files.
+A `ResourceGroup` represents a logical container of related files, typically corresponding to a single
+JAR or module from the original Java project.
 
 ```rust
 struct ResourceGroup {
-    /// The magic number of the resource group.
+    /// The magic number identifying this as a resource group.
     ///
-    /// Always 0x47534552 ("RESG").
+    /// Always `0x47534552` ("RESG").
     magic_number: u32, // 0x47534552 ("RESG")
-    
-    /// The name of the resource group.
+
+    /// The unique name of this resource group within the `ResourceGroups` entry.
     /// 
-    /// The name must be unique within the `ResourceGroups`.
+    /// This name is referenced by `ResourceGroupReference::Local` in the launcher configuration
+    /// to add this group to the class path, module path, or agent list.
     name: String,
 
-    /// Reserved field, all bytes must be `0`.
+    /// Reserved for future use. All bytes must be `0`.
     reserved: [u8; 48],
 
-    /// The number of resources in the resource group.
+    /// The number of `Resource` entries stored in this group.
     resources_count: vuint,
 
-    /// The compressed resource group data.
+    /// The compressed array of resource metadata entries for this group.
     compressed_resources: CompressedData<[Resource; resources_count]>
 }
 ```
 
 #### `Resource`
 
-`Resource` is used to represent a file or directory in the resource group. 
+A `Resource` represents a single entry (regular file, directory, or symbolic link) within a resource
+group.
 
-`Resource` only contains metadata, and the actual file content is in `data_pool`.
+Resources contain only metadata; the actual file content bytes are stored in the top-level `data_pool`
+and referenced by offset.
 
 ```rust
 enum Resource {
-    /// Respresents a regular file.
+    /// Represents a regular file.
     File {
+        /// The resource type tag for this variant.
+        /// 
+        /// Always `0x534552` ("RES\0")
         resource_type: u32, // 0x534552 ("RES\0")
 
-        /// The path of the resource.
+        /// The path of this resource within its resource group.
         path: ResourcePath,
-        
-        /// The compression info of the resource.
-        /// 
-        /// The original size of the data is also stored there.
+
+        /// Compression metadata for this resource's content.
+        ///
+        /// The `uncompressed_size` field within this structure gives the original file size in bytes.
         compress_info: CompressInfo,
 
-        /// The offset of the resource content in the `JanexFile`.
+        /// The byte offset of this resource's (compressed) content within the `JanexFile`.
         content_offset: vuint,
 
-        /// Optional fields of the resource.
+        /// Optional metadata fields associated with this resource (e.g., timestamps, checksum).
         fields: Vec<ResourceField>,
     },
-    
-    /// Respresents a directory.
+
+    /// Represents a directory entry.
     Directory {
+        /// The resource type tag for this variant.
+        ///
+        /// Always 0x00524944 ("DIR\0")
         resource_type: u32, // 0x00524944 ("DIR\0")
 
-        /// The path of the resource.
+        /// The path of this directory within its resource group.
         path: ResourcePath,
 
-        /// Optional fields of the resource.
+        /// Optional metadata fields associated with this directory (e.g., timestamps, permissions).
         fields: Vec<ResourceField>,
     },
 
-    /// Respresents a symbolic link.
+    /// Represents a symbolic link.
     SymbolicLink {
+        /// The resource type tag for this variant.
+        /// 
+        /// Always 0x4c4d5953 ("SYML")
         resource_type: u32, // 0x4c4d5953 ("SYML")
 
-        /// The path of the resource.
+        /// The path of this symbolic link within its resource group.
         path: ResourcePath,
-        
-        /// The target of the symbolic link.
+
+        /// The target path that this symbolic link points to.
         target: ResourcePath,
 
-        /// Optional fields of the resource.
+        /// Optional metadata fields associated with this symbolic link.
         fields: Vec<ResourceField>,
     }
 }
@@ -457,30 +527,38 @@ enum Resource {
 
 #### `ResourcePath`
 
-`ResourcePath` stores resource paths separated by `/` in an optimized way. Its structure is as follows:
+`ResourcePath` stores a `/`-separated resource path using one of two encodings selected by the value
+of `length`:
+
+- **`StringBody`** (when `length != 0`): the full path string is stored inline, with `length` giving
+  its byte length.
+- **`RefBody`** (when `length == 0`): the path is described by two integer indices into the shared
+  `StringPool` — one for the directory component and one for the file name component. This encoding
+  avoids repeating path strings that appear across many resources.
 
 ```rust
 struct ResourcePath {
+    /// The byte length of the inline path string, or `0` to indicate `RefBody` encoding.
     length: vuint,
     content: ResourcePathContent,
 }
-```
 
-`ResourcePathContent` has two layouts:
-
-When `length` is not `0`, use `StringBody`, storing the path directly in the `ResourcePath` structure;
-When `length` is `0`, use `RefBody`, storing two indices of character names in the `StringPool`.
-
-```rust
 enum ResourcePathContent {
-    /// When `length` is not `0`
+    /// Inline path encoding, used when `length != 0`.
     StringBody {
+        /// The raw UTF-8 bytes of the full resource path (e.g., `"com/example/Foo.class"`).
         body: [u8; length],
     },
 
-    /// When `length` is `0`
+    /// Reference-based path encoding, used when `length == 0`.
+    ///
+    /// Requires a `StringPool` entry to be present in the enclosing `BootMetadata`.
     RefBody {
+        /// The index of the directory path component in the `StringPool`
+        /// (e.g., the index for `"com/example"`).
         directory_index: vuint,
+        /// The index of the file name component in the `StringPool`
+        /// (e.g., the index for `"Foo.class"`).
         file_name_index: vuint,
     }
 }
@@ -488,46 +566,57 @@ enum ResourcePathContent {
 
 #### `ResourceField`
 
-The supported optional fields of a resource are:
+`ResourceField` carries optional metadata attached to a resource entry. Each field is identified by a
+1-byte `id`.
+
+The supported fields are:
 
 ```rust
 enum ResourceField {
-    /// XXH64 checksum of the resource body.
+    /// XXH64 checksum of the uncompressed resource content.
+    ///
+    /// Can be used by the extractor to verify data integrity after decompression.
     Checksum {
-        id: u8, // 0x01Compress
-        
-        /// The XXH64 checksum of the resource body.
+        id: u8, // 0x01
+
+        /// The XXH64 hash of the uncompressed resource content.
         checksum: u64,
     },
 
-    /// File creation time.
+    /// File creation timestamp.
     FileCreateTime {
         id: u8, // 0x02
         timestamp: Timestamp,
     },
 
-    /// File modification time.
+    /// File last-modification timestamp.
     FileModifyTime {
         id: u8, // 0x03
         timestamp: Timestamp,
     },
 
-    /// File access time.
+    /// File last-access timestamp.
     FileAccessTime {
         id: u8, // 0x04
         timestamp: Timestamp,
     },
-    
-    /// Unix file permissions.
+
+    /// POSIX file permission bits (e.g., `0o755`).
     PosixFilePermissions {
         id: u8, // 0x05
+        /// The POSIX permission bits for this resource.
         permissions: u16,
     },
 
-    /// Custom field. They will be ignored by Janex. 
+    /// A custom, application-defined metadata field.
+    ///
+    /// Custom fields are not interpreted by Janex and are ignored during normal processing.
+    /// They can be used to attach arbitrary metadata for tooling or third-party extensions.
     Custom {
         id: u8, // 0x7F
+        /// The name of the custom field, used to identify its purpose.
         name: String,
+        /// The raw content bytes of the custom field.
         content: Vec<u8>,
     }
 }
@@ -535,25 +624,42 @@ enum ResourceField {
 
 ### `LauncherMetadata`
 
+`LauncherMetadata` is the section read by the **Janex Launcher**.
+
+It contains the configuration needed to locate a suitable Java runtime, build the module path and class path,
+resolve JVM options, and launch the application.
+
+The configuration is organized as a tree of `ConfigGroup` entries, which allows conditional selection
+of settings based on the runtime environment.
+
 ```rust
 struct LauncherMetadata {
-    /// The entries of the launcher metadata.
+    /// The magic number identifying this as a launcher metadata section.
+    ///
+    /// Always `0x4e55414c` ("LAUN").
+    magic_number: u32, // `0x4e55414c` ("LAUN")
+    
+    /// The list of launcher metadata entries. Each entry carries a 4-byte type tag followed by its payload.
+    /// 
+    /// Unknown entry types must be skipped by readers.
     entries: Vec<LauncherMetadataEntry>
 }
 ```
 
 #### `LauncherMetadataEntry`
 
-Basic structure of a launcher metadata entry:
+Each entry in `LauncherMetadata` follows the same type-tagged layout as `BootMetadataEntry`. 
+
+Readers must skip unknown entry types to allow forward compatibility.
+
+The raw (untyped) form of an entry is:
 
 ```rust
 struct LauncherMetadataEntry {
-    /// The entry type of the entry.
-    ///
-    /// The entry type is a 32-bit unsigned integer that identifies the type of the configuration field.
+    /// A 4-byte tag identifying the type of this entry.
     entry_type: u32,
 
-    /// The payload of the configuration field.
+    /// The payload bytes of this entry. Its interpretation depends on `entry_type`.
     content: Vec<u8>
 }
 ```
@@ -562,16 +668,20 @@ Supported entries:
 
 ```rust
 enum LauncherMetadataEntry {
+    /// The root configuration group of the launcher metadata.
+    ///
+    /// Each `LauncherMetadata` must contain exactly one `ROOT_GROUP` entry.
+    /// The root group and all its nested subgroups together define the complete launch configuration.
     ROOT_GROUP {
-        /// The entry type of the entry.
-        /// 
-        /// Always 0x50524752 ("RGRP")
+        /// The entry type tag for this variant.
+        ///
+        /// Always `0x50524752` ("RGRP").
         entry_type: u32, // 0x50524752 ("RGRP")
-        
-        /// The bytes size of the payload.
+
+        /// The byte length of the payload that follows.
         length: vuint,
-        
-        /// The root group of the launcher metadata.
+
+        /// The root configuration group.
         root_group: ConfigGroup,
     }
 }
@@ -579,20 +689,47 @@ enum LauncherMetadataEntry {
 
 #### `ConfigGroup`
 
+A `ConfigGroup` is a logical grouping of configuration fields. 
+
+Groups may be nested via `SubGroups` fields, forming a configuration tree.
+
+Each group can carry an optional `Condition` field.
+For the root group, the `condition` is used to detect whether the Java runtime and platform environment are suitable
+for this program, and to select the optimal Java runtime based on this;
+For subgroups, the `condition` is used to determine whether the group is applicable to the current environment,
+and if so, apply its configuration.
+
+This design allows the launcher to express conditional configurations such as
+"add this JVM option only when running on Java 21 or newer" or
+"use this native library path only on Linux/aarch64".
+
 ```rust
 struct ConfigGroup {
+    /// The magic number identifying this as a configuration group.
+    ///
+    /// Always `0x50524743` ("CGRP").
     magic_number: u32, // 0x50524743 ("CGRP")
+
+    /// The list of configuration fields contained in this group.
     fields: Vec<ConfigField>,
 }
 ```
 
 #### `ConfigField`
 
-Basic structure of a configuration field:
+Configuration fields carry the actual launch settings within a `ConfigGroup`.
+
+Each field begins with a 4-byte type tag followed by a length-prefixed payload.
+
+Readers must skip unknown field types to allow forward compatibility.
+
+The raw (untyped) form of a field is:
 
 ```rust
 struct ConfigField {
+    /// A 4-byte tag identifying the type of this field.
     field_type: u32,
+    /// The payload bytes of this field. Its interpretation depends on `field_type`.
     content: Vec<u8>
 }
 ```
@@ -601,71 +738,101 @@ Supported fields:
 
 ```rust
 enum ConfigField {
+    /// A CEL condition expression that guards the enclosing `ConfigGroup`.
+    ///
+    /// See the [Conditions](#conditions) section for details.
     Condition {
         field_type: u32, // 0x444e4f43 ("COND")
-       
-        /// The bytes size of the payload.
+
+        /// The byte length of the payload that follows.
         length: vuint,
-       
-        /// The CEL expression that determines whether the program can run.
-        /// 
-        /// See the Conditions section for more information.
+
+        /// The CEL expression string. Must evaluate to `bool` or `int`.
         condition: String,
     },
 
+    /// The fully qualified binary name of the application's main class.
     MainClass {
-        field_type: u32, // 0x534c434d ("MCLS") 
-        
-        /// The bytes size of the payload.
+        field_type: u32, // 0x534c434d ("MCLS")
+
+        /// The byte length of the payload that follows.
         length: vuint,
+
+        /// The fully qualified binary name of the main class (e.g., `"com.example.Main"`).
         value: String,
     },
 
+    /// The name of the application's main module.
+    ///
+    /// Passed to the JVM via `--module` when launching with the Java module system.
     MainModule {
         field_type: u32, // 0x444f4d4d ("MMOD")
 
-        /// The bytes size of the payload.
+        /// The byte length of the payload that follows.
         length: vuint,
+
+        /// The main module name.
         value: String,
     },
 
+    /// The ordered list of resource groups to place on the module path (`--module-path`).
     ModulePath {
         field_type: u32, // 0x50444f4d ("MODP")
 
-        /// The bytes size of the payload.
+        /// The byte length of the payload that follows.
         length: vuint,
+
+        /// The resource group references to add to the module path, in order.
         items: Vec<ResourceGroupReference>,
     },
 
+    /// The ordered list of resource groups to place on the class path (`-classpath`).
     ClassPath {
         field_type: u32, // 0x50534c43 ("CLSP")
 
-        /// The bytes size of the payload.
+        /// The byte length of the payload that follows.
         length: vuint,
+
+        /// The resource group references to add to the class path, in order.
         items: Vec<ResourceGroupReference>,
     },
 
+    /// The list of resource groups to load as Java agents (`-javaagent`).
     Agents {
         field_type: u32, // 0x544e4741 ("AGNT")
 
-        /// The bytes size of the payload.
+        /// The byte length of the payload that follows.
         length: vuint,
+
+        /// The resource group references for Java agent JARs, in the order they are attached.
         items: Vec<ResourceGroupReference>,
     },
 
+    /// A list of additional JVM options to pass when launching the application.
+    ///
+    /// Each element is a single JVM option string
+    /// (e.g., `"--add-exports=java.base/sun.nio.ch=ALL-UNNAMED"` or `"-Xmx512m"`).
     JvmOptions {
         field_type: u32, // 0x54504f4a ("JOPT")
 
-        /// The bytes size of the payload.
+        /// The byte length of the payload that follows.
         length: vuint,
+
+        /// The list of JVM option strings, each passed as a separate argument to the JVM.
         options: Vec<String>
     },
 
+    /// A list of nested `ConfigGroup` entries within the enclosing group.
+    ///
+    /// Each subgroup may carry its own `Condition`, enabling fine-grained conditional configuration.
+    /// The launcher evaluates each subgroup independently and applies those whose conditions are satisfied.
     SubGroups {
         field_type: u32, // 0x50524753 ("SGRP")
 
-        /// The bytes size of the payload.
+        /// The byte length of the payload that follows.
         length: vuint,
+
+        /// The list of nested configuration groups.
         subgroups: Vec<ConfigGroup>
     }
 }
@@ -673,27 +840,44 @@ enum ConfigField {
 
 #### `ResourceGroupReference`
 
+A `ResourceGroupReference` identifies a resource group to be placed on the class path, module path,
+or agent list.
+
+It is either a reference to a resource group embedded in the Janex file itself or a reference
+to an external Maven artifact that is resolved and downloaded at launch time.
+
 ```rust
 enum ResourceGroupReference {
-    /// A reference to a local resource group.
+    /// A reference to a resource group embedded in this Janex file.
     Local {
+        /// The reference type tag for this variant.
         ref_type: u32, // 0x00434f4c ("LOC\0")
-        
-        /// The name of the local resource group.
+
+        /// The name of the local resource group, matching the `name` field of a `ResourceGroup`
+        /// declared in the `ResourceGroups` boot metadata entry.
         group_name: String,
     },
-    
-    /// A reference to a Maven artifact.
+
+    /// A reference to a Maven artifact hosted in a remote repository.
+    ///
+    /// The artifact is not embedded in the Janex file. The Janex Launcher resolves and downloads
+    /// it at launch time (if not already present in a local cache) before starting the JVM.
     Maven {
+        /// The reference type tag for this variant.
         ref_type: u32, // 0x00564147 ("GAV\0")
-        
-        /// The GAV of the Maven artifact.
+
+        /// The Maven coordinates of the artifact in `groupId:artifactId:version` format
+        /// (e.g., `"org.slf4j:slf4j-api:2.0.9"`).
         gav: String,
-        
-        /// The repository of the Maven artifact.
+
+        /// The base URL of the Maven repository from which to download the artifact
+        /// (e.g., `"https://repo1.maven.org/maven2"`).
+        /// 
+        /// Defaults to `https://repo1.maven.org/maven2`.
         repository: String,
-        
-        /// The checksum of the Maven artifact.
+
+        /// The expected checksum of the artifact JAR, used to verify the integrity of the download.
+        /// The format is `<algorithm>:<hex-digest>` (e.g., `"sha256:abcdef0123456789..."`).
         checksum: String,
     }
 }
@@ -701,108 +885,119 @@ enum ResourceGroupReference {
 
 ## Conditions
 
-Janex allows users to declare runtime environment requirements for a program,
-such as the Java version, operating system, and CPU architecture.
-Janex uses these conditions to determine whether the program can run,
-and selects the most suitable Java environment accordingly.
+Janex allows users to declare runtime environment requirements for a program, such as the minimum Java version,
+operating system, and CPU architecture.
 
-Janex also supports adding classpath entries, module path entries, JVM arguments,
-and other information based on conditions.
+The Janex Launcher evaluates these conditions against each candidate Java installation 
+and the current host platform to determine which installations are eligible and which has the highest priority.
 
-Users can use [Common Expression Language (CEL)](https://cel.dev/overview/cel-overview) to declare these requirements when building a Janex file.
+Conditions also govern which classpath entries, module path entries, JVM arguments, and other
+configuration values are applied at launch time, enabling a single Janex file to carry
+platform-specific or version-specific configuration.
 
-The expression provided by the user should return `bool` or `int`.
-If it returns `int`, it represents the priority; the higher the value, the higher the priority.
-Janex will select the Java environment with the highest priority to launch the program.
+Users express these requirements using [Common Expression Language (CEL)](https://cel.dev/overview/cel-overview)
+when building a Janex file.
+
+A condition expression must evaluate to either `bool` or `int`:
+
+- If it evaluates to `bool`, the associated configuration is applied when the result is `true`.
+- If it evaluates to `int` (only for the root group), the value represents a priority score.
+  The launcher selects the Java installation with the highest score.
 
 ### Environment
 
-At runtime, Janex provides some values for assertions in conditions.
+At runtime, the Janex Launcher makes the following variables available for use in condition expressions:
 
 ```rust
+// Information about a candidate Java installation.
 let java: Java = ...;
+
+// Information about the current host platform.
 let platform: Platform = ...;
 ```
 
-The `Java` struct contains the Java version information:
+The `Java` struct provides information about a candidate Java runtime environment:
 
 ```rust
-/// The Java information.
+/// Information about a Java runtime environment.
 struct Java {
-    /// The Java version.
+    /// The version of the Java runtime.
     version: JavaVersion,
-   
-    /// The vendor of the Java runtime environment.
-    vendor: String,   
 
-    /// The operating system of the Java runtime environment.
+    /// The vendor of the Java runtime (e.g., `"Eclipse Adoptium"`, `"Oracle Corporation"`).
+    vendor: String,
+
+    /// The operating system for which this Java runtime was built.
     os: OperatingSystem,
-   
-    /// The architecture of the Java runtime environment.
+
+    /// The CPU architecture for which this Java runtime was built (e.g., `"x86-64"`, `"aarch64"`).
     arch: String,
 }
 
-/// The Java version information.
+/// The parsed version of a Java runtime.
 struct JavaVersion {
-    /// The full version string.
+    /// The full, unparsed version string (e.g., `"21.0.3+9"`).
     full: String,
-   
-    /// The feature version of the Java version.
+
+    /// The feature release number (the first version component, e.g., `21` for Java 21).
     feature: uint,
-    
-    /// The interim version of the Java version.
+
+    /// The interim release number (the second version component).
     interim: uint,
-    
-    /// The update version of the Java version.
+
+    /// The update release number (the third version component).
     update: uint,
-    
-    /// The patch version of the Java version.
+
+    /// The patch release number (the fourth version component).
     patch: uint,
-    
-    /// The optional pre-release information.
+
+    /// The optional pre-release identifier (e.g., `"ea"` for early-access builds).
+    /// Empty string if not present.
     pre: String,
-    
+
     /// The build number.
     build: uint,
-    
-    /// The optional additional identifying build information.
+
+    /// Optional additional build metadata. Empty string if not present.
     optional: String,
 }
 ```
 
-The `Platform` struct contains the operating system and CPU architecture information:
+The `Platform` struct provides information about the current host platform:
 
 ```rust
-/// The platform information.
+/// Information about the current host platform.
 struct Platform {
-    /// The operating system information.
+    /// The operating system of the host machine.
     os: OperatingSystem,
-   
-    /// The CPU architecture information.
+
+    /// The CPU of the host machine.
     cpu: CPU,
 }
 
-/// The operating system information.
+/// Information about an operating system.
 struct OperatingSystem {
-   /// The name of the operating system.
-   name: String,
-   
-   /// The version of the operating system.
-   /// 
-   /// If the operating system does not have a version, this field will be empty.
-   version: OperatingSystemVersion,
+    /// The normalized name of the operating system (e.g., `"linux"`, `"windows"`, `"macos"`).
+    name: String,
+
+    /// The version of the operating system.
+    ///
+    /// If the version cannot be determined, this field contains an empty string.
+    version: OperatingSystemVersion,
 }
 
+/// The parsed version of an operating system.
 struct OperatingSystemVersion {
-    /// The full version string.
+    /// The full, unparsed version string.
     full: String,
-   
+
     /// The major version number.
     major: uint,
 }
 
+/// Information about the host CPU.
 struct CPU {
-    /// The name of the CPU architecture.
+    /// The CPU architecture name (e.g., `"x86-64"`, `"aarch64"`, `"x86"`).
     arch: String,
 }
 ```
