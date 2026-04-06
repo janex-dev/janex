@@ -231,6 +231,8 @@ struct JanexFile {
     /// Launcher metadata used to describe the configuration information of the launcher.
     launcher_metadata: LauncherMetadata,
 
+    signature: Option<Signature>,
+    
     /// File end metadata used to describe the size, offset, etc. of the file.
     file_end: FileEnd,
 }
