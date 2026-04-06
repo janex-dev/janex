@@ -623,7 +623,6 @@ enum ResourceGroupReference {
     Local {
         ref_type: u32, // 0x00434f4c ("LOC\0")
         group_index: vuint,
-
     },
     
     /// A reference to a Maven artifact.
