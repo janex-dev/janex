@@ -234,7 +234,7 @@ enum BootMetadataEntry {
         /// The resource groups of the boot metadata.
         groups: Vec<ResourceGroup>,
     },
-    
+
     /// A shared string pool used for class file compression algorithms and resource paths.
     ///
     /// Each `BootMetadata` can only have one `StringPool`.
@@ -311,27 +311,32 @@ content is in `data_pool`.
 
 ```rust
 struct Resource {
+    
+    /// The ma
     magic_number: u32, // 0x534552 ("RES\0")
+    
+    /// The compression method used to compress the resource body.
     compress_method: CompressMethod,
+    
+    /// Reserved field, all bytes must be `0`.
     reserved: [u8; 4],
+    
+    /// The size of the uncompressed resource.
     uncompressed_size: vuint,
+    
+    /// The size of the compressed resource.
     compressed_size: vuint,
+    
+    /// The offset of the resource content in the `JanexFile`.
     content_offset: vuint,
+    
+    /// The path of the resource.
     path: ResourcePath,
-    optional_fields: Vec<ResourceField>,
+    
+    /// Optional fields of the resource.
+    fields: Vec<ResourceField>,
 }
 ```
-
-Where:
-
-- `magic_number`: Used to identify the start of the resource;
-- `compress_method`: Compression method used to compress the resource body;
-- `reserved`: Reserved field, currently unused;
-- `uncompressed_size`: Size of the uncompressed resource;
-- `compressed_size`: Size of the compressed resource;
-- `content_offset`: Offset of the resource content in `data_pool`;
-- `path`: Resource path;
-- `optional_fields`: Optional fields of the resource;
 
 #### `ResourcePath`
 
@@ -344,7 +349,7 @@ struct ResourcePath {
 }
 ```
 
-`ResourcePathContent` has two layouts.
+`ResourcePathContent` has two layouts:
 
 When `length` is not `0`, use `StringBody`, storing the path directly in the `ResourcePath` structure;
 When `length` is `0`, use `RefBody`, storing two indices of character names in the `StringPool`.
@@ -373,6 +378,8 @@ enum ResourceField {
     /// XXH64 checksum of the resource body.
     Checksum {
         id: u8, // 0x01
+        
+        /// The XXH64 checksum of the resource body.
         checksum: u64,
     },
 
