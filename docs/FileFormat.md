@@ -358,35 +358,59 @@ struct ResourceGroup {
 
 #### `Resource`
 
-`Resource` is used to represent a class file or resource file. `Resource` only contains metadata, and the actual file
-content is in `data_pool`.
+`Resource` is used to represent a file or directory in the resource group. 
+
+`Resource` only contains metadata, and the actual file content is in `data_pool`.
 
 ```rust
-struct Resource {
+enum Resource {
+    /// Respresents a regular file.
+    File {
+        resource_type: u32, // 0x534552 ("RES\0")
+
+        /// The path of the resource.
+        path: ResourcePath,
+        
+        /// The compression method used to compress the resource body.
+        compress_method: CompressMethod,
+
+        /// The size of the uncompressed resource.
+        uncompressed_size: vuint,
+
+        /// The size of the compressed resource.
+        compressed_size: vuint,
+
+        /// The offset of the resource content in the `JanexFile`.
+        content_offset: vuint,
+
+        /// Optional fields of the resource.
+        fields: Vec<ResourceField>,
+    },
     
-    /// The ma
-    magic_number: u32, // 0x534552 ("RES\0")
-    
-    /// The compression method used to compress the resource body.
-    compress_method: CompressMethod,
-    
-    /// Reserved field, all bytes must be `0`.
-    reserved: [u8; 4],
-    
-    /// The size of the uncompressed resource.
-    uncompressed_size: vuint,
-    
-    /// The size of the compressed resource.
-    compressed_size: vuint,
-    
-    /// The offset of the resource content in the `JanexFile`.
-    content_offset: vuint,
-    
-    /// The path of the resource.
-    path: ResourcePath,
-    
-    /// Optional fields of the resource.
-    fields: Vec<ResourceField>,
+    /// Respresents a directory.
+    Directory {
+        resource_type: u32, // 0x00524944 ("DIR\0")
+
+        /// The path of the resource.
+        path: ResourcePath,
+
+        /// Optional fields of the resource.
+        fields: Vec<ResourceField>,
+    },
+
+    /// Respresents a symbolic link.
+    SymbolicLink {
+        resource_type: u32, // 0x4c4d5953 ("SYML")
+
+        /// The path of the resource.
+        path: ResourcePath,
+        
+        /// The target of the symbolic link.
+        target: ResourcePath,
+
+        /// Optional fields of the resource.
+        fields: Vec<ResourceField>,
+    }
 }
 ```
 
@@ -453,6 +477,8 @@ enum ResourceField {
         timestamp: Timestamp,
     },
 
+    
+    
     /// Custom field. They will be ignored by Janex. 
     Custom {
         id: u8, // 0x7F
