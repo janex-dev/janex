@@ -131,7 +131,7 @@ enum CompressMethod {
     /// Combine multiple compression algorithms.
     /// 
     /// Its `options` field is a `Vec<CompressInfo>` that contains the compression metadata of the combined algorithms. 
-    CHAIN = 1,
+    COMPOSITE = 1,
 
     /// A compression algorithm developed specifically for class files,
     /// It will put some strings from the constant pool into the shared constant pool.
