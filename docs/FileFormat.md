@@ -262,14 +262,23 @@ struct FileEnd {
     /// The total size of the Janex file (including header and tail), the Janex tool uses it to locate the file header.
     file_size: u64,
 
+    /// The length of the `data_pool` field in the file.
+    data_pool_length: u64,
+    
     /// The offset of the `boot_metadata` field in the file.
     boot_metadata_offset: u64,
+
+    /// The length of the `boot_metadata` field in the file.
+    boot_metadata_length: u64,
 
     /// The offset of the `launcher_metadata` field in the file.
     launcher_metadata_offset: u64,
 
+    /// The length of the `launcher_metadata` field in the file.
+    launcher_metadata_length: u64,
+
     /// Reserved field. All bytes must be `0`.
-    reserved: [u8; 40],
+    reserved: [u8; 192],
 }
 ```
 
