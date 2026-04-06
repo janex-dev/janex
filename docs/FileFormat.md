@@ -665,8 +665,8 @@ and other information based on conditions.
 
 Users can use [Common Expression Language (CEL)](https://cel.dev/overview/cel-overview) to declare these requirements when building a Janex file.
 
-The expression provided by the user should return `bool` or `uint`.
-If it returns `uint`, it represents the priority; the higher the value, the higher the priority.
+The expression provided by the user should return `bool` or `int`.
+If it returns `int`, it represents the priority; the higher the value, the higher the priority.
 Janex will select the Java environment with the highest priority to launch the program.
 
 ### Environment
