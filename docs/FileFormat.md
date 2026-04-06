@@ -79,8 +79,7 @@ If the highest bit is `0`, means that the current byte is the last byte of the i
 If the highest bit is `1`, means that the current byte is not the last byte of the integer, and the next byte is the
 continuation of the integer.
 
-Reading `vuint` should follow the following algorithm (error handling is omitted, such as reporting an error
-for integers exceeding 64 bits):
+Reading `vuint` should follow the following algorithm:
 
 ```rust
 fn read_vuint(read: &mut impl Read) -> Result<vuint, Error> {
