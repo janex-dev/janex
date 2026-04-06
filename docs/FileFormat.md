@@ -102,7 +102,25 @@ struct Vec<T> {
 
 ### Compress
 
-Janex uses the following enum to record the compression method to be used:
+Janex uses the following structure to represent compression metadata:
+
+```rust
+struct CompressInfo {
+    /// The compress method.
+    method: CompressMethod,
+
+    /// The uncompressed size of the data.
+    uncompressed_size: vuint,
+    
+    /// The compressed size of the data.
+    compress_size: vuint,
+    
+    /// Optional options will be passed to the decompressor during decompression.
+    options: Vec<u8>,
+}
+```
+
+The supported compression methods are:
 
 ```rust
 #[repr(vuint)]
@@ -110,12 +128,17 @@ enum CompressMethod {
     /// No compression.
     NONE = 0,
 
+    /// Combine multiple compression algorithms.
+    /// 
+    /// Its `options` field is a `Vec<CompressInfo>` that contains the compression metadata of the combined algorithms. 
+    CHAIN = 1,
+
     /// A compression algorithm developed specifically for class files,
     /// It will put some strings from the constant pool into the shared constant pool.
-    CLASSFILE = 1,
+    CLASSFILE = 2,
 
     /// Zstandard compression.
-    ZSTD = 2,
+    ZSTD = 3,
 }
 ```
 
