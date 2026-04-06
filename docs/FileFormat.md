@@ -100,7 +100,7 @@ struct Vec<T> {
 }
 ```
 
-### Compress
+### Compression
 
 Janex uses the following structure to represent compression metadata:
 
@@ -402,7 +402,7 @@ The supported optional fields of a resource are:
 enum ResourceField {
     /// XXH64 checksum of the resource body.
     Checksum {
-        id: u8, // 0x01
+        id: u8, // 0x01Compress
         
         /// The XXH64 checksum of the resource body.
         checksum: u64,
@@ -412,24 +412,24 @@ enum ResourceField {
     FileCreateTime {
         id: u8, // 0x02
 
-        /// File create time epoch in milliseconds.
-        timestamp: u64,
+        /// File create time epoch in nanoseconds.
+        timestamp: vuint,
     },
 
     /// File modification time.
     FileModifyTime {
         id: u8, // 0x03
 
-        /// File modify time epoch in milliseconds.
-        timestamp: u64,
+        /// File modify time epoch in nanoseconds.
+        timestamp: vuint,
     },
 
     /// File access time.
     FileAccessTime {
         id: u8, // 0x04
 
-        /// File access time epoch in milliseconds.
-        timestamp: u64,
+        /// File access time epoch in nanoseconds.
+        timestamp: vuint,
     },
 
     /// Custom field. They will be ignored by Janex. 
