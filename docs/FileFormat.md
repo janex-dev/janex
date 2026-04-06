@@ -277,8 +277,14 @@ struct FileEnd {
     /// The length of the `launcher_metadata` field in the file.
     launcher_metadata_length: u64,
 
+    /// The offset of the `signature` field in the file.
+    signature_offset: u64,
+    
+    /// The length of the `signature` field in the file.
+    signature_length: u64,
+
     /// Reserved field. All bytes must be `0`.
-    reserved: [u8; 192],
+    reserved: [u8; 80],
 }
 ```
 
