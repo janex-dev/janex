@@ -242,7 +242,7 @@ enum BootMetadataEntry {
         /// The number of strings in the string pool.
         count: vuint,
 
-        /// The size of each string in the string pool.
+        /// The bytes size of each string in the string pool.
         sizes: [vuint; count],
 
         /// The compressed size of the string pool bytes.
