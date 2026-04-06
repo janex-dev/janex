@@ -100,6 +100,22 @@ struct Vec<T> {
 }
 ```
 
+### Timestamp
+
+Janex uses a 96-bit high-precision timestamp:
+
+```rust
+struct Timestamp {
+    /// The number of seconds from 1970-01-01T00:00:00Z.
+    epoch_second: i64,
+    
+    /// The number of nanoseconds after the epoch_second.
+    /// 
+    /// In the range of `[0, 1_000_000_000)`.
+    nanos: u32, 
+}
+```
+
 ### Compression
 
 Janex uses the following structure to represent compression metadata:
@@ -141,6 +157,17 @@ enum CompressMethod {
     ZSTD = 3,
 }
 ```
+
+#### Class File Compression
+
+Janex typically extracts some strings from class files into a shared string pool and then compresses them using Zstandard.
+
+The `CLASSFILE` compression algorithm largely preserves the class file format, but:
+
+1. The magic number of the compressed class file will be rewritten to `0x70CAFECA` (0xCA 0xFE 0xCA 0x70) to distinguish it from the original class file;
+2. The compressed class file will contain some new types of constants.
+
+(TODO: More details about the class file compression algorithm)
 
 ## Janex File Structure
 
@@ -413,7 +440,7 @@ enum ResourceField {
         id: u8, // 0x02
 
         /// File create time epoch in nanoseconds.
-        timestamp: vuint,
+        timestamp: Timestamp,
     },
 
     /// File modification time.
@@ -421,7 +448,7 @@ enum ResourceField {
         id: u8, // 0x03
 
         /// File modify time epoch in nanoseconds.
-        timestamp: vuint,
+        timestamp: Timestamp,
     },
 
     /// File access time.
@@ -429,7 +456,7 @@ enum ResourceField {
         id: u8, // 0x04
 
         /// File access time epoch in nanoseconds.
-        timestamp: vuint,
+        timestamp: Timestamp,
     },
 
     /// Custom field. They will be ignored by Janex. 
