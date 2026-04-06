@@ -129,7 +129,7 @@ struct CompressInfo {
     uncompressed_size: vuint,
     
     /// The compressed size of the data.
-    compress_size: vuint,
+    compressed_size: vuint,
     
     /// Optional options will be passed to the decompressor during decompression.
     options: Vec<u8>,
@@ -155,6 +155,15 @@ enum CompressMethod {
 
     /// Zstandard compression.
     ZSTD = 3,
+}
+```
+
+We use the following structure to represent compressed data:
+
+```rust
+struct CompressedData<T> {
+    info: CompressInfo,
+    data: [u8; info.compressed_size],
 }
 ```
 
@@ -308,19 +317,8 @@ enum BootMetadataEntry {
         /// The bytes size of each string in the string pool.
         sizes: [vuint; count],
 
-        /// The compressed size of the string pool bytes.
-        compress_method: CompressMethod,
-
-        /// The uncompressed size of the string pool bytes.
-        uncompressed_bytes_size: vuint,
-
         /// The compressed string pool bytes.
-        compressed_bytes_size: vuint,
-
-        /// The compressed string pool bytes.
-        /// 
-        /// It uses the compression method specified by `compress_method`.
-        compressed_bytes: [u8; compressed_bytes_size],
+        bytes: CompressedData<[u8]>,
     },
 }
 ```
@@ -342,17 +340,8 @@ struct ResourceGroup {
     /// The number of resources in the resource group.
     resources_count: vuint,
 
-    /// The compress method used to compress the resource group.
-    compress_method: CompressMethod,
-
-    /// The total size of the resource group data.
-    uncompressed_size: vuint,
-
-    /// The compressed size of the resource group data.
-    compressed_size: vuint,
-
     /// The compressed resource group data.
-    compressed_resources: [u8; compressed_size], // [Resource; resources_count]
+    compressed_resources: CompressedData<[Resource; resources_count]>
 }
 ```
 
@@ -371,14 +360,10 @@ enum Resource {
         /// The path of the resource.
         path: ResourcePath,
         
-        /// The compression method used to compress the resource body.
-        compress_method: CompressMethod,
-
-        /// The size of the uncompressed resource.
-        uncompressed_size: vuint,
-
-        /// The size of the compressed resource.
-        compressed_size: vuint,
+        /// The compression info of the resource.
+        /// 
+        /// The original size of the data is also stored there.
+        compress_info: CompressInfo,
 
         /// The offset of the resource content in the `JanexFile`.
         content_offset: vuint,
