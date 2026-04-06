@@ -626,8 +626,9 @@ enum ResourceGroupReference {
     },
     Maven {
         ref_type: u32, // 0x00564147 ("GAV\0")
-        repository: String,
         gav: String,
+        repository: String,
+        checksum: String,
     }
 }
 ```
