@@ -476,9 +476,13 @@ enum ResourceField {
         id: u8, // 0x04
         timestamp: Timestamp,
     },
+    
+    /// Unix file permissions.
+    PosixFilePermissions {
+        id: u8, // 0x05
+        permissions: u16,
+    },
 
-    
-    
     /// Custom field. They will be ignored by Janex. 
     Custom {
         id: u8, // 0x7F
