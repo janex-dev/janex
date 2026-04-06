@@ -261,13 +261,15 @@ enum BootMetadataEntry {
         /// The compressed size of the string pool bytes.
         compress_method: CompressMethod,
 
-        /// The compressed size of the string pool bytes.
+        /// The uncompressed size of the string pool bytes.
         uncompressed_bytes_size: vuint,
 
         /// The compressed string pool bytes.
         compressed_bytes_size: vuint,
 
         /// The compressed string pool bytes.
+        /// 
+        /// It uses the compression method specified by `compress_method`.
         compressed_bytes: [u8; compressed_bytes_size],
     },
 }
