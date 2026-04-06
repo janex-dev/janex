@@ -2,14 +2,29 @@
 
 The Janex format is a modern executable packaging format for Java programs.
 
-Each Janex file contains the following:
+The Janex format is designed as a better alternative to Shadow JAR (Fat JAR) and launch4j,
+aiming to be the optimal solution for single-file packaging and distribution of Java programs.
+Its key features include:
 
-1. A set of classpath and module-path entries. Entries are divided into local entries and remote entries. Local entries
-   are a group of class files and resource files packaged within the Janex file, while remote entries are Maven GAV
-   coordinates that are resolved and downloaded by the Janex tool at runtime.
-2. A set of boot metadata, which includes information such as the required Java version and JVM arguments for the
-   program. The Janex tool selects an appropriate Java runtime environment based on this information and starts the
-   program with the necessary JVM arguments.
+- **Module system support**: Unlike Shadow JAR (Fat JAR), Janex properly supports the Java module system.
+  Resources from different JARs are isolated under different resource groups instead of being mixed together.
+- **Zstandard compression**: Janex uses [Zstandard](https://github.com/facebook/zstd) for compression,
+  which provides faster decompression and smaller file sizes compared to the deflate compression used by JAR.
+  Additionally, Janex shares strings from the constant pool of Java class files across resource groups,
+  further reducing the overall file size.
+- **Remote dependencies**: Janex files can declare dependencies on JARs from external sources (such as Maven
+  repositories). These dependencies are not bundled in the Janex file but are resolved and downloaded on demand
+  before the program starts.
+- **Automatic Java runtime selection**: Users can specify conditions (such as a minimum Java version, operating system,
+  or CPU architecture), and the Janex Launcher will find a suitable installed Java runtime to run the program.
+- **Embedded JVM options**: Janex files can contain JVM options (such as `--add-exports`, `--enable-native-access`,
+  `-D`, etc.) that are passed to the JVM at runtime.
+- **Conditional configuration**: Janex supports conditionally adding classpath entries, module path entries,
+  and JVM arguments based on runtime environment conditions using
+  [Common Expression Language (CEL)](https://cel.dev/overview/cel-overview) expressions.
+- **Prepended data support**: The Janex format allows arbitrary custom data (such as PE/ELF executables or shell
+  scripts) to be prepended to the file, enabling shebang support for direct execution on Unix-like systems and
+  self-contained distribution with an embedded launcher.
 
 When launching a Janex program, the **Janex Launcher** reads the launcher metadata to find a suitable Java runtime based
 on the metadata,
