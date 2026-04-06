@@ -407,7 +407,7 @@ enum ResourceField {
         timestamp: u64,
     },
 
-    /// Custom field.
+    /// Custom field. They will be ignored by Janex. 
     Custom {
         id: u8, // 0x7F
         name: String,
