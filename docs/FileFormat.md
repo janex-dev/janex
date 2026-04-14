@@ -290,12 +290,16 @@ struct FileMetadata {
     /// The major version number of the Janex file format.
     ///
     /// Readers must reject files with an unsupported major version.
+    /// 
+    /// Currently, Janex is in the early development stage, and the major version number is 0xffffffff.
     major_version: u32,
 
     /// The minor version number of the Janex file format.
     ///
     /// Readers should accept files with a higher minor version within the same major version,
     /// ignoring any unknown fields or entries.
+    ///
+    /// Currently, Janex is in the early development stage, and the major version number is 0xffffffff.
     minor_version: u32,
 
     /// File-level flags. Currently unused and must be `0`.
