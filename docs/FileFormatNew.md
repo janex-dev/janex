@@ -295,13 +295,8 @@ struct Metadata {
     /// Records the length and other information of each section.
     section_table: Vec<SectionInfo>,
     
-    /// The checksum of the metadata. 
-    /// 
-    /// This checksum is based on the data from the start of `Metadata` up to this field.
-    checksum: Checksum,
-
     /// The verification information.
-    verification: Verification,
+    verification_info: VerificationInfo,
     
     end_mark: u64,  // 0x444e_4558_454e_414a ("JANEXEND")
     
@@ -349,12 +344,12 @@ struct SectionInfo {
 }
 ```
 
-#### `Verification` Structure
+#### `VerificationInfo` Structure
 
-The structure of the `Verification` is as follows:
+The structure of the `VerificationInfo` is as follows:
 
 ```rust
-struct Verification {
+struct VerificationInfo {
     verification_type: String,
     data: Vec<u8>,
 }
