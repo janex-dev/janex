@@ -291,7 +291,7 @@ struct FileMetadata {
     ///
     /// Readers must reject files with an unsupported major version.
     /// 
-    /// Currently, Janex is in the early development stage, and the major version number is 0xffffffff.
+    /// Currently, Janex is in the early development stage, and the major version number is 0.
     major_version: u32,
 
     /// The minor version number of the Janex file format.
@@ -299,7 +299,9 @@ struct FileMetadata {
     /// Readers should accept files with a higher minor version within the same major version,
     /// ignoring any unknown fields or entries.
     ///
-    /// Currently, Janex is in the early development stage, and the major version number is 0xffffffff.
+    /// The only exception is when `major_version` is `0` (indicating an early development stage),
+    /// where we will update the `minor_version` for every breaking change,
+    /// and Janex tools should reject files with mismatched `minor_version`.
     minor_version: u32,
 
     /// File-level flags. Currently unused and must be `0`.
@@ -618,6 +620,9 @@ enum ResourceGroupReference {
     ///
     /// The artifact is not embedded in the Janex file. The Janex Launcher resolves and downloads
     /// it at launch time (if not already present in a local cache) before starting the JVM.
+    ///
+    /// At runtime, only the specified artifact is downloaded, and dependencies are not resolved. 
+    /// If this artifact depends on other artifacts, those dependencies should also be recorded.
     Maven {
         /// The reference type tag for this variant.
         ref_type: u32, // 0x00564147 ("GAV\0")
@@ -984,8 +989,6 @@ struct OperatingSystem {
     name: String,
 
     /// The version of the operating system.
-    ///
-    /// If the version cannot be determined, this field contains an empty string.
     version: OperatingSystemVersion,
 }
 
