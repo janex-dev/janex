@@ -248,6 +248,22 @@ the following modifications:
 
 ### `Checksum`
 
+```rust
+type Checksum = String;
+```
+
+All `Checksum` values are either an empty string (representing no checksum)
+or in the form `<Algorithm>:<Checksum>` (e.g., `sha256:a13180315dfd3bff164967b64a726b98c69249970dab2f5a642c733582345885`).
+
+Currently supported cryptographically secure hash algorithms:
+
+- `sha256`: The SHA-256 hash algorithm.
+- `sha512`: The SHA-512 hash algorithm.
+
+Currently supported non-cryptographically secure hash algorithms (for integrity verification only):
+
+- `xxh64`: The [XXH64](https://github.com/Cyan4973/xxHash) hash algorithm.
+
 ## Janex File Structure
 
 The Janex file is the binary format produced by the Janex build tool for packaging and distributing
@@ -309,25 +325,6 @@ struct FileMetadata {
 }
 ```
 
-#### `Checksum` Structure
-
-The structure of the `Checksum` is as follows:
-
-```rust
-type Checksum = String;
-```
-
-All `Checksum` values are either an empty string (representing no checksum)
-or in the form `<Algorithm>:<Checksum>` (e.g., `sha256:a13180315dfd3bff164967b64a726b98c69249970dab2f5a642c733582345885`).
-
-Currently supported cryptographically secure hash algorithms:
-
-- `sha256`: The SHA-256 hash algorithm.
-- `sha512`: The SHA-512 hash algorithm.
-
-Currently supported non-cryptographically secure hash algorithms (for integrity verification only):
-
-- `xxh64`: The [XXH64](https://github.com/Cyan4973/xxHash) hash algorithm.
 
 #### `SectionInfo` Structure
 
@@ -335,7 +332,7 @@ The structure of the `SectionInfo` is as follows:
 
 ```rust
 struct SectionInfo {
-    /// The type of a section。
+    /// The type of a section.
     ///
     /// Generally, `section_type` is the same as the `magic_number` of the section content (if the section has a `magic_number`).
     section_type: SectionType,
@@ -380,13 +377,20 @@ enum SectionType {
     /// 
     /// This section is always the last section in `sections`.
     /// 
-    /// It will not recorded in `section_table`,
+    /// It will not be recorded in `section_table`,
     /// because `section_table` is inside this section, and attempting to record it in `section_table` would create a self-referential problem.
     /// This section verifies itself using the internal `verification_info` information.
     FileMetadata = 0x4154_4144_4154_454d, // "METADATA"
     
     /// The `RootConfigGroup` section.
     RootConfigGroup = 0x5055_4f52_4747_4643, // "CFGGROUP"
+
+    /// The `ResourceGroups` section. Contains all embedded resource groups.
+    ResourceGroups = 0x0053_5052_4753_4552, // "RESGRPS\0"
+
+    /// The `StringPool` section. A shared string pool used by class file compression
+    /// and `RefBody` resource paths.
+    StringPool = 0x004c_4f4f_5052_5453, // "STRPOOL\0"
 }
 ```
 
@@ -409,9 +413,9 @@ struct VerificationInfo {
 The supported verification types are:
 
 - `Checksum`: `data` is actually a `Checksum`, which is calculated based on the bytes from the start of the `FileMetadata` structure 
-  up to the `verification` field (i.e., ignoring the `verification`, `end_mark`, and `metadata_length` fields).
-- `OpenPGP`: OpenGPG signature for the `FileMetadata` section (ignoring the `verification`, `end_mark`, and `metadata_length` fields).
-- `CMS`: CMS signature for the `FileMetadata` section (ignoring the `verification`, `end_mark`, and `metadata_length` fields).
+  up to the `verification_info` field (i.e., ignoring the `verification_info`, `end_mark`, `metadata_length`, and `file_length` fields).
+- `OpenPGP`: OpenPGP signature for the `FileMetadata` section (ignoring the `verification_info`, `end_mark`, `metadata_length`, and `file_length` fields).
+- `CMS`: CMS signature for the `FileMetadata` section (ignoring the `verification_info`, `end_mark`, `metadata_length`, and `file_length` fields).
 
 ### `RootConfigGroup` Section
 
@@ -596,7 +600,7 @@ enum ResourceGroupReference {
         ref_type: u32, // 0x00434f4c ("LOC\0")
 
         /// The name of the local resource group, matching the `name` field of a `ResourceGroup`
-        /// declared in the `ResourceGroups` boot metadata entry.
+        /// declared in the `ResourceGroups` section.
         group_name: String,
     },
 
@@ -672,8 +676,8 @@ struct ResourceGroup {
 A `Resource` represents a single entry (regular file, directory, or symbolic link) within a resource
 group.
 
-Resources contain only metadata; the actual file content bytes are stored in the top-level `data_pool`
-and referenced by offset.
+Resources contain only metadata; the actual file content bytes are stored elsewhere in the
+`JanexFile` and referenced by byte offset via the `content_offset` field.
 
 ```rust
 enum Resource {
@@ -681,8 +685,8 @@ enum Resource {
     File {
         /// The resource type tag for this variant.
         /// 
-        /// Always `0x534552` ("RES\0")
-        resource_type: u32, // 0x534552 ("RES\0")
+        /// Always `0x00534552` ("RES\0")
+        resource_type: u32, // 0x00534552 ("RES\0")
 
         /// The path of this resource within its resource group.
         path: ResourcePath,
@@ -759,7 +763,7 @@ enum ResourcePathContent {
 
     /// Reference-based path encoding, used when `length == 0`.
     ///
-    /// Requires a `StringPool` entry to be present in the enclosing `BootMetadata`.
+    /// Requires a `StringPool` section to be present in the Janex file.
     RefBody {
         /// The index of the directory path component in the `StringPool`
         /// (e.g., the index for `"com/example"`).
@@ -830,21 +834,21 @@ enum ResourceField {
 ```
 
 
-#### `StringPool` Section
+### `StringPool` Section
 
 A shared string pool used by the class file compression algorithm and `RefBody` resource paths.
 
 The size of the `StringPool` is at least 1, and the first string (at index 0) is always an empty string.
 
-Each `BootMetadata` may contain at most one `StringPool` entry.
-When present, it must appear before the `ResourceGroups` entry.
+Each Janex file may contain at most one `StringPool` section.
+When present, it must appear before the `ResourceGroups` section.
 
 
 ```rust
 struct StringPool {
     /// The magic number identifying this section as a string pool.
     /// 
-    /// Always `0x004c_4f4f_5052_5453 ("STRPOOL\0")
+    /// Always `0x004c_4f4f_5052_5453` ("STRPOOL\0")
     magic_number: u64, // 0x004c_4f4f_5052_5453 ("STRPOOL\0")
 
     /// The total number of strings stored in this pool.
