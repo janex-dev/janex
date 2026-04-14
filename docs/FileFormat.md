@@ -321,10 +321,9 @@ struct FileMetadata {
     ///
     /// The reader uses this value together with the actual file size to determine
     /// the byte offset at which the Janex content begins.
-    file_length: vuint,
+    file_length: u64,
 }
 ```
-
 
 #### `SectionInfo` Structure
 
@@ -696,7 +695,7 @@ enum Resource {
         /// The `uncompressed_size` field within this structure gives the original file size in bytes.
         compress_info: CompressInfo,
 
-        /// The byte offset of this resource's (compressed) content within the `JanexFile`.
+        /// The byte offset of this resource's (compressed) content within the `bytes` field of the `DataPool` section.
         content_offset: vuint,
 
         /// Optional metadata fields associated with this resource (e.g., timestamps, checksum).
@@ -833,7 +832,6 @@ enum ResourceField {
 }
 ```
 
-
 ### `StringPool` Section
 
 A shared string pool used by the class file compression algorithm and `RefBody` resource paths.
@@ -861,6 +859,17 @@ struct StringPool {
     /// The concatenated UTF-8 bytes of all pool strings, stored as compressed data.
     /// After decompression, individual strings are extracted sequentially using the `sizes` array.
     bytes: CompressedData<[u8]>,
+}
+```
+
+### `DataPool` Section
+
+Stores the raw resource data after compression.
+
+```rust
+struct DataPool {
+    magic_number: u64,
+    bytes: [u8; ...],
 }
 ```
 
