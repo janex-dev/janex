@@ -461,6 +461,14 @@ This design allows the launcher to express conditional configurations such as
 "add this JVM option only when running on Java 21 or newer" or
 "use this native library path only on Linux/aarch64".
 
+在启动程序时，Janex Launcher 会从根组开始，以深度优先的方式顺序遍历所有子组，应用符合条件的配置。
+
+When applying configurations, if the value type of `ConfigField` is `Vec`,
+all matching `ConfigGroup` fields will be aggregated into a single `Vec`,
+with the element order consistent with the traversal order;  
+If the value type of `ConfigField` is another type, the field of the last matching `ConfigGroup` will be applied to the configuration.
+
+
 ```rust
 struct ConfigGroup {
     /// The magic number identifying this as a configuration group.
