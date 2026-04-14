@@ -381,6 +381,9 @@ enum SectionType {
     /// This section verifies itself using the internal `verification_info` information.
     FileMetadata = 0x4154_4144_4154_454d, // "METADATA"
     
+    /// Stores the raw resource data after compression.
+    DataPool = 0x4c4f_4f50_4154_4144, // "DATAPOOL"
+    
     /// The `RootConfigGroup` section.
     RootConfigGroup = 0x5055_4f52_4747_4643, // "CFGGROUP"
 
@@ -868,7 +871,7 @@ Stores the raw resource data after compression.
 
 ```rust
 struct DataPool {
-    magic_number: u64,
+    magic_number: u64, // 0x4c4f_4f50_4154_4144 ("DATAPOOL")
     bytes: [u8; ...],
 }
 ```
