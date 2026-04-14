@@ -268,7 +268,7 @@ struct JanexFile {
 
 ```rust
 struct FileMetadata {
-    /// The magic number identifying the File m
+    /// The magic number identifying the `FileMetadata` section.
     magic_number: u64, // 0x4154_4144_4154_454d ("METADATA")
 
     /// The major version number of the Janex file format.
@@ -285,22 +285,27 @@ struct FileMetadata {
     /// File-level flags. Currently unused and must be `0`.
     flags: [u8; 8],
 
-    /// The total size in bytes of the file.
-    ///
-    /// The reader uses this value together with the actual file size to determine
-    /// the byte offset at which the Janex content begins.
-    file_size: vuint,
-
     /// Records the length and other information of each section.
     section_table: Vec<SectionInfo>,
     
     /// The verification information.
     verification_info: VerificationInfo,
     
+    /// The end mark of the file.
+    ///
+    /// When reading a Janex file, the tool first locates the `end_mark`, 
+    /// and then uses `metadata_length` to reverse-lookup the offset of `FileMetadata`,
+    /// and uses `file_length` to reverse-lookup the starting offset of the `JanexFile` structure.
     end_mark: u64,  // 0x444e_4558_454e_414a ("JANEXEND")
     
     /// The length in bytes of the metadata section.
     metadata_length: u64,
+
+    /// The total length in bytes of the file.
+    ///
+    /// The reader uses this value together with the actual file size to determine
+    /// the byte offset at which the Janex content begins.
+    file_length: vuint,
 }
 ```
 
@@ -330,10 +335,18 @@ The structure of the `SectionInfo` is as follows:
 
 ```rust
 struct SectionInfo {
-    /// The type of a section
+    /// The type of a section。
     ///
     /// Generally, `section_type` is the same as the `magic_number` of the section content (if the section has a `magic_number`).
     section_type: SectionType,
+    
+    /// The ID of a section.
+    /// 
+    /// Sections with the same `section_type` must have different IDs; two `section_type`s can have the same ID.
+    id: vuint,
+    
+    /// Options related to the section.
+    options: Vec<u8>,
     
     /// The length in bytes of the section content.
     length: vuint,
@@ -371,11 +384,16 @@ enum SectionType {
     /// because `section_table` is inside this section, and attempting to record it in `section_table` would create a self-referential problem.
     /// This section verifies itself using the internal `verification_info` information.
     FileMetadata = 0x4154_4144_4154_454d, // "METADATA"
+    
+    /// The `RootConfigGroup` section.
+    RootConfigGroup = 0x5055_4f52_4747_4643, // "CFGGROUP"
 }
 ```
 
 Except for the `ExternalHeader` and `ExternalTail` sections, all other sections are arranged consecutively within the `sections` of `JanexFile`.
 If additional data or padding needs to be inserted within them, the `Padding` section can be used.
+
+Unknown sections will be ignored.
 
 #### `VerificationInfo` Structure
 
@@ -395,3 +413,213 @@ The supported verification types are:
 - `OpenPGP`: OpenGPG signature for the `FileMetadata` section (ignoring the `verification`, `end_mark`, and `metadata_length` fields).
 - `CMS`: CMS signature for the `FileMetadata` section (ignoring the `verification`, `end_mark`, and `metadata_length` fields).
 
+### `RootConfigGroup` Section
+
+The structure of the `RootConfigGroup` is as follows:
+
+```rust
+struct RootConfigGroup {
+    /// The magic number identifying the `RootConfigGroup` section.
+    /// 
+    /// Always `0x5055_4f52_4747_4643` ("CFGGROUP").
+    magic_number: u64 = 0x5055_4f52_4747_4643, // "CFGGROUP"
+    
+    /// The root config group.
+    root_group: ConfigGroup,
+}
+```
+
+#### `ConfigGroup` Structure
+
+A `ConfigGroup` is a logical grouping of configuration fields.
+
+Groups may be nested via `SubGroups` fields, forming a configuration tree.
+
+Each group can carry an optional `Condition` field.
+For the root group, the `condition` is used to detect whether the Java runtime and platform environment are suitable
+for this program, and to select the optimal Java runtime based on this;
+For subgroups, the `condition` is used to determine whether the group is applicable to the current environment,
+and if so, apply its configuration.
+
+This design allows the launcher to express conditional configurations such as
+"add this JVM option only when running on Java 21 or newer" or
+"use this native library path only on Linux/aarch64".
+
+```rust
+struct ConfigGroup {
+    /// The magic number identifying this as a configuration group.
+    ///
+    /// Always `0x50524743` ("CGRP").
+    magic_number: u32, // 0x50524743 ("CGRP")
+
+    /// The list of configuration fields contained in this group.
+    fields: Vec<ConfigField>,
+}
+```
+
+#### `ConfigField`
+
+Configuration fields carry the actual launch settings within a `ConfigGroup`.
+
+Each field begins with a 4-byte type tag followed by a length-prefixed payload.
+
+Readers must skip unknown field types to allow forward compatibility.
+
+The raw (untyped) form of a field is:
+
+```rust
+struct ConfigField {
+    /// A 4-byte tag identifying the type of this field.
+    field_type: u32,
+    /// The payload bytes of this field. Its interpretation depends on `field_type`.
+    content: Vec<u8>
+}
+```
+
+Supported fields:
+
+```rust
+enum ConfigField {
+    /// A CEL condition expression that guards the enclosing `ConfigGroup`.
+    ///
+    /// See the [Conditions](#conditions) section for details.
+    Condition {
+        field_type: u32, // 0x444e4f43 ("COND")
+
+        /// The byte length of the payload that follows.
+        length: vuint,
+
+        /// The CEL expression string. Must evaluate to `bool` or `int`.
+        condition: String,
+    },
+
+    /// The fully qualified binary name of the application's main class.
+    MainClass {
+        field_type: u32, // 0x534c434d ("MCLS")
+
+        /// The byte length of the payload that follows.
+        length: vuint,
+
+        /// The fully qualified binary name of the main class (e.g., `"com.example.Main"`).
+        value: String,
+    },
+
+    /// The name of the application's main module.
+    ///
+    /// Passed to the JVM via `--module` when launching with the Java module system.
+    MainModule {
+        field_type: u32, // 0x444f4d4d ("MMOD")
+
+        /// The byte length of the payload that follows.
+        length: vuint,
+
+        /// The main module name.
+        value: String,
+    },
+
+    /// The ordered list of resource groups to place on the module path (`--module-path`).
+    ModulePath {
+        field_type: u32, // 0x50444f4d ("MODP")
+
+        /// The byte length of the payload that follows.
+        length: vuint,
+
+        /// The resource group references to add to the module path, in order.
+        items: Vec<ResourceGroupReference>,
+    },
+
+    /// The ordered list of resource groups to place on the class path (`-classpath`).
+    ClassPath {
+        field_type: u32, // 0x50534c43 ("CLSP")
+
+        /// The byte length of the payload that follows.
+        length: vuint,
+
+        /// The resource group references to add to the class path, in order.
+        items: Vec<ResourceGroupReference>,
+    },
+
+    /// The list of resource groups to load as Java agents (`-javaagent`).
+    Agents {
+        field_type: u32, // 0x544e4741 ("AGNT")
+
+        /// The byte length of the payload that follows.
+        length: vuint,
+
+        /// The resource group references for Java agent JARs, in the order they are attached.
+        items: Vec<ResourceGroupReference>,
+    },
+
+    /// A list of additional JVM options to pass when launching the application.
+    ///
+    /// Each element is a single JVM option string
+    /// (e.g., `"--add-exports=java.base/sun.nio.ch=ALL-UNNAMED"` or `"-Xmx512m"`).
+    JvmOptions {
+        field_type: u32, // 0x54504f4a ("JOPT")
+
+        /// The byte length of the payload that follows.
+        length: vuint,
+
+        /// The list of JVM option strings, each passed as a separate argument to the JVM.
+        options: Vec<String>
+    },
+
+    /// A list of nested `ConfigGroup` entries within the enclosing group.
+    ///
+    /// Each subgroup may carry its own `Condition`, enabling fine-grained conditional configuration.
+    /// The launcher evaluates each subgroup independently and applies those whose conditions are satisfied.
+    SubGroups {
+        field_type: u32, // 0x50524753 ("SGRP")
+
+        /// The byte length of the payload that follows.
+        length: vuint,
+
+        /// The list of nested configuration groups.
+        subgroups: Vec<ConfigGroup>
+    }
+}
+```
+
+#### `ResourceGroupReference`
+
+A `ResourceGroupReference` identifies a resource group to be placed on the class path, module path,
+or agent list.
+
+It is either a reference to a resource group embedded in the Janex file itself or a reference
+to an external Maven artifact that is resolved and downloaded at launch time.
+
+```rust
+enum ResourceGroupReference {
+    /// A reference to a resource group embedded in this Janex file.
+    Local {
+        /// The reference type tag for this variant.
+        ref_type: u32, // 0x00434f4c ("LOC\0")
+
+        /// The name of the local resource group, matching the `name` field of a `ResourceGroup`
+        /// declared in the `ResourceGroups` boot metadata entry.
+        group_name: String,
+    },
+
+    /// A reference to a Maven artifact hosted in a remote repository.
+    ///
+    /// The artifact is not embedded in the Janex file. The Janex Launcher resolves and downloads
+    /// it at launch time (if not already present in a local cache) before starting the JVM.
+    Maven {
+        /// The reference type tag for this variant.
+        ref_type: u32, // 0x00564147 ("GAV\0")
+
+        /// The Maven coordinates of the artifact in `groupId:artifactId:version` format
+        /// (e.g., `"org.slf4j:slf4j-api:2.0.9"`).
+        gav: String,
+
+        /// The base URL of the Maven repository from which to download the artifact
+        /// (e.g., `"https://repo1.maven.org/maven2"`).
+        /// 
+        /// Defaults to `https://repo1.maven.org/maven2`.
+        repository: String,
+
+        /// The expected checksum of the artifact JAR, used to verify the integrity of the download.
+        checksum: Checksum,
+    }
+}
+```
