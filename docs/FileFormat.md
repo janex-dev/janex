@@ -369,6 +369,10 @@ enum SectionType {
 
     /// A special section whose content is not within `sections`, but after the `JanexFile` structure.
     ///
+    /// This section allows users to attach a Janex Launcher packaged as a JAR to the end of the Janex file,
+    /// enabling program startup using `java -jar xxx.janex`.
+    /// The JAR-formatted Janex Launcher should be able to read the size of the JAR portion and locate the end of the `JanexFile` structure.
+    /// 
     /// This is an optional section. If present, the `SectionInfo` must be the last element in `section_table`.
     ExternalTail = 0x4c49_4154_4c54_5845, // "EXTLTAIL"
     
@@ -844,7 +848,6 @@ The size of the `StringPool` is at least 1, and the first string (at index 0) is
 Each Janex file may contain at most one `StringPool` section.
 When present, it must appear before the `ResourceGroups` section.
 
-
 ```rust
 struct StringPool {
     /// The magic number identifying this section as a string pool.
@@ -864,6 +867,9 @@ struct StringPool {
     bytes: CompressedData<[u8]>,
 }
 ```
+
+All strings stored in the `StringPool` are encoded in standard UTF-8. 
+When used to decompress class files, they need to be converted back to Modified UTF-8 encoding.
 
 ### `DataPool` Section
 
