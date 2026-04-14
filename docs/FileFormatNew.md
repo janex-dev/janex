@@ -257,20 +257,19 @@ Java programs as self-contained executables. Its overall layout is as follows:
 struct JanexFile {
     /// The magic number identifying this as a Janex file.
     ///
-    /// Always `0x50504158454e414a` ("JANEXAPP").
+    /// Always `0x5050_4158_454e_414a` ("JANEXAPP").
     magic_number: u64, // 0x50504158454e414a  ("JANEXAPP")
 
     sections: [Section; ...],
-    
-    metadata: Metadata,
 }
 ```
 
-### `Metadata` Section
+### `FileMetadata` Section
 
 ```rust
-struct Metadata {
-    magic_number: u64,
+struct FileMetadata {
+    /// The magic number identifying the File m
+    magic_number: u64, // 0x4154_4144_4154_454d ("METADATA")
 
     /// The major version number of the Janex file format.
     ///
@@ -334,7 +333,7 @@ struct SectionInfo {
     /// The type of a section
     ///
     /// Generally, `section_type` is the same as the `magic_number` of the section content (if the section has a `magic_number`).
-    section_type: u64,
+    section_type: SectionType,
     
     /// The length in bytes of the section content.
     length: vuint,
@@ -343,6 +342,40 @@ struct SectionInfo {
     checksum: Checksum,
 }
 ```
+
+Currently supported section types:
+
+```rust
+#[repr(u64)]
+enum SectionType {
+    /// Represents arbitrary data in a Janex file. Janex tools will not use these sections.
+    ///
+    /// Padding sections do not require a `magic_number`.
+    Padding = 0x0047_4e49_4444_4150, // "PADDING\0"
+
+    /// A special section whose content is not within `sections`, but before the `JanexFile` structure.
+    ///
+    /// This is an optional section. If present, the `SectionInfo` must be the first element in `section_table`.
+    ExternalHeader = 0x4441_4548_4c54_5845, // "EXTLHEAD"
+
+    /// A special section whose content is not within `sections`, but after the `JanexFile` structure.
+    ///
+    /// This is an optional section. If present, the `SectionInfo` must be the last element in `section_table`.
+    ExternalTail = 0x4c49_4154_4c54_5845, // "EXTLTAIL"
+    
+    /// The `FileMetadata` section. Used to store file metadata.
+    /// 
+    /// This section is always the last section in `sections`.
+    /// 
+    /// It will not recorded in `section_table`,
+    /// because `section_table` is inside this section, and attempting to record it in `section_table` would create a self-referential problem.
+    /// This section verifies itself using the internal `verification_info` information.
+    FileMetadata = 0x4154_4144_4154_454d, // "METADATA"
+}
+```
+
+Except for the `ExternalHeader` and `ExternalTail` sections, all other sections are arranged consecutively within the `sections` of `JanexFile`.
+If additional data or padding needs to be inserted within them, the `Padding` section can be used.
 
 #### `VerificationInfo` Structure
 
@@ -357,8 +390,8 @@ struct VerificationInfo {
 
 The supported verification types are:
 
-- `Checksum`: `data` is actually a `Checksum`, which is calculated based on the bytes from the start of the `Metadata` structure 
+- `Checksum`: `data` is actually a `Checksum`, which is calculated based on the bytes from the start of the `FileMetadata` structure 
   up to the `verification` field (i.e., ignoring the `verification`, `end_mark`, and `metadata_length` fields).
-- `OpenPGP`: OpenGPG signature for the `Metadata` section (ignoring the `verification`, `end_mark`, and `metadata_length` fields).
-- `CMS`: CMS signature for the `Metadata` section (ignoring the `verification`, `end_mark`, and `metadata_length` fields).
+- `OpenPGP`: OpenGPG signature for the `FileMetadata` section (ignoring the `verification`, `end_mark`, and `metadata_length` fields).
+- `CMS`: CMS signature for the `FileMetadata` section (ignoring the `verification`, `end_mark`, and `metadata_length` fields).
 
