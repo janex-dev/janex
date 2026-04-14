@@ -422,7 +422,7 @@ struct RootConfigGroup {
     /// The magic number identifying the `RootConfigGroup` section.
     /// 
     /// Always `0x5055_4f52_4747_4643` ("CFGGROUP").
-    magic_number: u64 = 0x5055_4f52_4747_4643, // "CFGGROUP"
+    magic_number: u64, // 0x5055_4f52_4747_4643 "CFGGROUP"
     
     /// The root config group.
     root_group: ConfigGroup,
@@ -621,5 +621,360 @@ enum ResourceGroupReference {
         /// The expected checksum of the artifact JAR, used to verify the integrity of the download.
         checksum: Checksum,
     }
+}
+```
+
+### `ResourceGroups` Section
+
+```rust
+struct ResourceGroups {
+    /// The magic number identifying this as a resource group.
+    ///
+    /// Always `0x0053_5052_4753_4552` ("RESGRPS\0").
+    magic_number: u64, // 0x0053_5052_4753_4552 ("RESGRPS\0")
+    
+    /// The resource groups.
+    groups: Vec<ResourceGroup>,
+}
+```
+
+#### `ResourceGroup`
+
+A `ResourceGroup` represents a logical container of related files, typically corresponding to a single
+JAR or module from the original Java project.
+
+```rust
+struct ResourceGroup {
+    /// The magic number identifying this as a resource group.
+    ///
+    /// Always `0x47534552` ("RESG").
+    magic_number: u32, // 0x47534552 ("RESG")
+
+    /// The unique name of this resource group within the `ResourceGroups` entry.
+    /// 
+    /// This name is referenced by `ResourceGroupReference::Local` in the launcher configuration
+    /// to add this group to the class path, module path, or agent list.
+    name: String,
+
+    /// Reserved for future use. All bytes must be `0`.
+    reserved: [u8; 48],
+
+    /// The number of `Resource` entries stored in this group.
+    resources_count: vuint,
+
+    /// The compressed array of resource metadata entries for this group.
+    compressed_resources: CompressedData<[Resource; resources_count]>
+}
+```
+
+#### `Resource`
+
+A `Resource` represents a single entry (regular file, directory, or symbolic link) within a resource
+group.
+
+Resources contain only metadata; the actual file content bytes are stored in the top-level `data_pool`
+and referenced by offset.
+
+```rust
+enum Resource {
+    /// Represents a regular file.
+    File {
+        /// The resource type tag for this variant.
+        /// 
+        /// Always `0x534552` ("RES\0")
+        resource_type: u32, // 0x534552 ("RES\0")
+
+        /// The path of this resource within its resource group.
+        path: ResourcePath,
+
+        /// Compression metadata for this resource's content.
+        ///
+        /// The `uncompressed_size` field within this structure gives the original file size in bytes.
+        compress_info: CompressInfo,
+
+        /// The byte offset of this resource's (compressed) content within the `JanexFile`.
+        content_offset: vuint,
+
+        /// Optional metadata fields associated with this resource (e.g., timestamps, checksum).
+        fields: Vec<ResourceField>,
+    },
+
+    /// Represents a directory entry.
+    Directory {
+        /// The resource type tag for this variant.
+        ///
+        /// Always 0x00524944 ("DIR\0")
+        resource_type: u32, // 0x00524944 ("DIR\0")
+
+        /// The path of this directory within its resource group.
+        path: ResourcePath,
+
+        /// Optional metadata fields associated with this directory (e.g., timestamps, permissions).
+        fields: Vec<ResourceField>,
+    },
+
+    /// Represents a symbolic link.
+    SymbolicLink {
+        /// The resource type tag for this variant.
+        /// 
+        /// Always 0x4c4d5953 ("SYML")
+        resource_type: u32, // 0x4c4d5953 ("SYML")
+
+        /// The path of this symbolic link within its resource group.
+        path: ResourcePath,
+
+        /// The target path that this symbolic link points to.
+        target: ResourcePath,
+
+        /// Optional metadata fields associated with this symbolic link.
+        fields: Vec<ResourceField>,
+    }
+}
+```
+
+#### `ResourcePath`
+
+`ResourcePath` stores a `/`-separated resource path using one of two encodings selected by the value
+of `length`:
+
+- **`StringBody`** (when `length != 0`): the full path string is stored inline, with `length` giving
+  its byte length.
+- **`RefBody`** (when `length == 0`): the path is described by two integer indices into the shared
+  `StringPool` — one for the directory component and one for the file name component. This encoding
+  avoids repeating path strings that appear across many resources.
+
+```rust
+struct ResourcePath {
+    /// The byte length of the inline path string, or `0` to indicate `RefBody` encoding.
+    length: vuint,
+    content: ResourcePathContent,
+}
+
+enum ResourcePathContent {
+    /// Inline path encoding, used when `length != 0`.
+    StringBody {
+        /// The raw UTF-8 bytes of the full resource path (e.g., `"com/example/Foo.class"`).
+        body: [u8; length],
+    },
+
+    /// Reference-based path encoding, used when `length == 0`.
+    ///
+    /// Requires a `StringPool` entry to be present in the enclosing `BootMetadata`.
+    RefBody {
+        /// The index of the directory path component in the `StringPool`
+        /// (e.g., the index for `"com/example"`).
+        directory_index: vuint,
+        /// The index of the file name component in the `StringPool`
+        /// (e.g., the index for `"Foo.class"`).
+        file_name_index: vuint,
+    }
+}
+```
+
+#### `ResourceField`
+
+`ResourceField` carries optional metadata attached to a resource entry. Each field is identified by a
+1-byte `id`.
+
+The supported fields are:
+
+```rust
+enum ResourceField {
+    /// XXH64 checksum of the uncompressed resource content.
+    ///
+    /// Can be used by the extractor to verify data integrity after decompression.
+    Checksum {
+        id: u8, // 0x01
+
+        /// The XXH64 hash of the uncompressed resource content.
+        checksum: u64,
+    },
+
+    /// File creation timestamp.
+    FileCreateTime {
+        id: u8, // 0x02
+        timestamp: Timestamp,
+    },
+
+    /// File last-modification timestamp.
+    FileModifyTime {
+        id: u8, // 0x03
+        timestamp: Timestamp,
+    },
+
+    /// File last-access timestamp.
+    FileAccessTime {
+        id: u8, // 0x04
+        timestamp: Timestamp,
+    },
+
+    /// POSIX file permission bits (e.g., `0o755`).
+    PosixFilePermissions {
+        id: u8, // 0x05
+        /// The POSIX permission bits for this resource.
+        permissions: u16,
+    },
+
+    /// A custom, application-defined metadata field.
+    ///
+    /// Custom fields are not interpreted by Janex and are ignored during normal processing.
+    /// They can be used to attach arbitrary metadata for tooling or third-party extensions.
+    Custom {
+        id: u8, // 0x7F
+        /// The name of the custom field, used to identify its purpose.
+        name: String,
+        /// The raw content bytes of the custom field.
+        content: Vec<u8>,
+    }
+}
+```
+
+
+#### `StringPool` Section
+
+A shared string pool used by the class file compression algorithm and `RefBody` resource paths.
+
+The size of the `StringPool` is at least 1, and the first string (at index 0) is always an empty string.
+
+Each `BootMetadata` may contain at most one `StringPool` entry.
+When present, it must appear before the `ResourceGroups` entry.
+
+
+```rust
+struct StringPool {
+    /// The magic number identifying this section as a string pool.
+    /// 
+    /// Always `0x004c_4f4f_5052_5453 ("STRPOOL\0")
+    magic_number: u64, // 0x004c_4f4f_5052_5453 ("STRPOOL\0")
+
+    /// The total number of strings stored in this pool.
+    count: vuint,
+
+    /// The uncompressed byte length of each string, in pool index order.
+    /// Used to locate individual strings within the decompressed byte buffer.
+    sizes: [vuint; count],
+
+    /// The concatenated UTF-8 bytes of all pool strings, stored as compressed data.
+    /// After decompression, individual strings are extracted sequentially using the `sizes` array.
+    bytes: CompressedData<[u8]>,
+}
+```
+
+## Conditions
+
+Janex allows users to declare runtime environment requirements for a program, such as the minimum Java version,
+operating system, and CPU architecture.
+
+The Janex Launcher evaluates these conditions against each candidate Java installation
+and the current host platform to determine which installations are eligible and which has the highest priority.
+
+Conditions also govern which classpath entries, module path entries, JVM arguments, and other
+configuration values are applied at launch time, enabling a single Janex file to carry
+platform-specific or version-specific configuration.
+
+Users express these requirements using [Common Expression Language (CEL)](https://cel.dev/overview/cel-overview)
+when building a Janex file.
+
+A condition expression must evaluate to either `bool` or `int`:
+
+- If it evaluates to `bool`, the associated configuration is applied when the result is `true`.
+- If it evaluates to `int` (only for the root group), the value represents a priority score.
+  The launcher selects the Java installation with the highest score.
+
+### Environment
+
+At runtime, the Janex Launcher makes the following variables available for use in condition expressions:
+
+```rust
+// Information about a candidate Java installation.
+let java: Java = ...;
+
+// Information about the current host platform.
+let platform: Platform = ...;
+```
+
+The `Java` struct provides information about a candidate Java runtime environment:
+
+```rust
+/// Information about a Java runtime environment.
+struct Java {
+    /// The version of the Java runtime.
+    version: JavaVersion,
+
+    /// The vendor of the Java runtime (e.g., `"Eclipse Adoptium"`, `"Oracle Corporation"`).
+    vendor: String,
+
+    /// The operating system for which this Java runtime was built.
+    os: OperatingSystem,
+
+    /// The CPU architecture for which this Java runtime was built (e.g., `"x86-64"`, `"aarch64"`).
+    arch: String,
+}
+
+/// The parsed version of a Java runtime.
+struct JavaVersion {
+    /// The full, unparsed version string (e.g., `"21.0.3+9"`).
+    full: String,
+
+    /// The feature release number (the first version component, e.g., `21` for Java 21).
+    feature: uint,
+
+    /// The interim release number (the second version component).
+    interim: uint,
+
+    /// The update release number (the third version component).
+    update: uint,
+
+    /// The patch release number (the fourth version component).
+    patch: uint,
+
+    /// The optional pre-release identifier (e.g., `"ea"` for early-access builds).
+    /// Empty string if not present.
+    pre: String,
+
+    /// The build number.
+    build: uint,
+
+    /// Optional additional build metadata. Empty string if not present.
+    optional: String,
+}
+```
+
+The `Platform` struct provides information about the current host platform:
+
+```rust
+/// Information about the current host platform.
+struct Platform {
+    /// The operating system of the host machine.
+    os: OperatingSystem,
+
+    /// The CPU of the host machine.
+    cpu: CPU,
+}
+
+/// Information about an operating system.
+struct OperatingSystem {
+    /// The normalized name of the operating system (e.g., `"linux"`, `"windows"`, `"macos"`).
+    name: String,
+
+    /// The version of the operating system.
+    ///
+    /// If the version cannot be determined, this field contains an empty string.
+    version: OperatingSystemVersion,
+}
+
+/// The parsed version of an operating system.
+struct OperatingSystemVersion {
+    /// The full, unparsed version string.
+    full: String,
+
+    /// The major version number.
+    major: uint,
+}
+
+/// Information about the host CPU.
+struct CPU {
+    /// The CPU architecture name (e.g., `"x86-64"`, `"aarch64"`, `"x86"`).
+    arch: String,
 }
 ```
