@@ -485,10 +485,6 @@ struct Attribute {
 }
 ```
 
-Currently supported attributes:
-
-- 
-
 ### `RootConfigGroup` Section
 
 The structure of the `RootConfigGroup` is as follows:
