@@ -304,7 +304,7 @@ struct JanexFile {
 ### `FileMetadata` Section
 
 ```rust
-struct FileMetadata {
+struct FileMetadataSection {
     /// The magic number identifying the `FileMetadata` section.
     magic_number: u64, // 0x4154_4144_4154_454d ("METADATA")
 
@@ -326,10 +326,13 @@ struct FileMetadata {
     minor_version: u32,
 
     /// File-level flags. Currently unused and must be `0`.
-    flags: [u8; 8],
+    flags: u64,
 
     /// Records the length and other information of each section.
     section_table: Vec<SectionInfo>,
+
+    /// Currently, all fields will be skipped. Reserved for future use.
+    fields: Vec<TaggedPayload<u32>>,
     
     /// The verification information.
     verification_info: VerificationInfo,
@@ -411,6 +414,9 @@ enum SectionType {
     /// because `section_table` is inside this section, and attempting to record it in `section_table` would create a self-referential problem.
     /// This section verifies itself using the internal `verification_info` information.
     FileMetadata = 0x4154_4144_4154_454d, // "METADATA"
+
+    /// The `Attributes` section.
+    Attributes = 0x2e53_4249_5254_5441, // "ATTRIBS."
     
     /// Stores the raw resource data after compression.
     DataPool = 0x4c4f_4f50_4154_4144, // "DATAPOOL"
@@ -445,17 +451,50 @@ struct VerificationInfo {
 
 The supported verification types are:
 
-- `Checksum`: `data` is actually a `Checksum`, which is calculated based on the bytes from the start of the `FileMetadata` structure 
+- `Checksum`: `data` is actually a `Checksum`, which is calculated based on the bytes from the start of the `FileMetadataSection` structure 
   up to the `verification_info` field (i.e., ignoring the `verification_info`, `end_mark`, `metadata_length`, and `file_length` fields).
 - `OpenPGP`: OpenPGP signature for the `FileMetadata` section (ignoring the `verification_info`, `end_mark`, `metadata_length`, and `file_length` fields).
 - `CMS`: CMS signature for the `FileMetadata` section (ignoring the `verification_info`, `end_mark`, `metadata_length`, and `file_length` fields).
+
+### `Attributes` Section
+
+```rust
+struct AttributesSection {
+    /// The magic number identifying this as a attributes section.
+    ///
+    /// Always `0x2e53_4249_5254_5441` ("ATTRIBS.").
+    magic_number: u64, // 0x2e53_4249_5254_5441 ("ATTRIBS.")
+    
+    /// The list of attributes.
+    attributes: Vec<Attribute>,
+}
+```
+
+#### `Attribute` Structure
+
+```rust
+struct Attribute {
+    /// The name of the attribute.
+    name: String,
+    
+    /// The value of the attribute.
+    /// 
+    /// This `Vec<u8>` can actually be interpreted as a `String` (They have the same binary representation),
+    /// or it may carry arbitrary binary data.
+    value: Vec<u8>,
+}
+```
+
+Currently supported attributes:
+
+- 
 
 ### `RootConfigGroup` Section
 
 The structure of the `RootConfigGroup` is as follows:
 
 ```rust
-struct RootConfigGroup {
+struct RootConfigGroupSection {
     /// The magic number identifying the `RootConfigGroup` section.
     /// 
     /// Always `0x5055_4f52_4747_4643` ("CFGGROUP").
@@ -661,7 +700,7 @@ enum ResourceGroupReference {
 Each resource group is a logical container of related files, typically corresponding to a single JAR or module from the original Java project.
 
 ```rust
-struct ResourceGroups {
+struct ResourceGroupsSection {
     /// The magic number identifying this as a resource group.
     ///
     /// Always `0x0053_5052_4753_4552` ("RESGRPS\0").
@@ -690,8 +729,8 @@ struct ResourceGroup {
     /// to add this group to the class path, module path, or agent list.
     name: String,
 
-    /// Reserved for future use. All bytes must be `0`.
-    reserved: [u8; 48],
+    /// Currently, all fields will be skipped. Reserved for future use.
+    fields: Vec<TaggedPayload<u32>>, 
 
     /// The number of `Resource` entries stored in this group.
     resources_count: vuint,
@@ -924,7 +963,7 @@ Each Janex file may contain at most one `StringPool` section.
 When present, it must appear before the `ResourceGroups` section.
 
 ```rust
-struct StringPool {
+struct StringPoolSection {
     /// The magic number identifying this section as a string pool.
     /// 
     /// Always `0x004c_4f4f_5052_5453` ("STRPOOL\0")
@@ -950,8 +989,10 @@ When used to decompress class files, they need to be converted back to Modified 
 
 Stores the raw resource data after compression.
 
+Currently, each file can only have one `DataPool` section.
+
 ```rust
-struct DataPool {
+struct DataPoolSection {
     magic_number: u64, // 0x4c4f_4f50_4154_4144 ("DATAPOOL")
     bytes: [u8; ...],
 }
@@ -1065,6 +1106,9 @@ struct OperatingSystemVersion {
 
     /// The major version number.
     major: uint,
+
+    /// The minor version number.
+    minor: uint,
 }
 
 /// Information about the host CPU.
