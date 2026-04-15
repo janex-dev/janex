@@ -265,7 +265,32 @@ the following modifications:
 2. The transformed class file may contain new constant types that reference entries in the shared
    `StringPool` by index, replacing the original `CONSTANT_Utf8` entries.
 
-(TODO: More details about the class file compression algorithm)
+    New constant pool entries include:
+
+    1. `CONSTANT_External_String`:
+   
+        ```rust
+        struct CONSTANT_External_Utf8 {
+            tag: u8, // 0xFF
+        
+            /// The index of the string in the shared `StringPool`.
+            string_pool_index: vuint,
+        }
+        ```
+
+    2. `CONSTANT_External_String_Class`:
+
+        ```rust
+        struct CONSTANT_External_String {
+            tag: u8, // 0xFE
+        
+            /// The index of the package name in the shared `StringPool`.
+            package_name_index: vuint,
+       
+            /// The index of the class name in the shared `StringPool`.
+            class_name_index: vuint,
+        }
+        ```
 
 ### `Checksum`
 
