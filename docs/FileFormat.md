@@ -470,6 +470,8 @@ struct AttributesSection {
 }
 ```
 
+In the future, we may use it to record author names and other information.
+
 #### `Attribute` Structure
 
 ```rust
@@ -803,8 +805,12 @@ enum Resource {
 
 #### `ResourcePath`
 
-`ResourcePath` stores a `/`-separated resource path using one of two encodings selected by the value
-of `length`:
+`ResourcePath` represents the path of a `Resource`, for example `java/lang/Object.class`.
+
+`ResourcePath` is composed of several parts separated by `/`. The `/` cannot be the first or last character, and cannot be empty.
+Each part of `ResourcePath` cannot be empty, cannot be `.` or `..`, and cannot contain `/`.
+
+`ResourcePath` using one of two encodings selected by the value of `length`:
 
 - **`StringBody`** (when `length != 0`): the full path string is stored inline, with `length` giving
   its byte length.
