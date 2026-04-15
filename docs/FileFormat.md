@@ -656,6 +656,10 @@ enum ResourceGroupReference {
 
 ### `ResourceGroups` Section
 
+`ResourceGroups` contains all embedded resource groups in the Janex file. 
+
+Each resource group is a logical container of related files, typically corresponding to a single JAR or module from the original Java project.
+
 ```rust
 struct ResourceGroups {
     /// The magic number identifying this as a resource group.
