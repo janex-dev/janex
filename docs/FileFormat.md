@@ -110,15 +110,16 @@ fn read_vuint(read: &mut impl Read) -> Result<vuint, Error> {
 
 ### Dynamic Array
 
-Janex uses the following structure to store dynamically sized arrays. The `length` field specifies the
+Janex uses the following structure to store dynamically sized arrays. The `elements_count` field specifies the
 number of elements, followed by the elements themselves serialized in sequence:
 
 ```rust
 struct Vec<T> {
     /// The number of elements in the array.
-    length: vuint,
+    elements_count: vuint,
+
     /// The array elements, each serialized according to the type `T`.
-    data: [T; length],
+    elements: [T; elements_count],
 }
 ```
 
@@ -132,16 +133,36 @@ type String = Vec<u8>;
 
 ### Tagged Payload
 
+A variable-length structure with a integer tag:
+
 ```rust
-struct TaggedPayload<const TAG: u32, T> {
+struct TaggedPayload<T> {
     // Always equal to `TAG`.
-    tag: u32,
+    tag: T,
     
-    /// The number of bytes in the payload.
-    length: vuint,
+    /// The number of bytes of the payload.
+    payload_bytes: vuint,
     
     /// The payload bytes.
-    payload: [u8; length],
+    payload: [u8; payload_bytes],
+}
+```
+
+This structure makes it easy for parsers to skip unrecognized fields. 
+
+In this document, we use `#[repr(TaggedPayload<T>)]` to annotate a struct to use such a layout.
+
+Since the binary structure of `String` is also `payload_bytes` + `payload`, 
+for `TaggedPayload` with a `String` payload,
+the `String` type can be used directly to replace these two fields. 
+
+For example:
+
+```rust
+#[repr(TaggedPayload<u32>)]
+struct MyStruct {
+    tag: u32,
+    value: String,
 }
 ```
 
@@ -461,7 +482,8 @@ This design allows the launcher to express conditional configurations such as
 "add this JVM option only when running on Java 21 or newer" or
 "use this native library path only on Linux/aarch64".
 
-在启动程序时，Janex Launcher 会从根组开始，以深度优先的方式顺序遍历所有子组，应用符合条件的配置。
+When launching a program, the Janex Launcher starts from the root group and traverses all subgroups in a depth-first order, 
+applying configurations that meet the conditions.
 
 When applying configurations, if the value type of `ConfigField` is `Vec`,
 all matching `ConfigGroup` fields will be aggregated into a single `Vec`,
@@ -489,29 +511,16 @@ Each field begins with a 4-byte type tag followed by a length-prefixed payload.
 
 Readers must skip unknown field types to allow forward compatibility.
 
-The raw (untyped) form of a field is:
-
-```rust
-struct ConfigField {
-    /// A 4-byte tag identifying the type of this field.
-    field_type: u32,
-    /// The payload bytes of this field. Its interpretation depends on `field_type`.
-    content: Vec<u8>
-}
-```
-
 Supported fields:
 
 ```rust
+#[repr(TaggedPayload<u32>)]
 enum ConfigField {
     /// A CEL condition expression that guards the enclosing `ConfigGroup`.
     ///
     /// See the [Conditions](#conditions) section for details.
     Condition {
         field_type: u32, // 0x444e4f43 ("COND")
-
-        /// The byte length of the payload that follows.
-        length: vuint,
 
         /// The CEL expression string. Must evaluate to `bool` or `int`.
         condition: String,
@@ -520,9 +529,6 @@ enum ConfigField {
     /// The fully qualified binary name of the application's main class.
     MainClass {
         field_type: u32, // 0x534c434d ("MCLS")
-
-        /// The byte length of the payload that follows.
-        length: vuint,
 
         /// The fully qualified binary name of the main class (e.g., `"com.example.Main"`).
         value: String,
@@ -534,9 +540,6 @@ enum ConfigField {
     MainModule {
         field_type: u32, // 0x444f4d4d ("MMOD")
 
-        /// The byte length of the payload that follows.
-        length: vuint,
-
         /// The main module name.
         value: String,
     },
@@ -545,8 +548,8 @@ enum ConfigField {
     ModulePath {
         field_type: u32, // 0x50444f4d ("MODP")
 
-        /// The byte length of the payload that follows.
-        length: vuint,
+        /// The number of bytes of the items.
+        payload_bytes: vuint,
 
         /// The resource group references to add to the module path, in order.
         items: Vec<ResourceGroupReference>,
@@ -556,8 +559,8 @@ enum ConfigField {
     ClassPath {
         field_type: u32, // 0x50534c43 ("CLSP")
 
-        /// The byte length of the payload that follows.
-        length: vuint,
+        /// The number of bytes of the items.
+        payload_bytes: vuint,
 
         /// The resource group references to add to the class path, in order.
         items: Vec<ResourceGroupReference>,
@@ -567,8 +570,8 @@ enum ConfigField {
     Agents {
         field_type: u32, // 0x544e4741 ("AGNT")
 
-        /// The byte length of the payload that follows.
-        length: vuint,
+        /// The number of bytes of the items.
+        payload_bytes: vuint,
 
         /// The resource group references for Java agent JARs, in the order they are attached.
         items: Vec<ResourceGroupReference>,
@@ -581,8 +584,8 @@ enum ConfigField {
     JvmOptions {
         field_type: u32, // 0x54504f4a ("JOPT")
 
-        /// The byte length of the payload that follows.
-        length: vuint,
+        /// The number of bytes of the options.
+        payload_bytes: vuint,
 
         /// The list of JVM option strings, each passed as a separate argument to the JVM.
         options: Vec<String>
@@ -595,8 +598,8 @@ enum ConfigField {
     SubGroups {
         field_type: u32, // 0x50524753 ("SGRP")
 
-        /// The byte length of the payload that follows.
-        length: vuint,
+        /// The number of bytes of the subgroups.
+        payload_bytes: vuint,
 
         /// The list of nested configuration groups.
         subgroups: Vec<ConfigGroup>
@@ -806,50 +809,101 @@ enum ResourcePathContent {
 The supported fields are:
 
 ```rust
+#[repr(TaggedPayload<u8>)]
 enum ResourceField {
     /// XXH64 checksum of the uncompressed resource content.
     ///
     /// Can be used by the extractor to verify data integrity after decompression.
     Checksum {
+        /// The field ID for this variant.
         id: u8, // 0x01
+
+        /// The number of bytes of the checksum payload.
+        /// 
+        /// Always `8` (the size of the XXH64 checksum).
+        payload_bytes: vuint,
 
         /// The XXH64 hash of the uncompressed resource content.
         checksum: u64,
     },
 
+    Comment {
+        /// The field ID for this variant.
+        id: u8, // 0x02
+
+        /// A UTF-8 encoded comment string associated with this resource.
+        comment: String,
+    },
+
     /// File creation timestamp.
     FileCreateTime {
-        id: u8, // 0x02
+        /// The field ID for this variant.
+        id: u8, // 0x03
+
+        /// The number of bytes of the timestamp payload.
+        /// 
+        /// Always `12` (the size of the `Timestamp` structure).
+        payload_bytes: vuint,
+
         timestamp: Timestamp,
     },
 
     /// File last-modification timestamp.
     FileModifyTime {
-        id: u8, // 0x03
+        /// The field ID for this variant.
+        id: u8, // 0x04
+
+        /// The number of bytes of the timestamp payload.
+        /// 
+        /// Always `12` (the size of the `Timestamp` structure).
+        payload_bytes: vuint,
+
         timestamp: Timestamp,
     },
 
     /// File last-access timestamp.
     FileAccessTime {
-        id: u8, // 0x04
+        /// The field ID for this variant.
+        id: u8, // 0x05
+
+        /// The number of bytes of the timestamp payload.
+        /// 
+        /// Always `12` (the size of the `Timestamp` structure).
+        payload_bytes: vuint,
+
         timestamp: Timestamp,
     },
 
     /// POSIX file permission bits (e.g., `0o755`).
     PosixFilePermissions {
-        id: u8, // 0x05
-        /// The POSIX permission bits for this resource.
+        /// The field ID for this variant.
+        id: u8, // 0x06
+
+        /// The number of bytes of the permissions payload.
+        /// 
+        /// Always `2` (the size of the `u16` structure).
+        payload_bytes: vuint,
+
+        /// The POSIX permission bits for this resource, stored as a 16-bit unsigned integer.
         permissions: u16,
     },
 
     /// A custom, application-defined metadata field.
+    /// 
+    /// Users should prefer this field type for custom metadata rather than using a custom `id`, 
+    /// to avoid conflicts with field IDs that Janex may add in the future.
     ///
     /// Custom fields are not interpreted by Janex and are ignored during normal processing.
     /// They can be used to attach arbitrary metadata for tooling or third-party extensions.
     Custom {
         id: u8, // 0x7F
+
+        /// The number of bytes of the name and content payload.
+        payload_bytes: vuint,
+
         /// The name of the custom field, used to identify its purpose.
         name: String,
+
         /// The raw content bytes of the custom field.
         content: Vec<u8>,
     }
