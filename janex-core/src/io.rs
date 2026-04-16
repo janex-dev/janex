@@ -1,24 +1,29 @@
 // Copyright (c) 2026 Glavo
 // SPDX-License-Identifier: MPL-2.0
 
-use crate::byteorder::ByteOrder;
 use crate::error::Error;
-use std::marker::PhantomData;
 
-/// A reader for reading data.
-/// A byte reader for Janex binary structures parameterized by endianness.
-pub trait DataReader<BO: ByteOrder> {
+/// A byte reader for Janex binary structures.
+pub trait DataReader {
     fn remaining(&self) -> usize;
 
     fn read_array<const N: usize>(&mut self) -> Result<[u8; N], Error>;
 
     fn read_u8_array(&mut self, size: usize) -> Result<Box<[u8]>, Error>;
 
-    fn read_u16_array(&mut self, size: usize) -> Result<Box<[u16]>, Error> {
+    fn read_u16_array_le(&mut self, size: usize) -> Result<Box<[u16]>, Error> {
         Ok(self
             .read_u8_array(size * 2)?
             .chunks_exact(2)
-            .map(BO::read_u16)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect())
+    }
+
+    fn read_u16_array_be(&mut self, size: usize) -> Result<Box<[u16]>, Error> {
+        Ok(self
+            .read_u8_array(size * 2)?
+            .chunks_exact(2)
+            .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
             .collect())
     }
 
@@ -27,23 +32,36 @@ pub trait DataReader<BO: ByteOrder> {
         Ok(b)
     }
 
-    fn read_u16(&mut self) -> Result<u16, Error> {
-        let bytes = self.read_array::<2>()?;
-        Ok(BO::u16_from_bytes(bytes))
+    fn read_u16_le(&mut self) -> Result<u16, Error> {
+        Ok(u16::from_le_bytes(self.read_array()?))
     }
 
-    fn read_u32(&mut self) -> Result<u32, Error> {
-        let bytes = self.read_array::<4>()?;
-        Ok(BO::u32_from_bytes(bytes))
+    fn read_u16_be(&mut self) -> Result<u16, Error> {
+        Ok(u16::from_be_bytes(self.read_array()?))
     }
 
-    fn read_u64(&mut self) -> Result<u64, Error> {
-        let bytes = self.read_array::<8>()?;
-        Ok(BO::u64_from_bytes(bytes))
+    fn read_u32_le(&mut self) -> Result<u32, Error> {
+        Ok(u32::from_le_bytes(self.read_array()?))
     }
 
-    fn read_i64(&mut self) -> Result<i64, Error> {
-        Ok(self.read_u64()? as i64)
+    fn read_u32_be(&mut self) -> Result<u32, Error> {
+        Ok(u32::from_be_bytes(self.read_array()?))
+    }
+
+    fn read_u64_le(&mut self) -> Result<u64, Error> {
+        Ok(u64::from_le_bytes(self.read_array()?))
+    }
+
+    fn read_u64_be(&mut self) -> Result<u64, Error> {
+        Ok(u64::from_be_bytes(self.read_array()?))
+    }
+
+    fn read_i64_le(&mut self) -> Result<i64, Error> {
+        Ok(self.read_u64_le()? as i64)
+    }
+
+    fn read_i64_be(&mut self) -> Result<i64, Error> {
+        Ok(self.read_u64_be()? as i64)
     }
 
     fn read_vuint(&mut self) -> Result<u64, Error> {
@@ -81,7 +99,6 @@ pub trait DataReader<BO: ByteOrder> {
     }
 }
 
-/// A implementation of [`DataReader`] that reads from a slice of bytes.
 /// A `DataReader` backed by an immutable byte slice.
 pub struct ArrayDataReader<'a> {
     bytes: &'a [u8],
@@ -94,7 +111,7 @@ impl<'a> ArrayDataReader<'a> {
     }
 }
 
-impl<BO: ByteOrder> DataReader<BO> for ArrayDataReader<'_> {
+impl DataReader for ArrayDataReader<'_> {
     fn remaining(&self) -> usize {
         self.bytes.len()
     }
@@ -121,43 +138,44 @@ impl<BO: ByteOrder> DataReader<BO> for ArrayDataReader<'_> {
     }
 }
 
-/// A byte writer for Janex binary structures parameterized by endianness.
-pub trait DataWriter<BO: ByteOrder> {
+/// A byte writer for Janex binary structures.
+pub trait DataWriter {
     fn write_all(&mut self, bytes: &[u8]);
 
     fn write_u8(&mut self, value: u8) {
         self.write_all(&[value]);
     }
 
-    fn write_u16(&mut self, value: u16) {
-        let bytes = if BO::u16_from_bytes([1, 0]) == 0x0100 {
-            value.to_be_bytes()
-        } else {
-            value.to_le_bytes()
-        };
-        self.write_all(&bytes);
+    fn write_u16_le(&mut self, value: u16) {
+        self.write_all(&value.to_le_bytes());
     }
 
-    fn write_u32(&mut self, value: u32) {
-        let bytes = if BO::u16_from_bytes([1, 0]) == 0x0100 {
-            value.to_be_bytes()
-        } else {
-            value.to_le_bytes()
-        };
-        self.write_all(&bytes);
+    fn write_u16_be(&mut self, value: u16) {
+        self.write_all(&value.to_be_bytes());
     }
 
-    fn write_u64(&mut self, value: u64) {
-        let bytes = if BO::u16_from_bytes([1, 0]) == 0x0100 {
-            value.to_be_bytes()
-        } else {
-            value.to_le_bytes()
-        };
-        self.write_all(&bytes);
+    fn write_u32_le(&mut self, value: u32) {
+        self.write_all(&value.to_le_bytes());
     }
 
-    fn write_i64(&mut self, value: i64) {
-        self.write_u64(value as u64);
+    fn write_u32_be(&mut self, value: u32) {
+        self.write_all(&value.to_be_bytes());
+    }
+
+    fn write_u64_le(&mut self, value: u64) {
+        self.write_all(&value.to_le_bytes());
+    }
+
+    fn write_u64_be(&mut self, value: u64) {
+        self.write_all(&value.to_be_bytes());
+    }
+
+    fn write_i64_le(&mut self, value: i64) {
+        self.write_u64_le(value as u64);
+    }
+
+    fn write_i64_be(&mut self, value: i64) {
+        self.write_u64_be(value as u64);
     }
 
     fn write_vuint(&mut self, mut value: u64) {
@@ -179,25 +197,20 @@ pub trait DataWriter<BO: ByteOrder> {
 }
 
 /// A `DataWriter` that appends encoded bytes into a `Vec<u8>`.
-pub struct VecDataWriter<BO: ByteOrder> {
+pub struct VecDataWriter {
     bytes: Vec<u8>,
-    byte_order: PhantomData<BO>,
 }
 
-impl<BO: ByteOrder> VecDataWriter<BO> {
+impl VecDataWriter {
     /// Creates an empty writer.
     pub fn new() -> Self {
-        Self {
-            bytes: Vec::new(),
-            byte_order: PhantomData,
-        }
+        Self { bytes: Vec::new() }
     }
 
     /// Creates an empty writer with preallocated capacity.
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             bytes: Vec::with_capacity(capacity),
-            byte_order: PhantomData,
         }
     }
 
@@ -207,13 +220,13 @@ impl<BO: ByteOrder> VecDataWriter<BO> {
     }
 }
 
-impl<BO: ByteOrder> Default for VecDataWriter<BO> {
+impl Default for VecDataWriter {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<BO: ByteOrder> DataWriter<BO> for VecDataWriter<BO> {
+impl DataWriter for VecDataWriter {
     fn write_all(&mut self, bytes: &[u8]) {
         self.bytes.extend_from_slice(bytes);
     }

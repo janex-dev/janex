@@ -1,7 +1,6 @@
 // Copyright (c) 2026 Glavo
 // SPDX-License-Identifier: MPL-2.0
 
-use crate::byteorder::BigEndian;
 use crate::error::Error;
 use crate::io::{ArrayDataReader, DataReader};
 
@@ -28,8 +27,8 @@ impl ClassFile {
     pub const MAGIC_NUMBER: u32 = 0xCAFEBABE;
 
     /// Parses a class file from the given bytes.
-    pub fn parse(reader: &mut impl DataReader<BigEndian>) -> Result<ClassFile, Error> {
-        let magic = reader.read_u32()?;
+    pub fn parse(reader: &mut impl DataReader) -> Result<ClassFile, Error> {
+        let magic = reader.read_u32_be()?;
         if magic != Self::MAGIC_NUMBER {
             return Err(Error::InvalidMagicNumber {
                 expected: Self::MAGIC_NUMBER as u64,
@@ -37,26 +36,26 @@ impl ClassFile {
             });
         }
 
-        let minor_version = reader.read_u16()?;
-        let major_version = reader.read_u16()?;
+        let minor_version = reader.read_u16_be()?;
+        let major_version = reader.read_u16_be()?;
 
-        let constant_pool_count = reader.read_u16()?;
+        let constant_pool_count = reader.read_u16_be()?;
         let constant_pool = Self::read_constant_pool(reader, constant_pool_count)?;
 
-        let access_flags = reader.read_u16()?;
-        let this_class = reader.read_u16()?;
-        let super_class = reader.read_u16()?;
+        let access_flags = reader.read_u16_be()?;
+        let this_class = reader.read_u16_be()?;
+        let super_class = reader.read_u16_be()?;
 
-        let interfaces_count = reader.read_u16()?;
-        let interfaces = reader.read_u16_array(interfaces_count as usize)?;
+        let interfaces_count = reader.read_u16_be()?;
+        let interfaces = reader.read_u16_array_be(interfaces_count as usize)?;
 
-        let fields_count = reader.read_u16()?;
+        let fields_count = reader.read_u16_be()?;
         let fields = Self::read_members(reader, fields_count)?;
 
-        let methods_count = reader.read_u16()?;
+        let methods_count = reader.read_u16_be()?;
         let methods = Self::read_members(reader, methods_count)?;
 
-        let attributes_count = reader.read_u16()?;
+        let attributes_count = reader.read_u16_be()?;
         let attributes = Self::read_attributes(reader, attributes_count)?;
 
         Ok(ClassFile {
@@ -82,7 +81,7 @@ impl ClassFile {
 
     /// Reads the constant pool from the class file.
     fn read_constant_pool(
-        reader: &mut impl DataReader<BigEndian>,
+        reader: &mut impl DataReader,
         constant_pool_count: u16,
     ) -> Result<Box<[ConstantPoolInfo]>, Error> {
         let mut constant_pool = Vec::with_capacity(constant_pool_count as usize);
@@ -104,15 +103,15 @@ impl ClassFile {
     }
 
     fn read_members(
-        reader: &mut impl DataReader<BigEndian>,
+        reader: &mut impl DataReader,
         members_count: u16,
     ) -> Result<Box<[MemberInfo]>, Error> {
         let mut fields = Vec::with_capacity(members_count as usize);
         for _ in 0..members_count {
-            let access_flags = reader.read_u16()?;
-            let name_index = reader.read_u16()?;
-            let descriptor_index = reader.read_u16()?;
-            let attributes_count = reader.read_u16()?;
+            let access_flags = reader.read_u16_be()?;
+            let name_index = reader.read_u16_be()?;
+            let descriptor_index = reader.read_u16_be()?;
+            let attributes_count = reader.read_u16_be()?;
             let attributes = Self::read_attributes(reader, attributes_count)?;
             fields.push(MemberInfo {
                 access_flags,
@@ -126,13 +125,13 @@ impl ClassFile {
     }
 
     fn read_attributes(
-        reader: &mut impl DataReader<BigEndian>,
+        reader: &mut impl DataReader,
         attributes_count: u16,
     ) -> Result<Box<[AttributeInfo]>, Error> {
         let mut attributes = Vec::with_capacity(attributes_count as usize);
         for _ in 0..attributes_count {
-            let attribute_name_index = reader.read_u16()?;
-            let attribute_length = reader.read_u32()?;
+            let attribute_name_index = reader.read_u16_be()?;
+            let attribute_length = reader.read_u32_be()?;
             let info = reader.read_u8_array(attribute_length as usize)?;
             attributes.push(AttributeInfo {
                 attribute_name_index,
@@ -322,75 +321,73 @@ impl ConstantPoolInfo {
         }
     }
 
-    pub fn read_constant(
-        reader: &mut impl DataReader<BigEndian>,
-    ) -> Result<ConstantPoolInfo, Error> {
+    pub fn read_constant(reader: &mut impl DataReader) -> Result<ConstantPoolInfo, Error> {
         let tag = reader.read_u8()?;
         Ok(match tag {
             Self::TAG_Utf8 => {
-                let length = reader.read_u16()?;
+                let length = reader.read_u16_be()?;
                 let bytes = reader.read_u8_array(length as usize)?;
                 ConstantPoolInfo::Utf8 { length, bytes }
             }
             Self::TAG_Integer => {
-                let bytes = reader.read_u32()?;
+                let bytes = reader.read_u32_be()?;
                 ConstantPoolInfo::Integer { bytes }
             }
             Self::TAG_Float => {
-                let bytes = reader.read_u32()?;
+                let bytes = reader.read_u32_be()?;
                 ConstantPoolInfo::Float { bytes }
             }
             Self::TAG_Long => {
-                let high_bytes = reader.read_u32()?;
-                let low_bytes = reader.read_u32()?;
+                let high_bytes = reader.read_u32_be()?;
+                let low_bytes = reader.read_u32_be()?;
                 ConstantPoolInfo::Long {
                     high_bytes,
                     low_bytes,
                 }
             }
             Self::TAG_Double => {
-                let high_bytes = reader.read_u32()?;
-                let low_bytes = reader.read_u32()?;
+                let high_bytes = reader.read_u32_be()?;
+                let low_bytes = reader.read_u32_be()?;
                 ConstantPoolInfo::Double {
                     high_bytes,
                     low_bytes,
                 }
             }
             Self::TAG_Class => {
-                let name_index = reader.read_u16()?;
+                let name_index = reader.read_u16_be()?;
                 ConstantPoolInfo::Class { name_index }
             }
             Self::TAG_String => {
-                let string_index = reader.read_u16()?;
+                let string_index = reader.read_u16_be()?;
                 ConstantPoolInfo::String { string_index }
             }
             Self::TAG_Fieldref => {
-                let class_index = reader.read_u16()?;
-                let name_and_type_index = reader.read_u16()?;
+                let class_index = reader.read_u16_be()?;
+                let name_and_type_index = reader.read_u16_be()?;
                 ConstantPoolInfo::Fieldref {
                     class_index,
                     name_and_type_index,
                 }
             }
             Self::TAG_Methodref => {
-                let class_index = reader.read_u16()?;
-                let name_and_type_index = reader.read_u16()?;
+                let class_index = reader.read_u16_be()?;
+                let name_and_type_index = reader.read_u16_be()?;
                 ConstantPoolInfo::Methodref {
                     class_index,
                     name_and_type_index,
                 }
             }
             Self::TAG_InterfaceMethodref => {
-                let class_index = reader.read_u16()?;
-                let name_and_type_index = reader.read_u16()?;
+                let class_index = reader.read_u16_be()?;
+                let name_and_type_index = reader.read_u16_be()?;
                 ConstantPoolInfo::InterfaceMethodref {
                     class_index,
                     name_and_type_index,
                 }
             }
             Self::TAG_NameAndType => {
-                let name_index = reader.read_u16()?;
-                let descriptor_index = reader.read_u16()?;
+                let name_index = reader.read_u16_be()?;
+                let descriptor_index = reader.read_u16_be()?;
                 ConstantPoolInfo::NameAndType {
                     name_index,
                     descriptor_index,
@@ -398,38 +395,38 @@ impl ConstantPoolInfo {
             }
             Self::TAG_MethodHandle => {
                 let reference_kind = reader.read_u8()?;
-                let reference_index = reader.read_u16()?;
+                let reference_index = reader.read_u16_be()?;
                 ConstantPoolInfo::MethodHandle {
                     reference_kind,
                     reference_index,
                 }
             }
             Self::TAG_MethodType => {
-                let descriptor_index = reader.read_u16()?;
+                let descriptor_index = reader.read_u16_be()?;
                 ConstantPoolInfo::MethodType { descriptor_index }
             }
             Self::TAG_Dynamic => {
-                let bootstrap_method_attr_index = reader.read_u16()?;
-                let name_and_type_index = reader.read_u16()?;
+                let bootstrap_method_attr_index = reader.read_u16_be()?;
+                let name_and_type_index = reader.read_u16_be()?;
                 ConstantPoolInfo::Dynamic {
                     bootstrap_method_attr_index,
                     name_and_type_index,
                 }
             }
             Self::TAG_InvokeDynamic => {
-                let bootstrap_method_attr_index = reader.read_u16()?;
-                let name_and_type_index = reader.read_u16()?;
+                let bootstrap_method_attr_index = reader.read_u16_be()?;
+                let name_and_type_index = reader.read_u16_be()?;
                 ConstantPoolInfo::InvokeDynamic {
                     bootstrap_method_attr_index,
                     name_and_type_index,
                 }
             }
             Self::TAG_Module => {
-                let name_index = reader.read_u16()?;
+                let name_index = reader.read_u16_be()?;
                 ConstantPoolInfo::Module { name_index }
             }
             Self::TAG_Package => {
-                let name_index = reader.read_u16()?;
+                let name_index = reader.read_u16_be()?;
                 ConstantPoolInfo::Package { name_index }
             }
             _ => {
