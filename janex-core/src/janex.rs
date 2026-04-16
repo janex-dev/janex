@@ -9,6 +9,7 @@ use sm3::Sm3;
 use std::collections::HashSet;
 use std::io::{Read, Seek, SeekFrom};
 use xxhash_rust::xxh64::xxh64;
+use crate::checksum::{Checksum, ChecksumAlgorithm};
 
 const DEFAULT_MAVEN_REPOSITORY: &str = "https://repo1.maven.org/maven2";
 const CURRENT_MAJOR_VERSION: u32 = 0;
@@ -230,24 +231,6 @@ pub enum CompressMethod {
     Composite = 1,
     Classfile = 2,
     Zstd = 3,
-}
-
-/// A checksum payload stored alongside a section or resource.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Checksum {
-    pub algorithm: ChecksumAlgorithm,
-    pub checksum: Box<[u8]>,
-}
-
-/// Supported checksum algorithms.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u16)]
-pub enum ChecksumAlgorithm {
-    None = 0,
-    Xxh64 = 0x0101,
-    Sha256 = 0x8101,
-    Sha512 = 0x8102,
-    Sm3 = 0x8301,
 }
 
 /// Metadata verification strategies supported by the current implementation.
@@ -1014,34 +997,6 @@ impl Default for CompressInfo {
     }
 }
 
-impl Checksum {
-    /// Returns a checksum descriptor with no checksum payload.
-    pub fn none() -> Self {
-        Self {
-            algorithm: ChecksumAlgorithm::None,
-            checksum: Box::new([]),
-        }
-    }
-}
-
-impl Default for Checksum {
-    fn default() -> Self {
-        Self::none()
-    }
-}
-
-impl ChecksumAlgorithm {
-    fn expected_len(self) -> usize {
-        match self {
-            ChecksumAlgorithm::None => 0,
-            ChecksumAlgorithm::Xxh64 => 8,
-            ChecksumAlgorithm::Sha256 => 32,
-            ChecksumAlgorithm::Sha512 => 64,
-            ChecksumAlgorithm::Sm3 => 32,
-        }
-    }
-}
-
 impl TryFrom<u8> for CompressMethod {
     type Error = Error;
 
@@ -1053,24 +1008,6 @@ impl TryFrom<u8> for CompressMethod {
             3 => Ok(CompressMethod::Zstd),
             _ => Err(Error::UnknownEnumValue {
                 name: "compression method",
-                value: value as u64,
-            }),
-        }
-    }
-}
-
-impl TryFrom<u16> for ChecksumAlgorithm {
-    type Error = Error;
-
-    fn try_from(value: u16) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(ChecksumAlgorithm::None),
-            0x0101 => Ok(ChecksumAlgorithm::Xxh64),
-            0x8101 => Ok(ChecksumAlgorithm::Sha256),
-            0x8102 => Ok(ChecksumAlgorithm::Sha512),
-            0x8301 => Ok(ChecksumAlgorithm::Sm3),
-            _ => Err(Error::UnknownEnumValue {
-                name: "checksum algorithm",
                 value: value as u64,
             }),
         }
@@ -2011,7 +1948,7 @@ fn write_checksum(writer: &mut VecDataWriter, checksum: &Checksum) -> Result<(),
 }
 
 fn validate_checksum_shape(checksum: &Checksum) -> Result<(), Error> {
-    if checksum.checksum.len() != checksum.algorithm.expected_len() {
+    if checksum.checksum.len() != checksum.algorithm.checksum_length() {
         return Err(Error::InvalidValue(
             "checksum payload length does not match its algorithm",
         ));
@@ -2032,10 +1969,10 @@ fn verify_checksum(checksum: &Checksum, bytes: &[u8], name: &'static str) -> Res
 fn compute_checksum(algorithm: ChecksumAlgorithm, bytes: &[u8]) -> Result<Checksum, Error> {
     let checksum = match algorithm {
         ChecksumAlgorithm::None => Vec::new(),
-        ChecksumAlgorithm::Xxh64 => xxh64(bytes, 0).to_le_bytes().to_vec(),
-        ChecksumAlgorithm::Sha256 => Sha256::digest(bytes).to_vec(),
-        ChecksumAlgorithm::Sha512 => Sha512::digest(bytes).to_vec(),
-        ChecksumAlgorithm::Sm3 => Sm3::digest(bytes).to_vec(),
+        ChecksumAlgorithm::XXH64 => xxh64(bytes, 0).to_le_bytes().to_vec(),
+        ChecksumAlgorithm::SHA256 => Sha256::digest(bytes).to_vec(),
+        ChecksumAlgorithm::SHA512 => Sha512::digest(bytes).to_vec(),
+        ChecksumAlgorithm::SM3 => Sm3::digest(bytes).to_vec(),
     };
     Ok(Checksum {
         algorithm,
@@ -2228,7 +2165,7 @@ mod tests {
             flags: 0,
             fields: vec![TaggedField::<u32>::new(0xfeed_beef, b"meta".to_vec())],
             verification: VerificationInfo::Checksum(Checksum {
-                algorithm: ChecksumAlgorithm::Sha256,
+                algorithm: ChecksumAlgorithm::SHA256,
                 checksum: Box::new([]),
             }),
             sections: vec![
@@ -2236,7 +2173,7 @@ mod tests {
                     id: 0,
                     options: Vec::new(),
                     checksum: Checksum {
-                        algorithm: ChecksumAlgorithm::Sha256,
+                        algorithm: ChecksumAlgorithm::SHA256,
                         checksum: Box::new([]),
                     },
                     content: SectionContent::StringPool(StringPoolSection {
@@ -2248,7 +2185,7 @@ mod tests {
                     id: 0,
                     options: Vec::new(),
                     checksum: Checksum {
-                        algorithm: ChecksumAlgorithm::Sha256,
+                        algorithm: ChecksumAlgorithm::SHA256,
                         checksum: Box::new([]),
                     },
                     content: SectionContent::RootConfigGroup(RootConfigGroupSection {
@@ -2267,7 +2204,7 @@ mod tests {
                     id: 0,
                     options: Vec::new(),
                     checksum: Checksum {
-                        algorithm: ChecksumAlgorithm::Sha256,
+                        algorithm: ChecksumAlgorithm::SHA256,
                         checksum: Box::new([]),
                     },
                     content: SectionContent::ResourceGroups(ResourceGroupsSection {
@@ -2302,7 +2239,7 @@ mod tests {
                     id: 0,
                     options: Vec::new(),
                     checksum: Checksum {
-                        algorithm: ChecksumAlgorithm::Sha256,
+                        algorithm: ChecksumAlgorithm::SHA256,
                         checksum: Box::new([]),
                     },
                     content: SectionContent::DataPool(DataPoolSection {

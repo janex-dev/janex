@@ -7,3 +7,4 @@ pub mod io;
 pub mod janex;
 pub mod platform;
 pub mod string_pool;
+pub mod checksum;
