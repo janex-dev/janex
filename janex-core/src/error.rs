@@ -3,6 +3,7 @@
 
 use std::fmt::{Display, Formatter};
 
+/// Errors produced while decoding, validating, or encoding Janex data.
 #[derive(Debug)]
 pub enum Error {
     UnexpectedEndOfFile,

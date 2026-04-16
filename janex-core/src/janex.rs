@@ -14,84 +14,128 @@ const DEFAULT_MAVEN_REPOSITORY: &str = "https://repo1.maven.org/maven2";
 const CURRENT_MAJOR_VERSION: u32 = 0;
 const CURRENT_MINOR_VERSION: u32 = 0;
 
+/// An in-memory representation of a Janex file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JanexFile {
+    /// The Janex file-format major version.
     pub major_version: u32,
+    /// The Janex file-format minor version.
     pub minor_version: u32,
+    /// Reserved file-level flags.
     pub flags: u64,
+    /// Opaque metadata fields reserved for forward-compatible extensions.
     pub fields: Vec<TaggedField<u32>>,
+    /// Integrity information for the metadata section itself.
     pub verification: VerificationInfo,
+    /// The ordered list of sections stored in the file body.
     pub sections: Vec<Section>,
 }
 
+/// A section entry recorded in `FileMetadata.section_table`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Section {
+    /// The section identifier, unique within its section type.
     pub id: u64,
+    /// Section-scoped extension fields.
     pub options: Vec<TaggedField<u32>>,
+    /// The checksum policy for the encoded section payload.
     pub checksum: Checksum,
+    /// The typed content carried by this section.
     pub content: SectionContent,
 }
 
+/// The supported Janex section bodies implemented by `janex-core`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SectionContent {
+    /// Arbitrary padding bytes between typed sections.
     Padding(Box<[u8]>),
+    /// The launcher root configuration tree.
     RootConfigGroup(RootConfigGroupSection),
+    /// Embedded resource-group metadata.
     ResourceGroups(ResourceGroupsSection),
+    /// Shared strings referenced by resources and classfile compression.
     StringPool(StringPoolSection),
+    /// The raw bytes referenced by file resources.
     DataPool(DataPoolSection),
 }
 
+/// The `RootConfigGroup` section.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RootConfigGroupSection {
+    /// The root configuration group evaluated by the launcher.
     pub root_group: ConfigGroup,
 }
 
+/// The `ResourceGroups` section.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourceGroupsSection {
+    /// All embedded resource groups.
     pub groups: Vec<ResourceGroup>,
 }
 
+/// The `StringPool` section.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StringPoolSection {
+    /// Compression settings for the concatenated string bytes.
     pub compression: CompressInfo,
+    /// Strings stored in pool-index order.
     pub strings: StringPool,
 }
 
+/// The `DataPool` section.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataPoolSection {
+    /// Concatenated raw bytes referenced by file resources.
     pub bytes: Box<[u8]>,
 }
 
+/// A logical resource container, typically mirroring one source JAR or module.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourceGroup {
+    /// The group name referenced from configuration entries.
     pub name: String,
+    /// Opaque extension fields reserved for future use.
     pub fields: Vec<TaggedField<u32>>,
+    /// Compression settings for the encoded resource metadata array.
     pub resources_compression: CompressInfo,
+    /// All resources declared by the group.
     pub resources: Vec<Resource>,
 }
 
+/// A configuration group inside the launcher configuration tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigGroup {
+    /// Ordered fields applied by the launcher.
     pub fields: Vec<ConfigField>,
 }
 
+/// Typed configuration items supported by the current Janex format implementation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigField {
+    /// CEL condition guarding the current group.
     Condition(String),
+    /// Fully qualified main-class name.
     MainClass(String),
+    /// Main module name used with `--module`.
     MainModule(String),
+    /// Resource groups placed on the JVM module path.
     ModulePath(Vec<ResourceGroupReference>),
+    /// Resource groups placed on the JVM class path.
     ClassPath(Vec<ResourceGroupReference>),
+    /// Java agents loaded before application startup.
     Agents(Vec<JavaAgent>),
+    /// Additional JVM arguments.
     JvmOptions(Vec<String>),
+    /// Nested configuration groups.
     SubGroups(Vec<ConfigGroup>),
 }
 
+/// A reference to either an embedded resource group or a remote Maven artifact.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResourceGroupReference {
-    Local {
-        group_name: String,
-    },
+    /// A reference to a local `ResourceGroup`.
+    Local { group_name: String },
+    /// A reference to a Maven artifact downloaded at launch time.
     Maven {
         gav: String,
         repository: String,
@@ -99,24 +143,31 @@ pub enum ResourceGroupReference {
     },
 }
 
+/// A Java agent entry with its optional agent argument.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JavaAgent {
+    /// The resource group or Maven artifact containing the agent JAR.
     pub reference: ResourceGroupReference,
+    /// The option string appended to `-javaagent:...=`.
     pub option: String,
 }
 
+/// A resource entry inside a `ResourceGroup`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Resource {
+    /// A regular file whose bytes live in the `DataPool`.
     File {
         path: ResourcePath,
         compress_info: CompressInfo,
         content_offset: u64,
         fields: Vec<ResourceField>,
     },
+    /// A directory marker.
     Directory {
         path: ResourcePath,
         fields: Vec<ResourceField>,
     },
+    /// A symbolic-link entry.
     SymbolicLink {
         path: ResourcePath,
         target: ResourcePath,
@@ -124,15 +175,19 @@ pub enum Resource {
     },
 }
 
+/// A resource path encoded either inline or by string-pool references.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResourcePath {
+    /// Stores the full UTF-8 path inline.
     String(String),
+    /// Stores directory and file-name components via string-pool indices.
     Ref {
         directory_index: u64,
         file_name_index: u64,
     },
 }
 
+/// Optional metadata attached to a `Resource`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResourceField {
     Checksum(Checksum),
@@ -144,18 +199,21 @@ pub enum ResourceField {
     Custom { name: String, content: Box<[u8]> },
 }
 
+/// A nanosecond-precision timestamp relative to the Unix epoch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Timestamp {
     pub epoch_second: i64,
     pub nanos: u32,
 }
 
+/// A tagged payload preserved as raw bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaggedField<T> {
     pub tag: T,
     pub payload: Box<[u8]>,
 }
 
+/// Compression metadata for an encoded Janex payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompressInfo {
     pub method: CompressMethod,
@@ -164,6 +222,7 @@ pub struct CompressInfo {
     pub options: Box<[u8]>,
 }
 
+/// Compression algorithms referenced by `CompressInfo`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum CompressMethod {
@@ -173,12 +232,14 @@ pub enum CompressMethod {
     Zstd = 3,
 }
 
+/// A checksum payload stored alongside a section or resource.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Checksum {
     pub algorithm: ChecksumAlgorithm,
     pub checksum: Box<[u8]>,
 }
 
+/// Supported checksum algorithms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum ChecksumAlgorithm {
@@ -189,12 +250,14 @@ pub enum ChecksumAlgorithm {
     Sm3 = 0x8301,
 }
 
+/// Metadata verification strategies supported by the current implementation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VerificationInfo {
     None,
     Checksum(Checksum),
 }
 
+/// Well-known Janex section type tags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u64)]
 pub enum SectionType {
@@ -236,6 +299,7 @@ impl JanexFile {
     pub const FILE_METADATA_MAGIC_NUMBER: u64 = 0x4154_4144_4154_454d;
     pub const END_MARK: u64 = 0x444e_4558_454e_414a;
 
+    /// Creates a new Janex file with the current format version and no extra metadata.
     pub fn new(sections: Vec<Section>) -> Self {
         Self {
             major_version: CURRENT_MAJOR_VERSION,
@@ -247,11 +311,16 @@ impl JanexFile {
         }
     }
 
+    /// Parses a Janex file from raw bytes.
+    ///
+    /// The reader locates the metadata footer from the end of the input, validates
+    /// section checksums and then decodes each typed section into memory.
     pub fn read(bytes: &[u8]) -> Result<Self, Error> {
         if bytes.len() < 24 {
             return Err(Error::UnexpectedEndOfFile);
         }
 
+        // Janex readers locate the metadata section by reading the fixed-size footer first.
         let footer_offset = bytes.len() - 24;
         let mut footer_reader = ArrayDataReader::new(&bytes[footer_offset..]);
         let end_mark = read_le_u64(&mut footer_reader)?;
@@ -341,12 +410,17 @@ impl JanexFile {
         Ok(file)
     }
 
+    /// Encodes the current file into the Janex binary format.
+    ///
+    /// Section payloads are serialized first so the metadata section can record
+    /// their final lengths and derived checksums.
     pub fn write(&self) -> Result<Vec<u8>, Error> {
         self.validate()?;
 
         let mut section_infos = Vec::with_capacity(self.sections.len());
         let mut encoded_sections = Vec::with_capacity(self.sections.len());
         for section in &self.sections {
+            // Section metadata depends on the final encoded byte length and checksum.
             let bytes = encode_section_content(&section.content)?;
             let checksum = compute_checksum(section.checksum.algorithm, &bytes)?;
             section_infos.push(SectionInfoRecord {
@@ -522,6 +596,7 @@ impl ResourceGroupsSection {
 impl StringPoolSection {
     pub const MAGIC_NUMBER: u64 = 0x004c_4f4f_5052_5453;
 
+    /// Creates a string-pool section using no compression.
     pub fn new(strings: StringPool) -> Self {
         Self {
             compression: CompressInfo::none(),
@@ -562,6 +637,7 @@ impl Resource {
 }
 
 impl Timestamp {
+    /// Validates the timestamp against the format's `[0, 1_000_000_000)` nanosecond range.
     pub fn validate(&self) -> Result<(), Error> {
         if self.nanos >= 1_000_000_000 {
             return Err(Error::InvalidValue(
@@ -573,6 +649,7 @@ impl Timestamp {
 }
 
 impl TaggedField<u32> {
+    /// Creates a 32-bit tagged payload from raw bytes.
     pub fn new(tag: u32, payload: Vec<u8>) -> Self {
         Self {
             tag,
@@ -582,6 +659,7 @@ impl TaggedField<u32> {
 }
 
 impl TaggedField<u8> {
+    /// Creates an 8-bit tagged payload from raw bytes.
     pub fn new(tag: u8, payload: Vec<u8>) -> Self {
         Self {
             tag,
@@ -591,6 +669,7 @@ impl TaggedField<u8> {
 }
 
 impl CompressInfo {
+    /// Returns an empty no-compression descriptor.
     pub fn none() -> Self {
         Self {
             method: CompressMethod::None,
@@ -608,6 +687,7 @@ impl Default for CompressInfo {
 }
 
 impl Checksum {
+    /// Returns a checksum descriptor with no checksum payload.
     pub fn none() -> Self {
         Self {
             algorithm: ChecksumAlgorithm::None,
@@ -1680,6 +1760,7 @@ fn compress_bytes(info: &CompressInfo, data: &[u8]) -> Result<Vec<u8>, Error> {
         CompressMethod::Composite => {
             let layers = parse_composite_layers(&info.options)?;
             let mut current = data.to_vec();
+            // Composite compression applies the declared layers in order.
             for layer in &layers {
                 current = compress_bytes(layer, &current)?;
             }
@@ -1698,6 +1779,7 @@ fn decompress_bytes(info: &CompressInfo, data: &[u8]) -> Result<Vec<u8>, Error> 
         CompressMethod::Composite => {
             let layers = parse_composite_layers(&info.options)?;
             let mut current = data.to_vec();
+            // Decompression runs the composite stack in reverse order.
             for layer in layers.iter().rev() {
                 current = decompress_bytes(layer, &current)?;
             }

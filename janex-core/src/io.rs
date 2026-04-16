@@ -6,6 +6,7 @@ use crate::error::Error;
 use std::marker::PhantomData;
 
 /// A reader for reading data.
+/// A byte reader for Janex binary structures parameterized by endianness.
 pub trait DataReader<BO: ByteOrder> {
     fn remaining(&self) -> usize;
 
@@ -81,11 +82,13 @@ pub trait DataReader<BO: ByteOrder> {
 }
 
 /// A implementation of [`DataReader`] that reads from a slice of bytes.
+/// A `DataReader` backed by an immutable byte slice.
 pub struct ArrayDataReader<'a> {
     bytes: &'a [u8],
 }
 
 impl<'a> ArrayDataReader<'a> {
+    /// Creates a new reader over the given slice.
     pub fn new(bytes: &'a [u8]) -> ArrayDataReader<'a> {
         ArrayDataReader { bytes }
     }
@@ -118,6 +121,7 @@ impl<BO: ByteOrder> DataReader<BO> for ArrayDataReader<'_> {
     }
 }
 
+/// A byte writer for Janex binary structures parameterized by endianness.
 pub trait DataWriter<BO: ByteOrder> {
     fn write_all(&mut self, bytes: &[u8]);
 
@@ -174,12 +178,14 @@ pub trait DataWriter<BO: ByteOrder> {
     }
 }
 
+/// A `DataWriter` that appends encoded bytes into a `Vec<u8>`.
 pub struct VecDataWriter<BO: ByteOrder> {
     bytes: Vec<u8>,
     byte_order: PhantomData<BO>,
 }
 
 impl<BO: ByteOrder> VecDataWriter<BO> {
+    /// Creates an empty writer.
     pub fn new() -> Self {
         Self {
             bytes: Vec::new(),
@@ -187,6 +193,7 @@ impl<BO: ByteOrder> VecDataWriter<BO> {
         }
     }
 
+    /// Creates an empty writer with preallocated capacity.
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             bytes: Vec::with_capacity(capacity),
@@ -194,6 +201,7 @@ impl<BO: ByteOrder> VecDataWriter<BO> {
         }
     }
 
+    /// Returns the encoded bytes accumulated so far.
     pub fn into_inner(self) -> Vec<u8> {
         self.bytes
     }
