@@ -2095,6 +2095,7 @@ fn read_usize(value: u64) -> Result<usize, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::checksum::{Checksum, Sha256Checksum};
     use std::io::Cursor;
 
     #[test]
@@ -2134,12 +2135,12 @@ mod tests {
             minor_version: CURRENT_MINOR_VERSION,
             flags: 0,
             fields: vec![TaggedField::<u32>::new(0xfeed_beef, b"meta".to_vec())],
-            verification: VerificationInfo::Checksum(AnyChecksum::sha256([0; 32])),
+            verification: VerificationInfo::Checksum(Sha256Checksum::new([0; 32]).to_any()),
             sections: vec![
                 Section {
                     id: 0,
                     options: Vec::new(),
-                    checksum: AnyChecksum::sha256([0; 32]),
+                    checksum: Sha256Checksum::new([0; 32]).to_any(),
                     content: SectionContent::StringPool(StringPoolSection {
                         compression: CompressInfo::none(),
                         strings: string_pool,
@@ -2148,7 +2149,7 @@ mod tests {
                 Section {
                     id: 0,
                     options: Vec::new(),
-                    checksum: AnyChecksum::sha256([0; 32]),
+                    checksum: Sha256Checksum::new([0; 32]).to_any(),
                     content: SectionContent::RootConfigGroup(RootConfigGroupSection {
                         root_group: ConfigGroup {
                             fields: vec![
@@ -2164,7 +2165,7 @@ mod tests {
                 Section {
                     id: 0,
                     options: Vec::new(),
-                    checksum: AnyChecksum::sha256([0; 32]),
+                    checksum: Sha256Checksum::new([0; 32]).to_any(),
                     content: SectionContent::ResourceGroups(ResourceGroupsSection {
                         groups: vec![ResourceGroup {
                             name: "app".to_string(),
@@ -2196,7 +2197,7 @@ mod tests {
                 Section {
                     id: 0,
                     options: Vec::new(),
-                    checksum: AnyChecksum::sha256([0; 32]),
+                    checksum: Sha256Checksum::new([0; 32]).to_any(),
                     content: SectionContent::DataPool(DataPoolSection {
                         bytes: b"hello".to_vec().into_boxed_slice(),
                     }),

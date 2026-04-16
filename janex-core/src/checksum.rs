@@ -29,6 +29,13 @@ pub trait Checksum<const SIZE: usize>:
     fn as_bytes(&self) -> &[u8] {
         self.as_array()
     }
+
+    fn to_any(self) -> AnyChecksum
+    where
+        Self: Into<AnyChecksum>,
+    {
+        self.into()
+    }
 }
 
 /// Marker type for sections or resources without a checksum payload.
@@ -173,27 +180,6 @@ pub enum AnyChecksum {
 }
 
 impl AnyChecksum {
-    /// Returns a checksum descriptor with no checksum payload.
-    pub const fn none() -> Self {
-        Self::None(NoChecksum)
-    }
-
-    pub const fn xxh64(bytes: [u8; 8]) -> Self {
-        Self::XXH64(Xxh64Checksum::new(bytes))
-    }
-
-    pub const fn sha256(bytes: [u8; 32]) -> Self {
-        Self::SHA256(Sha256Checksum::new(bytes))
-    }
-
-    pub const fn sha512(bytes: [u8; 64]) -> Self {
-        Self::SHA512(Sha512Checksum::new(bytes))
-    }
-
-    pub const fn sm3(bytes: [u8; 32]) -> Self {
-        Self::SM3(Sm3Checksum::new(bytes))
-    }
-
     /// Returns the raw Janex algorithm identifier used by the binary format.
     pub const fn algorithm_id(&self) -> u16 {
         match self {
@@ -245,7 +231,7 @@ impl AnyChecksum {
 
 impl Default for AnyChecksum {
     fn default() -> Self {
-        Self::none()
+        Self::None(NoChecksum)
     }
 }
 
