@@ -430,7 +430,7 @@ struct SectionInfo {
     id: vuint,
     
     /// Options related to the section.
-    options: Vec<TaggedPayload<u32>,
+    options: Vec<TaggedPayload<u32>>,
     
     /// The length in bytes of the section content.
     length: vuint,
