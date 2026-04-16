@@ -43,42 +43,49 @@ impl Checksum {
 
     /// Parses a checksum from its raw algorithm tag and payload bytes.
     pub fn from_raw(algorithm: u16, checksum: &[u8]) -> Result<Self, Error> {
-        let invalid_length = || {
-            Err(Error::InvalidValue(
-                "checksum payload length does not match its algorithm",
-            ))
-        };
+        let checksum_length = checksum.len() as u64;
 
         match algorithm {
             0 => {
                 if checksum.is_empty() {
                     Ok(Checksum::None)
                 } else {
-                    invalid_length()
+                    Err(Error::InvalidChecksumLength {
+                        expected: 0,
+                        actual: checksum_length,
+                    })
                 }
             }
             0x0101 => {
-                let checksum = <[u8; 8]>::try_from(checksum).map_err(|_| {
-                    Error::InvalidValue("checksum payload length does not match its algorithm")
-                })?;
+                let checksum =
+                    <[u8; 8]>::try_from(checksum).map_err(|_| Error::InvalidChecksumLength {
+                        expected: 8,
+                        actual: checksum_length,
+                    })?;
                 Ok(Checksum::XXH64(checksum))
             }
             0x8101 => {
-                let checksum = <[u8; 32]>::try_from(checksum).map_err(|_| {
-                    Error::InvalidValue("checksum payload length does not match its algorithm")
-                })?;
+                let checksum =
+                    <[u8; 32]>::try_from(checksum).map_err(|_| Error::InvalidChecksumLength {
+                        expected: 32,
+                        actual: checksum_length,
+                    })?;
                 Ok(Checksum::SHA256(checksum))
             }
             0x8102 => {
-                let checksum = <[u8; 64]>::try_from(checksum).map_err(|_| {
-                    Error::InvalidValue("checksum payload length does not match its algorithm")
-                })?;
+                let checksum =
+                    <[u8; 64]>::try_from(checksum).map_err(|_| Error::InvalidChecksumLength {
+                        expected: 64,
+                        actual: checksum_length,
+                    })?;
                 Ok(Checksum::SHA512(checksum))
             }
             0x8301 => {
-                let checksum = <[u8; 32]>::try_from(checksum).map_err(|_| {
-                    Error::InvalidValue("checksum payload length does not match its algorithm")
-                })?;
+                let checksum =
+                    <[u8; 32]>::try_from(checksum).map_err(|_| Error::InvalidChecksumLength {
+                        expected: 32,
+                        actual: checksum_length,
+                    })?;
                 Ok(Checksum::SM3(checksum))
             }
             _ => Err(Error::UnknownEnumValue {

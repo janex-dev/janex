@@ -14,6 +14,7 @@ pub enum Error {
     UnknownConstantPoolInfo { tag: u8 },
     UnknownEnumValue { name: &'static str, value: u64 },
     InvalidValue(&'static str),
+    InvalidChecksumLength { expected: u64, actual: u64 },
     InvalidSectionLayout(String),
     InvalidReference(String),
     VerificationFailed(String),
@@ -41,6 +42,7 @@ impl Display for Error {
                 write!(f, "unknown {name} value: 0x{value:x}")
             }
             Error::InvalidValue(message) => write!(f, "invalid value: {message}"),
+            Error::InvalidChecksumLength { expected, actual } => write!(f, "invalid magic number: expected {expected}, got 0x{actual}"),
             Error::InvalidSectionLayout(message) => write!(f, "invalid section layout: {message}"),
             Error::InvalidReference(message) => write!(f, "invalid reference: {message}"),
             Error::VerificationFailed(message) => write!(f, "verification failed: {message}"),
