@@ -6,6 +6,5 @@ pub mod classfile;
 pub mod error;
 pub mod io;
 pub mod janex;
-pub mod packer;
 pub mod platform;
 pub mod string_pool;
