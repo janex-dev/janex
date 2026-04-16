@@ -209,7 +209,7 @@ struct CompressInfo {
 The supported compression methods are:
 
 ```rust
-#[repr(vuint)]
+#[repr(u8)]
 enum CompressMethod {
     /// No compression. The data is stored as-is.
     NONE = 0,
