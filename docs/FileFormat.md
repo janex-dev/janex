@@ -168,8 +168,8 @@ struct MyStruct {
 
 ### Timestamp
 
-Janex uses a 96-bit high-precision timestamp capable of representing nanosecond-level accuracy.
-The timestamp is measured relative to the Unix epoch (`1970-01-01T00:00:00Z`):
+Janex uses a 96-bit high-precision timestamp, which can represent times approximately 292.2 billion years
+before or after the Unix epoch (`1970-01-01T00:00:00Z`), with nanosecond precision.
 
 ```rust
 struct Timestamp {
@@ -334,6 +334,11 @@ enum ChecksumAlgorithm {
     ///
     /// The elements count of the `checksum` field is `64`.
     SHA512 = 0x8102,
+    
+    /// SM3 checksum.
+    ///
+    /// The elements count of the `checksum` field is `16`.
+    SM3 = 0x8301,
 }
 ```
 
