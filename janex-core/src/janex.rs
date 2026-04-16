@@ -8,6 +8,7 @@ use crate::string_pool::StringPool;
 use sha2::{Digest, Sha256, Sha512};
 use sm3::Sm3;
 use std::collections::HashSet;
+use std::io::{Read, Seek, SeekFrom};
 use xxhash_rust::xxh64::xxh64;
 
 const DEFAULT_MAVEN_REPOSITORY: &str = "https://repo1.maven.org/maven2";
@@ -272,6 +273,47 @@ pub enum SectionType {
     StringPool = 0x004c_4f4f_5052_5453,
 }
 
+/// The eagerly loaded metadata of a Janex file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JanexMetadata {
+    /// The Janex file-format major version.
+    pub major_version: u32,
+    /// The Janex file-format minor version.
+    pub minor_version: u32,
+    /// Reserved file-level flags.
+    pub flags: u64,
+    /// Opaque metadata fields reserved for forward-compatible extensions.
+    pub fields: Vec<TaggedField<u32>>,
+    /// Integrity information for the metadata section itself.
+    pub verification: VerificationInfo,
+    /// Indexed metadata for each non-metadata section stored in the file body.
+    pub sections: Vec<SectionMetadata>,
+}
+
+/// The file offset and metadata of a single section.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SectionMetadata {
+    /// The section type tag.
+    pub section_type: SectionType,
+    /// The section identifier, unique within its section type.
+    pub id: u64,
+    /// Section-scoped extension fields.
+    pub options: Vec<TaggedField<u32>>,
+    /// The encoded section length in bytes.
+    pub length: u64,
+    /// The checksum policy for the encoded section payload.
+    pub checksum: Checksum,
+    /// Absolute file offset of the section payload, including its section magic when present.
+    pub offset: u64,
+}
+
+/// A file-backed Janex reader that keeps only `FileMetadata` in memory.
+#[derive(Debug)]
+pub struct JanexArchive<R> {
+    reader: R,
+    metadata: JanexMetadata,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SectionInfoRecord {
     section_type: SectionType,
@@ -311,11 +353,11 @@ impl JanexFile {
         }
     }
 
-    /// Parses a Janex file from raw bytes.
+    /// Eagerly parses a Janex file from raw bytes.
     ///
     /// The reader locates the metadata footer from the end of the input, validates
     /// section checksums and then decodes each typed section into memory.
-    pub fn read(bytes: &[u8]) -> Result<Self, Error> {
+    pub fn read_all(bytes: &[u8]) -> Result<Self, Error> {
         if bytes.len() < 24 {
             return Err(Error::UnexpectedEndOfFile);
         }
@@ -570,6 +612,293 @@ impl JanexFile {
 impl Default for JanexFile {
     fn default() -> Self {
         Self::new(Vec::new())
+    }
+}
+
+impl JanexMetadata {
+    /// Validates metadata-level invariants that do not require decoding section bodies.
+    pub fn validate(&self) -> Result<(), Error> {
+        let mut root_config_group_count = 0usize;
+        let mut resource_groups_count = 0usize;
+        let mut string_pool_count = 0usize;
+        let mut data_pool_count = 0usize;
+        let mut seen_section_keys = HashSet::with_capacity(self.sections.len());
+        let mut string_pool_position = None;
+        let mut resource_groups_position = None;
+
+        for (idx, section) in self.sections.iter().enumerate() {
+            let key = (section.section_type as u64, section.id);
+            if !seen_section_keys.insert(key) {
+                return Err(Error::InvalidSectionLayout(format!(
+                    "duplicate section id {} for section type 0x{:016x}",
+                    section.id, section.section_type as u64
+                )));
+            }
+
+            match section.section_type {
+                SectionType::Padding => {}
+                SectionType::RootConfigGroup => {
+                    root_config_group_count += 1;
+                }
+                SectionType::ResourceGroups => {
+                    resource_groups_count += 1;
+                    resource_groups_position = Some(idx);
+                }
+                SectionType::StringPool => {
+                    string_pool_count += 1;
+                    string_pool_position = Some(idx);
+                }
+                SectionType::DataPool => {
+                    data_pool_count += 1;
+                }
+                SectionType::ExternalHeader
+                | SectionType::ExternalTail
+                | SectionType::FileMetadata
+                | SectionType::Attributes => {
+                    return Err(Error::UnsupportedFeature(
+                        "external header/tail, attributes, and nested metadata sections are not implemented",
+                    ));
+                }
+            }
+        }
+
+        if root_config_group_count > 1
+            || resource_groups_count > 1
+            || string_pool_count > 1
+            || data_pool_count > 1
+        {
+            return Err(Error::InvalidSectionLayout(
+                "Janex files may contain at most one root config group, resource groups, string pool, and data pool section".to_string(),
+            ));
+        }
+
+        if let (Some(string_pool_position), Some(resource_groups_position)) =
+            (string_pool_position, resource_groups_position)
+        {
+            if string_pool_position >= resource_groups_position {
+                return Err(Error::InvalidSectionLayout(
+                    "the string pool section must appear before the resource groups section"
+                        .to_string(),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl SectionMetadata {
+    /// Returns the exclusive end offset of the encoded section payload.
+    pub fn end_offset(&self) -> Result<u64, Error> {
+        self.offset
+            .checked_add(self.length)
+            .ok_or_else(|| Error::InvalidSectionLayout("section offset overflow".to_string()))
+    }
+}
+
+impl<R: Read + Seek> JanexArchive<R> {
+    /// Opens a Janex file from a seekable reader and loads only `FileMetadata`.
+    pub fn open(mut reader: R) -> Result<Self, Error> {
+        let file_size = reader.seek(SeekFrom::End(0))?;
+        if file_size < 24 {
+            return Err(Error::UnexpectedEndOfFile);
+        }
+
+        let footer_bytes = read_exact_at(&mut reader, file_size - 24, 24)?;
+        let mut footer_reader = ArrayDataReader::new(&footer_bytes);
+        let end_mark = read_le_u64(&mut footer_reader)?;
+        if end_mark != JanexFile::END_MARK {
+            return Err(Error::InvalidMagicNumber {
+                expected: JanexFile::END_MARK,
+                actual: end_mark,
+            });
+        }
+
+        let metadata_length = read_usize(read_le_u64(&mut footer_reader)?)?;
+        let file_length = read_le_u64(&mut footer_reader)?;
+        if file_length > file_size {
+            return Err(Error::InvalidSectionLayout(
+                "file_length is larger than the input size".to_string(),
+            ));
+        }
+
+        let file_start = file_size - file_length;
+        let file_end = file_start + file_length;
+        let metadata_start = file_end
+            .checked_sub(metadata_length as u64)
+            .ok_or_else(|| Error::InvalidSectionLayout("metadata_length underflow".to_string()))?;
+        if metadata_start < file_start + 8 {
+            return Err(Error::InvalidSectionLayout(
+                "metadata section overlaps the file header".to_string(),
+            ));
+        }
+
+        let file_header = read_exact_at(&mut reader, file_start, 8)?;
+        let mut file_reader = ArrayDataReader::new(&file_header);
+        let magic = read_le_u64(&mut file_reader)?;
+        if magic != JanexFile::MAGIC_NUMBER {
+            return Err(Error::InvalidMagicNumber {
+                expected: JanexFile::MAGIC_NUMBER,
+                actual: magic,
+            });
+        }
+
+        let metadata_bytes = read_exact_at(&mut reader, metadata_start, metadata_length)?;
+        let parsed_metadata = read_metadata(&metadata_bytes)?;
+        if parsed_metadata.metadata_length != metadata_length as u64 {
+            return Err(Error::InvalidSectionLayout(
+                "metadata_length does not match the footer".to_string(),
+            ));
+        }
+        if parsed_metadata.file_length != file_length {
+            return Err(Error::InvalidSectionLayout(
+                "file_length does not match the footer".to_string(),
+            ));
+        }
+        if parsed_metadata.major_version != CURRENT_MAJOR_VERSION
+            || parsed_metadata.minor_version != CURRENT_MINOR_VERSION
+        {
+            return Err(Error::UnsupportedFeature("unsupported Janex file version"));
+        }
+        parsed_metadata.verify(&metadata_bytes)?;
+
+        let mut next_section_offset = file_start + 8;
+        let mut sections = Vec::with_capacity(parsed_metadata.section_table.len());
+        for record in &parsed_metadata.section_table {
+            sections.push(SectionMetadata {
+                section_type: record.section_type,
+                id: record.id,
+                options: record.options.clone(),
+                length: record.length,
+                checksum: record.checksum.clone(),
+                offset: next_section_offset,
+            });
+            next_section_offset =
+                next_section_offset
+                    .checked_add(record.length)
+                    .ok_or_else(|| {
+                        Error::InvalidSectionLayout("section offset overflow".to_string())
+                    })?;
+        }
+
+        if next_section_offset != metadata_start {
+            return Err(Error::InvalidSectionLayout(
+                "section table does not consume the full file body".to_string(),
+            ));
+        }
+
+        let metadata = JanexMetadata {
+            major_version: parsed_metadata.major_version,
+            minor_version: parsed_metadata.minor_version,
+            flags: parsed_metadata.flags,
+            fields: parsed_metadata.fields,
+            verification: parsed_metadata.verification,
+            sections,
+        };
+        metadata.validate()?;
+
+        Ok(Self { reader, metadata })
+    }
+
+    /// Returns the eagerly loaded `FileMetadata` view.
+    pub fn metadata(&self) -> &JanexMetadata {
+        &self.metadata
+    }
+
+    /// Returns metadata for all indexed sections.
+    pub fn sections(&self) -> &[SectionMetadata] {
+        &self.metadata.sections
+    }
+
+    /// Returns metadata for a section by index.
+    pub fn section(&self, index: usize) -> Option<&SectionMetadata> {
+        self.metadata.sections.get(index)
+    }
+
+    /// Consumes the archive and returns the underlying reader.
+    pub fn into_inner(self) -> R {
+        self.reader
+    }
+
+    /// Reads and verifies the raw bytes of a section on demand.
+    pub fn read_section_bytes(&mut self, index: usize) -> Result<Box<[u8]>, Error> {
+        let section = self
+            .metadata
+            .sections
+            .get(index)
+            .ok_or_else(|| Error::InvalidReference(format!("invalid section index {index}")))?
+            .clone();
+        let bytes = read_exact_at(
+            &mut self.reader,
+            section.offset,
+            read_usize(section.length)?,
+        )?;
+        verify_checksum(&section.checksum, &bytes, "section")?;
+        Ok(bytes)
+    }
+
+    /// Reads, verifies and decodes a section on demand.
+    pub fn read_section(&mut self, index: usize) -> Result<SectionContent, Error> {
+        let section_type = self
+            .metadata
+            .sections
+            .get(index)
+            .ok_or_else(|| Error::InvalidReference(format!("invalid section index {index}")))?
+            .section_type;
+        let bytes = self.read_section_bytes(index)?;
+        parse_section_content(section_type, &bytes)
+    }
+
+    /// Reads the first `RootConfigGroup` section, if present.
+    pub fn read_root_config_group(&mut self) -> Result<Option<RootConfigGroupSection>, Error> {
+        match self.read_first_section_of_type(SectionType::RootConfigGroup)? {
+            Some(SectionContent::RootConfigGroup(section)) => Ok(Some(section)),
+            None => Ok(None),
+            Some(_) => unreachable!(),
+        }
+    }
+
+    /// Reads the first `ResourceGroups` section, if present.
+    pub fn read_resource_groups(&mut self) -> Result<Option<ResourceGroupsSection>, Error> {
+        match self.read_first_section_of_type(SectionType::ResourceGroups)? {
+            Some(SectionContent::ResourceGroups(section)) => Ok(Some(section)),
+            None => Ok(None),
+            Some(_) => unreachable!(),
+        }
+    }
+
+    /// Reads the first `StringPool` section, if present.
+    pub fn read_string_pool(&mut self) -> Result<Option<StringPoolSection>, Error> {
+        match self.read_first_section_of_type(SectionType::StringPool)? {
+            Some(SectionContent::StringPool(section)) => Ok(Some(section)),
+            None => Ok(None),
+            Some(_) => unreachable!(),
+        }
+    }
+
+    /// Reads the first `DataPool` section, if present.
+    pub fn read_data_pool(&mut self) -> Result<Option<DataPoolSection>, Error> {
+        match self.read_first_section_of_type(SectionType::DataPool)? {
+            Some(SectionContent::DataPool(section)) => Ok(Some(section)),
+            None => Ok(None),
+            Some(_) => unreachable!(),
+        }
+    }
+
+    fn read_first_section_of_type(
+        &mut self,
+        section_type: SectionType,
+    ) -> Result<Option<SectionContent>, Error> {
+        if let Some((index, _)) = self
+            .metadata
+            .sections
+            .iter()
+            .enumerate()
+            .find(|(_, section)| section.section_type == section_type)
+        {
+            return self.read_section(index).map(Some);
+        }
+        Ok(None)
     }
 }
 
@@ -1872,6 +2201,17 @@ fn validate_resource_path(path: &str) -> Result<(), Error> {
     Ok(())
 }
 
+fn read_exact_at<R: Read + Seek>(
+    reader: &mut R,
+    offset: u64,
+    size: usize,
+) -> Result<Box<[u8]>, Error> {
+    reader.seek(SeekFrom::Start(offset))?;
+    let mut bytes = vec![0u8; size];
+    reader.read_exact(&mut bytes)?;
+    Ok(bytes.into_boxed_slice())
+}
+
 fn ensure_fully_consumed(
     reader: &impl DataReader<LittleEndian>,
     context: &'static str,
@@ -1931,6 +2271,7 @@ fn read_usize(value: u64) -> Result<usize, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
 
     #[test]
     fn vuint_roundtrip() -> Result<(), Error> {
@@ -2055,9 +2396,25 @@ mod tests {
         };
 
         let encoded = file.write()?;
-        let decoded = JanexFile::read(&encoded)?;
-        assert_eq!(decoded.write()?, encoded);
-        assert_eq!(decoded.sections.len(), 4);
+
+        let mut archive = JanexArchive::open(Cursor::new(encoded.clone()))?;
+        assert_eq!(archive.sections().len(), 4);
+        assert_eq!(archive.metadata().major_version, CURRENT_MAJOR_VERSION);
+
+        let root_group = archive.read_root_config_group()?.unwrap();
+        assert_eq!(root_group.root_group.fields.len(), 3);
+
+        let string_pool = archive.read_string_pool()?.unwrap();
+        assert_eq!(string_pool.strings.get(file_index), Some("App.class"));
+
+        let resource_groups = archive.read_resource_groups()?.unwrap();
+        assert_eq!(resource_groups.groups.len(), 1);
+
+        let data_pool = archive.read_data_pool()?.unwrap();
+        assert_eq!(data_pool.bytes.as_ref(), b"hello");
+
+        let eager = JanexFile::read_all(&encoded)?;
+        assert_eq!(eager.write()?, encoded);
         Ok(())
     }
 
