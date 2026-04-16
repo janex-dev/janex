@@ -337,7 +337,7 @@ enum ChecksumAlgorithm {
     
     /// SM3 checksum.
     ///
-    /// The elements count of the `checksum` field is `16`.
+    /// The elements count of the `checksum` field is `32`.
     SM3 = 0x8301,
 }
 ```
