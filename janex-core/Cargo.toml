@@ -9,3 +9,7 @@ edition.workspace = true
 [dependencies]
 serde_json.workspace = true
 toml.workspace = true
+sha2 = "0.10.9"
+sm3 = "0.4.2"
+xxhash-rust = { version = "0.8.15", features = ["xxh64"] }
+zstd = "0.13.3"

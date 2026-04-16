@@ -31,7 +31,10 @@ impl ClassFile {
     pub fn parse(reader: &mut impl DataReader<BigEndian>) -> Result<ClassFile, Error> {
         let magic = reader.read_u32()?;
         if magic != Self::MAGIC_NUMBER {
-            return Err(Error::InvalidMagicNumber(magic));
+            return Err(Error::InvalidMagicNumber {
+                expected: Self::MAGIC_NUMBER as u64,
+                actual: magic as u64,
+            });
         }
 
         let minor_version = reader.read_u16()?;
@@ -319,7 +322,9 @@ impl ConstantPoolInfo {
         }
     }
 
-    pub fn read_constant(reader: &mut impl DataReader<BigEndian>) -> Result<ConstantPoolInfo, Error> {
+    pub fn read_constant(
+        reader: &mut impl DataReader<BigEndian>,
+    ) -> Result<ConstantPoolInfo, Error> {
         let tag = reader.read_u8()?;
         Ok(match tag {
             Self::TAG_Utf8 => {
