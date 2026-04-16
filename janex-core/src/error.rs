@@ -42,7 +42,10 @@ impl Display for Error {
                 write!(f, "unknown {name} value: 0x{value:x}")
             }
             Error::InvalidValue(message) => write!(f, "invalid value: {message}"),
-            Error::InvalidChecksumLength { expected, actual } => write!(f, "invalid magic number: expected {expected}, got 0x{actual}"),
+            Error::InvalidChecksumLength { expected, actual } => write!(
+                f,
+                "invalid checksum length: expected {expected}, got {actual}"
+            ),
             Error::InvalidSectionLayout(message) => write!(f, "invalid section layout: {message}"),
             Error::InvalidReference(message) => write!(f, "invalid reference: {message}"),
             Error::VerificationFailed(message) => write!(f, "verification failed: {message}"),

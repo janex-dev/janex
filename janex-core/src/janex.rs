@@ -1,15 +1,12 @@
 // Copyright (c) 2026 Glavo
 // SPDX-License-Identifier: MPL-2.0
 
-use crate::checksum::Checksum;
+use crate::checksum::AnyChecksum;
 use crate::error::Error;
 use crate::io::{ArrayDataReader, DataReader, DataWriter, VecDataWriter};
 use crate::string_pool::StringPool;
-use sha2::{Digest, Sha256, Sha512};
-use sm3::Sm3;
 use std::collections::HashSet;
 use std::io::{Read, Seek, SeekFrom};
-use xxhash_rust::xxh64::xxh64;
 
 const DEFAULT_MAVEN_REPOSITORY: &str = "https://repo1.maven.org/maven2";
 const CURRENT_MAJOR_VERSION: u32 = 0;
@@ -40,7 +37,7 @@ pub struct Section {
     /// Section-scoped extension fields.
     pub options: Vec<TaggedField<u32>>,
     /// The checksum policy for the encoded section payload.
-    pub checksum: Checksum,
+    pub checksum: AnyChecksum,
     /// The typed content carried by this section.
     pub content: SectionContent,
 }
@@ -140,7 +137,7 @@ pub enum ResourceGroupReference {
     Maven {
         gav: String,
         repository: String,
-        checksum: Checksum,
+        checksum: AnyChecksum,
     },
 }
 
@@ -191,7 +188,7 @@ pub enum ResourcePath {
 /// Optional metadata attached to a `Resource`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResourceField {
-    Checksum(Checksum),
+    Checksum(AnyChecksum),
     Comment(String),
     FileCreateTime(Timestamp),
     FileModifyTime(Timestamp),
@@ -237,7 +234,7 @@ pub enum CompressMethod {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VerificationInfo {
     None,
-    Checksum(Checksum),
+    Checksum(AnyChecksum),
 }
 
 /// Well-known Janex section type tags.
@@ -284,7 +281,7 @@ pub struct SectionMetadata {
     /// The encoded section length in bytes.
     pub length: u64,
     /// The checksum policy for the encoded section payload.
-    pub checksum: Checksum,
+    pub checksum: AnyChecksum,
     /// Absolute file offset of the section payload, including its section magic when present.
     pub offset: u64,
 }
@@ -302,7 +299,7 @@ struct SectionInfoRecord {
     id: u64,
     options: Vec<TaggedField<u32>>,
     length: u64,
-    checksum: Checksum,
+    checksum: AnyChecksum,
 }
 
 #[derive(Debug)]
@@ -411,7 +408,7 @@ impl JanexFile {
             sections.push(Section {
                 id: section_info.id,
                 options: section_info.options.clone(),
-                checksum: section_info.checksum.clone(),
+                checksum: section_info.checksum,
                 content,
             });
         }
@@ -564,13 +561,12 @@ impl JanexFile {
 
         if let (Some(string_pool_position), Some(resource_groups_position)) =
             (string_pool_position, resource_groups_position)
+            && string_pool_position >= resource_groups_position
         {
-            if string_pool_position >= resource_groups_position {
-                return Err(Error::InvalidSectionLayout(
-                    "the string pool section must appear before the resource groups section"
-                        .to_string(),
-                ));
-            }
+            return Err(Error::InvalidSectionLayout(
+                "the string pool section must appear before the resource groups section"
+                    .to_string(),
+            ));
         }
 
         for section in &self.sections {
@@ -656,13 +652,12 @@ impl JanexMetadata {
 
         if let (Some(string_pool_position), Some(resource_groups_position)) =
             (string_pool_position, resource_groups_position)
+            && string_pool_position >= resource_groups_position
         {
-            if string_pool_position >= resource_groups_position {
-                return Err(Error::InvalidSectionLayout(
-                    "the string pool section must appear before the resource groups section"
-                        .to_string(),
-                ));
-            }
+            return Err(Error::InvalidSectionLayout(
+                "the string pool section must appear before the resource groups section"
+                    .to_string(),
+            ));
         }
 
         Ok(())
@@ -752,7 +747,7 @@ impl<R: Read + Seek> JanexArchive<R> {
                 id: record.id,
                 options: record.options.clone(),
                 length: record.length,
-                checksum: record.checksum.clone(),
+                checksum: record.checksum,
                 offset: next_section_offset,
             });
             next_section_offset =
@@ -1923,7 +1918,7 @@ fn write_compressed_blob(
     Ok(())
 }
 
-fn read_checksum<R: DataReader>(reader: &mut R) -> Result<Checksum, Error> {
+fn read_checksum<R: DataReader>(reader: &mut R) -> Result<AnyChecksum, Error> {
     let algorithm = reader.read_u16_le()?;
     let reserved = reader.read_u8()?;
     if reserved != 0 {
@@ -1931,17 +1926,17 @@ fn read_checksum<R: DataReader>(reader: &mut R) -> Result<Checksum, Error> {
     }
 
     let checksum = reader.read_bytes()?;
-    Checksum::from_raw(algorithm, checksum.as_ref())
+    AnyChecksum::from_raw(algorithm, checksum.as_ref())
 }
 
-fn write_checksum(writer: &mut VecDataWriter, checksum: &Checksum) -> Result<(), Error> {
+fn write_checksum(writer: &mut VecDataWriter, checksum: &AnyChecksum) -> Result<(), Error> {
     writer.write_u16_le(checksum.algorithm_id());
     writer.write_u8(0);
     writer.write_bytes(checksum.as_bytes());
     Ok(())
 }
 
-fn verify_checksum(checksum: &Checksum, bytes: &[u8], name: &'static str) -> Result<(), Error> {
+fn verify_checksum(checksum: &AnyChecksum, bytes: &[u8], name: &'static str) -> Result<(), Error> {
     let expected = compute_checksum(checksum, bytes);
     if &expected != checksum {
         return Err(Error::VerificationFailed(format!(
@@ -1951,14 +1946,8 @@ fn verify_checksum(checksum: &Checksum, bytes: &[u8], name: &'static str) -> Res
     Ok(())
 }
 
-fn compute_checksum(template: &Checksum, bytes: &[u8]) -> Checksum {
-    match template {
-        Checksum::None => Checksum::None,
-        Checksum::XXH64(_) => Checksum::XXH64(xxh64(bytes, 0).to_le_bytes()),
-        Checksum::SHA256(_) => Checksum::SHA256(Sha256::digest(bytes).into()),
-        Checksum::SHA512(_) => Checksum::SHA512(Sha512::digest(bytes).into()),
-        Checksum::SM3(_) => Checksum::SM3(Sm3::digest(bytes).into()),
-    }
+fn compute_checksum(template: &AnyChecksum, bytes: &[u8]) -> AnyChecksum {
+    template.compute_like(bytes)
 }
 
 fn compress_bytes(info: &CompressInfo, data: &[u8]) -> Result<Vec<u8>, Error> {
@@ -2145,12 +2134,12 @@ mod tests {
             minor_version: CURRENT_MINOR_VERSION,
             flags: 0,
             fields: vec![TaggedField::<u32>::new(0xfeed_beef, b"meta".to_vec())],
-            verification: VerificationInfo::Checksum(Checksum::SHA256([0; 32])),
+            verification: VerificationInfo::Checksum(AnyChecksum::sha256([0; 32])),
             sections: vec![
                 Section {
                     id: 0,
                     options: Vec::new(),
-                    checksum: Checksum::SHA256([0; 32]),
+                    checksum: AnyChecksum::sha256([0; 32]),
                     content: SectionContent::StringPool(StringPoolSection {
                         compression: CompressInfo::none(),
                         strings: string_pool,
@@ -2159,7 +2148,7 @@ mod tests {
                 Section {
                     id: 0,
                     options: Vec::new(),
-                    checksum: Checksum::SHA256([0; 32]),
+                    checksum: AnyChecksum::sha256([0; 32]),
                     content: SectionContent::RootConfigGroup(RootConfigGroupSection {
                         root_group: ConfigGroup {
                             fields: vec![
@@ -2175,7 +2164,7 @@ mod tests {
                 Section {
                     id: 0,
                     options: Vec::new(),
-                    checksum: Checksum::SHA256([0; 32]),
+                    checksum: AnyChecksum::sha256([0; 32]),
                     content: SectionContent::ResourceGroups(ResourceGroupsSection {
                         groups: vec![ResourceGroup {
                             name: "app".to_string(),
@@ -2207,7 +2196,7 @@ mod tests {
                 Section {
                     id: 0,
                     options: Vec::new(),
-                    checksum: Checksum::SHA256([0; 32]),
+                    checksum: AnyChecksum::sha256([0; 32]),
                     content: SectionContent::DataPool(DataPoolSection {
                         bytes: b"hello".to_vec().into_boxed_slice(),
                     }),
