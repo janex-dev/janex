@@ -671,8 +671,8 @@ enum ConfigField {
         /// The number of bytes of the items.
         payload_bytes: vuint,
 
-        /// The resource group references for Java agent JARs, in the order they are attached.
-        items: Vec<ResourceGroupReference>,
+        /// The agents.
+        items: Vec<JavaAgent>,
     },
 
     /// A list of additional JVM options to pass when launching the application.
@@ -705,7 +705,7 @@ enum ConfigField {
 }
 ```
 
-#### `ResourceGroupReference`
+#### `ResourceGroupReference` Structure
 
 A `ResourceGroupReference` identifies a resource group to be placed on the class path, module path,
 or agent list.
@@ -749,6 +749,20 @@ enum ResourceGroupReference {
         /// The expected checksum of the artifact JAR, used to verify the integrity of the download.
         checksum: Checksum,
     }
+}
+```
+
+#### `JavaAgent` Structure
+
+`JavaAgent` represents a Java Agent JAR and its option.
+
+```rust
+struct JavaAgent {
+    /// The resource group reference for the Java agent JAR.
+    reference: ResourceGroupReference,
+    
+    /// The agent option string passed to the JVM via `-javaagent`.
+    option: String,
 }
 ```
 
