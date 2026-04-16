@@ -868,6 +868,8 @@ enum Resource {
 `ResourcePath` is composed of several parts separated by `/`. The `/` cannot be the first or last character, and cannot be empty.
 Each part of `ResourcePath` cannot be empty, cannot be `.` or `..`, and cannot contain `/`.
 
+In each `ResourceGroup`, `ResourcePath` must be unique.
+
 `ResourcePath` using one of two encodings selected by the value of `length`:
 
 - **`StringBody`** (when `length != 0`): the full path string is stored inline, with `length` giving
@@ -914,7 +916,7 @@ The supported fields are:
 ```rust
 #[repr(TaggedPayload<u8>)]
 enum ResourceField {
-    /// XXH64 checksum of the uncompressed resource content.
+    /// Checksum of the uncompressed resource content.
     ///
     /// Can be used by the extractor to verify data integrity after decompression.
     Checksum {
@@ -922,12 +924,10 @@ enum ResourceField {
         id: u8, // 0x01
 
         /// The number of bytes of the checksum payload.
-        /// 
-        /// Always `8` (the size of the XXH64 checksum).
         payload_bytes: vuint,
 
-        /// The XXH64 hash of the uncompressed resource content.
-        checksum: u64,
+        /// The checksum of the uncompressed resource content.
+        checksum: Checksum,
     },
 
     Comment {
@@ -948,6 +948,7 @@ enum ResourceField {
         /// Always `12` (the size of the `Timestamp` structure).
         payload_bytes: vuint,
 
+        /// The file creation timestamp.
         timestamp: Timestamp,
     },
 
@@ -961,6 +962,7 @@ enum ResourceField {
         /// Always `12` (the size of the `Timestamp` structure).
         payload_bytes: vuint,
 
+        /// The file last-modification timestamp.
         timestamp: Timestamp,
     },
 
@@ -974,6 +976,7 @@ enum ResourceField {
         /// Always `12` (the size of the `Timestamp` structure).
         payload_bytes: vuint,
 
+        /// The file last-access timestamp.
         timestamp: Timestamp,
     },
 
