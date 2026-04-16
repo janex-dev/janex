@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Glavo
 // SPDX-License-Identifier: MPL-2.0
 
+use crate::checksum::Checksum;
 use crate::error::Error;
 use crate::io::{ArrayDataReader, DataReader, DataWriter, VecDataWriter};
 use crate::string_pool::StringPool;
@@ -9,7 +10,6 @@ use sm3::Sm3;
 use std::collections::HashSet;
 use std::io::{Read, Seek, SeekFrom};
 use xxhash_rust::xxh64::xxh64;
-use crate::checksum::{Checksum, ChecksumAlgorithm};
 
 const DEFAULT_MAVEN_REPOSITORY: &str = "https://repo1.maven.org/maven2";
 const CURRENT_MAJOR_VERSION: u32 = 0;
@@ -446,7 +446,7 @@ impl JanexFile {
         for section in &self.sections {
             // Section metadata depends on the final encoded byte length and checksum.
             let bytes = encode_section_content(&section.content)?;
-            let checksum = compute_checksum(section.checksum.algorithm, &bytes)?;
+            let checksum = compute_checksum(&section.checksum, &bytes);
             section_infos.push(SectionInfoRecord {
                 section_type: section.content.section_type(),
                 id: section.id,
@@ -473,7 +473,7 @@ impl JanexFile {
         let verification = match &self.verification {
             VerificationInfo::None => VerificationInfo::None,
             VerificationInfo::Checksum(checksum) => {
-                VerificationInfo::Checksum(compute_checksum(checksum.algorithm, &metadata_prefix)?)
+                VerificationInfo::Checksum(compute_checksum(checksum, &metadata_prefix))
             }
         };
         let verification_bytes = encode_verification_info(&verification)?;
@@ -1135,12 +1135,11 @@ impl ResourceGroupReference {
             ResourceGroupReference::Maven {
                 gav,
                 repository,
-                checksum,
+                checksum: _,
             } => {
                 if gav.is_empty() || repository.is_empty() {
                     return Err(Error::InvalidValue("Maven references must not be empty"));
                 }
-                validate_checksum_shape(checksum)?;
             }
         }
         Ok(())
@@ -1925,40 +1924,26 @@ fn write_compressed_blob(
 }
 
 fn read_checksum<R: DataReader>(reader: &mut R) -> Result<Checksum, Error> {
-    let algorithm = ChecksumAlgorithm::try_from(reader.read_u16_le()?)?;
+    let algorithm = reader.read_u16_le()?;
     let reserved = reader.read_u8()?;
     if reserved != 0 {
         return Err(Error::InvalidValue("checksum reserved byte must be zero"));
     }
 
-    let checksum = Checksum {
-        algorithm,
-        checksum: reader.read_bytes()?,
-    };
-    validate_checksum_shape(&checksum)?;
-    Ok(checksum)
+    let checksum = reader.read_bytes()?;
+    Checksum::from_raw(algorithm, checksum.as_ref())
 }
 
 fn write_checksum(writer: &mut VecDataWriter, checksum: &Checksum) -> Result<(), Error> {
-    validate_checksum_shape(checksum)?;
-    writer.write_u16_le(checksum.algorithm as u16);
+    writer.write_u16_le(checksum.algorithm_id());
     writer.write_u8(0);
-    writer.write_bytes(&checksum.checksum);
-    Ok(())
-}
-
-fn validate_checksum_shape(checksum: &Checksum) -> Result<(), Error> {
-    if checksum.checksum.len() != checksum.algorithm.checksum_length() {
-        return Err(Error::InvalidValue(
-            "checksum payload length does not match its algorithm",
-        ));
-    }
+    writer.write_bytes(checksum.as_bytes());
     Ok(())
 }
 
 fn verify_checksum(checksum: &Checksum, bytes: &[u8], name: &'static str) -> Result<(), Error> {
-    let expected = compute_checksum(checksum.algorithm, bytes)?;
-    if expected.checksum != checksum.checksum {
+    let expected = compute_checksum(checksum, bytes);
+    if &expected != checksum {
         return Err(Error::VerificationFailed(format!(
             "{name} checksum mismatch"
         )));
@@ -1966,18 +1951,14 @@ fn verify_checksum(checksum: &Checksum, bytes: &[u8], name: &'static str) -> Res
     Ok(())
 }
 
-fn compute_checksum(algorithm: ChecksumAlgorithm, bytes: &[u8]) -> Result<Checksum, Error> {
-    let checksum = match algorithm {
-        ChecksumAlgorithm::None => Vec::new(),
-        ChecksumAlgorithm::XXH64 => xxh64(bytes, 0).to_le_bytes().to_vec(),
-        ChecksumAlgorithm::SHA256 => Sha256::digest(bytes).to_vec(),
-        ChecksumAlgorithm::SHA512 => Sha512::digest(bytes).to_vec(),
-        ChecksumAlgorithm::SM3 => Sm3::digest(bytes).to_vec(),
-    };
-    Ok(Checksum {
-        algorithm,
-        checksum: checksum.into_boxed_slice(),
-    })
+fn compute_checksum(template: &Checksum, bytes: &[u8]) -> Checksum {
+    match template {
+        Checksum::None => Checksum::None,
+        Checksum::XXH64(_) => Checksum::XXH64(xxh64(bytes, 0).to_le_bytes()),
+        Checksum::SHA256(_) => Checksum::SHA256(Sha256::digest(bytes).into()),
+        Checksum::SHA512(_) => Checksum::SHA512(Sha512::digest(bytes).into()),
+        Checksum::SM3(_) => Checksum::SM3(Sm3::digest(bytes).into()),
+    }
 }
 
 fn compress_bytes(info: &CompressInfo, data: &[u8]) -> Result<Vec<u8>, Error> {
@@ -2164,18 +2145,12 @@ mod tests {
             minor_version: CURRENT_MINOR_VERSION,
             flags: 0,
             fields: vec![TaggedField::<u32>::new(0xfeed_beef, b"meta".to_vec())],
-            verification: VerificationInfo::Checksum(Checksum {
-                algorithm: ChecksumAlgorithm::SHA256,
-                checksum: Box::new([]),
-            }),
+            verification: VerificationInfo::Checksum(Checksum::SHA256([0; 32])),
             sections: vec![
                 Section {
                     id: 0,
                     options: Vec::new(),
-                    checksum: Checksum {
-                        algorithm: ChecksumAlgorithm::SHA256,
-                        checksum: Box::new([]),
-                    },
+                    checksum: Checksum::SHA256([0; 32]),
                     content: SectionContent::StringPool(StringPoolSection {
                         compression: CompressInfo::none(),
                         strings: string_pool,
@@ -2184,10 +2159,7 @@ mod tests {
                 Section {
                     id: 0,
                     options: Vec::new(),
-                    checksum: Checksum {
-                        algorithm: ChecksumAlgorithm::SHA256,
-                        checksum: Box::new([]),
-                    },
+                    checksum: Checksum::SHA256([0; 32]),
                     content: SectionContent::RootConfigGroup(RootConfigGroupSection {
                         root_group: ConfigGroup {
                             fields: vec![
@@ -2203,10 +2175,7 @@ mod tests {
                 Section {
                     id: 0,
                     options: Vec::new(),
-                    checksum: Checksum {
-                        algorithm: ChecksumAlgorithm::SHA256,
-                        checksum: Box::new([]),
-                    },
+                    checksum: Checksum::SHA256([0; 32]),
                     content: SectionContent::ResourceGroups(ResourceGroupsSection {
                         groups: vec![ResourceGroup {
                             name: "app".to_string(),
@@ -2238,10 +2207,7 @@ mod tests {
                 Section {
                     id: 0,
                     options: Vec::new(),
-                    checksum: Checksum {
-                        algorithm: ChecksumAlgorithm::SHA256,
-                        checksum: Box::new([]),
-                    },
+                    checksum: Checksum::SHA256([0; 32]),
                     content: SectionContent::DataPool(DataPoolSection {
                         bytes: b"hello".to_vec().into_boxed_slice(),
                     }),

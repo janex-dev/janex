@@ -5,17 +5,86 @@ use crate::error::Error;
 
 /// A checksum payload stored alongside a section or resource.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Checksum {
-    pub algorithm: ChecksumAlgorithm,
-    pub checksum: Box<[u8]>,
+pub enum Checksum {
+    None,
+    XXH64([u8; 8]),
+    SHA256([u8; 32]),
+    SHA512([u8; 64]),
+    SM3([u8; 32]),
 }
 
 impl Checksum {
     /// Returns a checksum descriptor with no checksum payload.
-    pub fn none() -> Self {
-        Self {
-            algorithm: ChecksumAlgorithm::None,
-            checksum: Box::new([]),
+    pub const fn none() -> Self {
+        Self::None
+    }
+
+    /// Returns the raw Janex algorithm identifier used by the binary format.
+    pub const fn algorithm_id(&self) -> u16 {
+        match self {
+            Checksum::None => 0,
+            Checksum::XXH64(_) => 0x0101,
+            Checksum::SHA256(_) => 0x8101,
+            Checksum::SHA512(_) => 0x8102,
+            Checksum::SM3(_) => 0x8301,
+        }
+    }
+
+    /// Returns the checksum bytes without exposing format-specific tagging.
+    pub fn as_bytes(&self) -> &[u8] {
+        match self {
+            Checksum::None => &[],
+            Checksum::XXH64(checksum) => checksum,
+            Checksum::SHA256(checksum) => checksum,
+            Checksum::SHA512(checksum) => checksum,
+            Checksum::SM3(checksum) => checksum,
+        }
+    }
+
+    /// Parses a checksum from its raw algorithm tag and payload bytes.
+    pub fn from_raw(algorithm: u16, checksum: &[u8]) -> Result<Self, Error> {
+        let invalid_length = || {
+            Err(Error::InvalidValue(
+                "checksum payload length does not match its algorithm",
+            ))
+        };
+
+        match algorithm {
+            0 => {
+                if checksum.is_empty() {
+                    Ok(Checksum::None)
+                } else {
+                    invalid_length()
+                }
+            }
+            0x0101 => {
+                let checksum = <[u8; 8]>::try_from(checksum).map_err(|_| {
+                    Error::InvalidValue("checksum payload length does not match its algorithm")
+                })?;
+                Ok(Checksum::XXH64(checksum))
+            }
+            0x8101 => {
+                let checksum = <[u8; 32]>::try_from(checksum).map_err(|_| {
+                    Error::InvalidValue("checksum payload length does not match its algorithm")
+                })?;
+                Ok(Checksum::SHA256(checksum))
+            }
+            0x8102 => {
+                let checksum = <[u8; 64]>::try_from(checksum).map_err(|_| {
+                    Error::InvalidValue("checksum payload length does not match its algorithm")
+                })?;
+                Ok(Checksum::SHA512(checksum))
+            }
+            0x8301 => {
+                let checksum = <[u8; 32]>::try_from(checksum).map_err(|_| {
+                    Error::InvalidValue("checksum payload length does not match its algorithm")
+                })?;
+                Ok(Checksum::SM3(checksum))
+            }
+            _ => Err(Error::UnknownEnumValue {
+                name: "checksum algorithm",
+                value: algorithm as u64,
+            }),
         }
     }
 }
@@ -23,46 +92,5 @@ impl Checksum {
 impl Default for Checksum {
     fn default() -> Self {
         Self::none()
-    }
-}
-
-/// Supported checksum algorithms.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u16)]
-pub enum ChecksumAlgorithm {
-    None = 0,
-    XXH64 = 0x0101,
-    SHA256 = 0x8101,
-    SHA512 = 0x8102,
-    SM3 = 0x8301,
-}
-
-impl ChecksumAlgorithm {
-    pub const fn checksum_length(self) -> usize {
-        match self {
-            ChecksumAlgorithm::None => 0,
-            ChecksumAlgorithm::XXH64 => 8,
-            ChecksumAlgorithm::SHA256 => 32,
-            ChecksumAlgorithm::SHA512 => 64,
-            ChecksumAlgorithm::SM3 => 32,
-        }
-    }
-}
-
-impl TryFrom<u16> for ChecksumAlgorithm {
-    type Error = Error;
-
-    fn try_from(value: u16) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(ChecksumAlgorithm::None),
-            0x0101 => Ok(ChecksumAlgorithm::XXH64),
-            0x8101 => Ok(ChecksumAlgorithm::SHA256),
-            0x8102 => Ok(ChecksumAlgorithm::SHA512),
-            0x8301 => Ok(ChecksumAlgorithm::SM3),
-            _ => Err(Error::UnknownEnumValue {
-                name: "checksum algorithm",
-                value: value as u64,
-            }),
-        }
     }
 }
