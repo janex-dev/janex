@@ -292,23 +292,50 @@ the following modifications:
         }
         ```
 
+
 ### `Checksum`
 
 ```rust
-type Checksum = String;
+struct Checksum {
+    /// The checksum algorithm.
+    algorithm: ChecksumAlgorithm,
+
+    /// Reserved for future use.
+    /// 
+    /// Currently must be `0`.
+    reserved: u8,
+    
+    /// The checksum value.
+    checksum: Vec<u8>,
+}
 ```
 
-All `Checksum` values are either an empty string (representing no checksum)
-or in the form `<Algorithm>:<Checksum>` (e.g., `sha256:a13180315dfd3bff164967b64a726b98c69249970dab2f5a642c733582345885`).
+Currently supported checksum algorithms:
 
-Currently supported cryptographically secure hash algorithms:
+```rust
+#[repr(u16)]
+enum ChecksumAlgorithm {
+    /// No checksum.
+    /// 
+    /// The `checksum` field is empty.
+    NONE = 0,
+    
+    /// XXH64 checksum.
+    /// 
+    /// The elements count of the `checksum` field is `8`.
+    XXH64 = 0x0101,
+    
+    /// SHA-256 checksum.
+    /// 
+    /// The elements count of the `checksum` field is `32`.
+    SHA256 = 0x8101,
 
-- `sha256`: The SHA-256 hash algorithm.
-- `sha512`: The SHA-512 hash algorithm.
-
-Currently supported non-cryptographically secure hash algorithms (for integrity verification only):
-
-- `xxh64`: The [XXH64](https://github.com/Cyan4973/xxHash) hash algorithm.
+    /// SHA-512 checksum.
+    ///
+    /// The elements count of the `checksum` field is `64`.
+    SHA512 = 0x8102,
+}
+```
 
 ## Janex File Structure
 
@@ -322,6 +349,7 @@ struct JanexFile {
     /// Always `0x5050_4158_454e_414a` ("JANEXAPP").
     magic_number: u64, // 0x50504158454e414a  ("JANEXAPP")
 
+    /// The sections of the Janex file.
     sections: [Section; ...],
 }
 ```
@@ -372,7 +400,7 @@ struct FileMetadataSection {
     /// The length in bytes of the metadata section.
     metadata_length: u64,
 
-    /// The total length in bytes of the file.
+    /// The total length in bytes of the `JanexFile` structure.
     ///
     /// The reader uses this value together with the actual file size to determine
     /// the byte offset at which the Janex content begins.
@@ -397,7 +425,7 @@ struct SectionInfo {
     id: vuint,
     
     /// Options related to the section.
-    options: Vec<u8>,
+    options: Vec<TaggedPayload<u32>,
     
     /// The length in bytes of the section content.
     length: vuint,
