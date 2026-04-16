@@ -365,7 +365,7 @@ impl JanexFile {
         // Janex readers locate the metadata section by reading the fixed-size footer first.
         let footer_offset = bytes.len() - 24;
         let mut footer_reader = ArrayDataReader::new(&bytes[footer_offset..]);
-        let end_mark = read_le_u64(&mut footer_reader)?;
+        let end_mark = DataReader::<LittleEndian>::read_u64(&mut footer_reader)?;
         if end_mark != Self::END_MARK {
             return Err(Error::InvalidMagicNumber {
                 expected: Self::END_MARK,
@@ -373,8 +373,9 @@ impl JanexFile {
             });
         }
 
-        let metadata_length = read_usize(read_le_u64(&mut footer_reader)?)?;
-        let file_length = read_usize(read_le_u64(&mut footer_reader)?)?;
+        let metadata_length =
+            read_usize(DataReader::<LittleEndian>::read_u64(&mut footer_reader)?)?;
+        let file_length = read_usize(DataReader::<LittleEndian>::read_u64(&mut footer_reader)?)?;
         if file_length > bytes.len() {
             return Err(Error::InvalidSectionLayout(
                 "file_length is larger than the input size".to_string(),
@@ -393,7 +394,7 @@ impl JanexFile {
         }
 
         let mut file_reader = ArrayDataReader::new(&bytes[file_start..metadata_start]);
-        let magic = read_le_u64(&mut file_reader)?;
+        let magic = DataReader::<LittleEndian>::read_u64(&mut file_reader)?;
         if magic != Self::MAGIC_NUMBER {
             return Err(Error::InvalidMagicNumber {
                 expected: Self::MAGIC_NUMBER,
@@ -422,8 +423,10 @@ impl JanexFile {
 
         let mut sections = Vec::with_capacity(parsed_metadata.section_table.len());
         for section_info in &parsed_metadata.section_table {
-            let section_bytes =
-                read_le_u8_array(&mut file_reader, read_usize(section_info.length)?)?;
+            let section_bytes = DataReader::<LittleEndian>::read_u8_array(
+                &mut file_reader,
+                read_usize(section_info.length)?,
+            )?;
             verify_checksum(&section_info.checksum, section_bytes.as_ref(), "section")?;
             let content = parse_section_content(section_info.section_type, section_bytes.as_ref())?;
             sections.push(Section {
@@ -434,7 +437,7 @@ impl JanexFile {
             });
         }
 
-        if remaining_le(&file_reader) != 0 {
+        if DataReader::<LittleEndian>::remaining(&file_reader) != 0 {
             return Err(Error::InvalidSectionLayout(
                 "section table does not consume the full file body".to_string(),
             ));
@@ -706,7 +709,7 @@ impl<R: Read + Seek> JanexArchive<R> {
 
         let footer_bytes = read_exact_at(&mut reader, file_size - 24, 24)?;
         let mut footer_reader = ArrayDataReader::new(&footer_bytes);
-        let end_mark = read_le_u64(&mut footer_reader)?;
+        let end_mark = DataReader::<LittleEndian>::read_u64(&mut footer_reader)?;
         if end_mark != JanexFile::END_MARK {
             return Err(Error::InvalidMagicNumber {
                 expected: JanexFile::END_MARK,
@@ -714,8 +717,9 @@ impl<R: Read + Seek> JanexArchive<R> {
             });
         }
 
-        let metadata_length = read_usize(read_le_u64(&mut footer_reader)?)?;
-        let file_length = read_le_u64(&mut footer_reader)?;
+        let metadata_length =
+            read_usize(DataReader::<LittleEndian>::read_u64(&mut footer_reader)?)?;
+        let file_length = DataReader::<LittleEndian>::read_u64(&mut footer_reader)?;
         if file_length > file_size {
             return Err(Error::InvalidSectionLayout(
                 "file_length is larger than the input size".to_string(),
@@ -735,7 +739,7 @@ impl<R: Read + Seek> JanexArchive<R> {
 
         let file_header = read_exact_at(&mut reader, file_start, 8)?;
         let mut file_reader = ArrayDataReader::new(&file_header);
-        let magic = read_le_u64(&mut file_reader)?;
+        let magic = DataReader::<LittleEndian>::read_u64(&mut file_reader)?;
         if magic != JanexFile::MAGIC_NUMBER {
             return Err(Error::InvalidMagicNumber {
                 expected: JanexFile::MAGIC_NUMBER,
@@ -1267,7 +1271,7 @@ impl ParsedMetadata {
 
 fn read_metadata(bytes: &[u8]) -> Result<ParsedMetadata, Error> {
     let mut reader = ArrayDataReader::new(bytes);
-    let magic = read_le_u64(&mut reader)?;
+    let magic = DataReader::<LittleEndian>::read_u64(&mut reader)?;
     if magic != JanexFile::FILE_METADATA_MAGIC_NUMBER {
         return Err(Error::InvalidMagicNumber {
             expected: JanexFile::FILE_METADATA_MAGIC_NUMBER,
@@ -1275,14 +1279,14 @@ fn read_metadata(bytes: &[u8]) -> Result<ParsedMetadata, Error> {
         });
     }
 
-    let major_version = read_le_u32(&mut reader)?;
-    let minor_version = read_le_u32(&mut reader)?;
-    let flags = read_le_u64(&mut reader)?;
+    let major_version = DataReader::<LittleEndian>::read_u32(&mut reader)?;
+    let minor_version = DataReader::<LittleEndian>::read_u32(&mut reader)?;
+    let flags = DataReader::<LittleEndian>::read_u64(&mut reader)?;
     let section_table = read_len_prefixed_vec(&mut reader, read_section_info_record)?;
     let fields = read_len_prefixed_vec(&mut reader, read_tagged_field_u32)?;
-    let verification_offset = bytes.len() - remaining_le(&reader);
+    let verification_offset = bytes.len() - DataReader::<LittleEndian>::remaining(&reader);
     let verification = read_verification_info(&mut reader)?;
-    let end_mark = read_le_u64(&mut reader)?;
+    let end_mark = DataReader::<LittleEndian>::read_u64(&mut reader)?;
     if end_mark != JanexFile::END_MARK {
         return Err(Error::InvalidMagicNumber {
             expected: JanexFile::END_MARK,
@@ -1290,9 +1294,9 @@ fn read_metadata(bytes: &[u8]) -> Result<ParsedMetadata, Error> {
         });
     }
 
-    let metadata_length = read_le_u64(&mut reader)?;
-    let file_length = read_le_u64(&mut reader)?;
-    if remaining_le(&reader) != 0 {
+    let metadata_length = DataReader::<LittleEndian>::read_u64(&mut reader)?;
+    let file_length = DataReader::<LittleEndian>::read_u64(&mut reader)?;
+    if DataReader::<LittleEndian>::remaining(&reader) != 0 {
         return Err(Error::InvalidSectionLayout(
             "metadata has trailing bytes".to_string(),
         ));
@@ -1365,7 +1369,7 @@ fn encode_section_content(section: &SectionContent) -> Result<Vec<u8>, Error> {
 
 fn parse_root_config_group_section(bytes: &[u8]) -> Result<RootConfigGroupSection, Error> {
     let mut reader = ArrayDataReader::new(bytes);
-    let magic = read_le_u64(&mut reader)?;
+    let magic = DataReader::<LittleEndian>::read_u64(&mut reader)?;
     if magic != RootConfigGroupSection::MAGIC_NUMBER {
         return Err(Error::InvalidMagicNumber {
             expected: RootConfigGroupSection::MAGIC_NUMBER,
@@ -1379,7 +1383,7 @@ fn parse_root_config_group_section(bytes: &[u8]) -> Result<RootConfigGroupSectio
 
 fn parse_resource_groups_section(bytes: &[u8]) -> Result<ResourceGroupsSection, Error> {
     let mut reader = ArrayDataReader::new(bytes);
-    let magic = read_le_u64(&mut reader)?;
+    let magic = DataReader::<LittleEndian>::read_u64(&mut reader)?;
     if magic != ResourceGroupsSection::MAGIC_NUMBER {
         return Err(Error::InvalidMagicNumber {
             expected: ResourceGroupsSection::MAGIC_NUMBER,
@@ -1393,7 +1397,7 @@ fn parse_resource_groups_section(bytes: &[u8]) -> Result<ResourceGroupsSection, 
 
 fn parse_string_pool_section(bytes: &[u8]) -> Result<StringPoolSection, Error> {
     let mut reader = ArrayDataReader::new(bytes);
-    let magic = read_le_u64(&mut reader)?;
+    let magic = DataReader::<LittleEndian>::read_u64(&mut reader)?;
     if magic != StringPoolSection::MAGIC_NUMBER {
         return Err(Error::InvalidMagicNumber {
             expected: StringPoolSection::MAGIC_NUMBER,
@@ -1401,10 +1405,12 @@ fn parse_string_pool_section(bytes: &[u8]) -> Result<StringPoolSection, Error> {
         });
     }
 
-    let count = read_usize(read_le_vuint(&mut reader)?)?;
+    let count = read_usize(DataReader::<LittleEndian>::read_vuint(&mut reader)?)?;
     let mut sizes = Vec::with_capacity(count);
     for _ in 0..count {
-        sizes.push(read_usize(read_le_vuint(&mut reader)?)?);
+        sizes.push(read_usize(DataReader::<LittleEndian>::read_vuint(
+            &mut reader,
+        )?)?);
     }
 
     let (compression, data) = read_compressed_blob(&mut reader)?;
@@ -1435,16 +1441,16 @@ fn parse_string_pool_section(bytes: &[u8]) -> Result<StringPoolSection, Error> {
 
 fn parse_data_pool_section(bytes: &[u8]) -> Result<DataPoolSection, Error> {
     let mut reader = ArrayDataReader::new(bytes);
-    let magic = read_le_u64(&mut reader)?;
+    let magic = DataReader::<LittleEndian>::read_u64(&mut reader)?;
     if magic != DataPoolSection::MAGIC_NUMBER {
         return Err(Error::InvalidMagicNumber {
             expected: DataPoolSection::MAGIC_NUMBER,
             actual: magic,
         });
     }
-    let remaining = remaining_le(&reader);
+    let remaining = DataReader::<LittleEndian>::remaining(&reader);
     Ok(DataPoolSection {
-        bytes: read_le_u8_array(&mut reader, remaining)?,
+        bytes: DataReader::<LittleEndian>::read_u8_array(&mut reader, remaining)?,
     })
 }
 
@@ -1568,7 +1574,9 @@ fn read_config_field<R: DataReader<LittleEndian>>(reader: &mut R) -> Result<Conf
         0x5450_4f4a => {
             let payload = reader.read_bytes()?;
             let mut payload_reader = ArrayDataReader::new(payload.as_ref());
-            let options = read_len_prefixed_vec(&mut payload_reader, read_le_string)?;
+            let options = read_len_prefixed_vec(&mut payload_reader, |reader| {
+                DataReader::<LittleEndian>::read_string(reader)
+            })?;
             ensure_fully_consumed(&payload_reader, "JVM options config field")?;
             ConfigField::JvmOptions(options)
         }
@@ -1882,15 +1890,15 @@ fn read_resource_field<R: DataReader<LittleEndian>>(
         0x06 => {
             let payload = reader.read_bytes()?;
             let mut payload_reader = ArrayDataReader::new(payload.as_ref());
-            let permissions = read_le_u16(&mut payload_reader)?;
+            let permissions = DataReader::<LittleEndian>::read_u16(&mut payload_reader)?;
             ensure_fully_consumed(&payload_reader, "POSIX permission field")?;
             Ok(ResourceField::PosixFilePermissions(permissions))
         }
         0x7f => {
             let payload = reader.read_bytes()?;
             let mut payload_reader = ArrayDataReader::new(payload.as_ref());
-            let name = read_le_string(&mut payload_reader)?;
-            let content = read_le_bytes(&mut payload_reader)?;
+            let name = DataReader::<LittleEndian>::read_string(&mut payload_reader)?;
+            let content = DataReader::<LittleEndian>::read_bytes(&mut payload_reader)?;
             ensure_fully_consumed(&payload_reader, "custom resource field")?;
             Ok(ResourceField::Custom { name, content })
         }
@@ -1954,8 +1962,8 @@ fn read_timestamp_payload(bytes: &[u8], name: &'static str) -> Result<Timestamp,
 
 fn read_timestamp<R: DataReader<LittleEndian>>(reader: &mut R) -> Result<Timestamp, Error> {
     let timestamp = Timestamp {
-        epoch_second: read_le_i64(reader)?,
-        nanos: read_le_u32(reader)?,
+        epoch_second: reader.read_i64()?,
+        nanos: reader.read_u32()?,
     };
     timestamp.validate()?;
     Ok(timestamp)
@@ -2150,7 +2158,7 @@ where
     R: DataReader<LittleEndian>,
     F: FnMut(&mut R) -> Result<T, Error>,
 {
-    let count = read_usize(read_le_vuint(reader)?)?;
+    let count = read_usize(reader.read_vuint()?)?;
     let mut items = Vec::with_capacity(count);
     for _ in 0..count {
         items.push(read_item(reader)?);
@@ -2216,51 +2224,12 @@ fn ensure_fully_consumed(
     reader: &impl DataReader<LittleEndian>,
     context: &'static str,
 ) -> Result<(), Error> {
-    if remaining_le(reader) != 0 {
+    if reader.remaining() != 0 {
         return Err(Error::InvalidSectionLayout(format!(
             "{context} has trailing bytes"
         )));
     }
     Ok(())
-}
-
-fn read_le_u16<R: DataReader<LittleEndian>>(reader: &mut R) -> Result<u16, Error> {
-    reader.read_u16()
-}
-
-fn read_le_u32<R: DataReader<LittleEndian>>(reader: &mut R) -> Result<u32, Error> {
-    reader.read_u32()
-}
-
-fn read_le_u64<R: DataReader<LittleEndian>>(reader: &mut R) -> Result<u64, Error> {
-    reader.read_u64()
-}
-
-fn read_le_i64<R: DataReader<LittleEndian>>(reader: &mut R) -> Result<i64, Error> {
-    reader.read_i64()
-}
-
-fn read_le_vuint<R: DataReader<LittleEndian>>(reader: &mut R) -> Result<u64, Error> {
-    reader.read_vuint()
-}
-
-fn read_le_u8_array<R: DataReader<LittleEndian>>(
-    reader: &mut R,
-    size: usize,
-) -> Result<Box<[u8]>, Error> {
-    reader.read_u8_array(size)
-}
-
-fn remaining_le<R: DataReader<LittleEndian> + ?Sized>(reader: &R) -> usize {
-    reader.remaining()
-}
-
-fn read_le_bytes<R: DataReader<LittleEndian>>(reader: &mut R) -> Result<Box<[u8]>, Error> {
-    reader.read_bytes()
-}
-
-fn read_le_string<R: DataReader<LittleEndian>>(reader: &mut R) -> Result<String, Error> {
-    reader.read_string()
 }
 
 fn read_usize(value: u64) -> Result<usize, Error> {
@@ -2293,9 +2262,9 @@ mod tests {
         let bytes = writer.into_inner();
         let mut reader = ArrayDataReader::new(&bytes);
         for value in values {
-            assert_eq!(read_le_vuint(&mut reader)?, value);
+            assert_eq!(DataReader::<LittleEndian>::read_vuint(&mut reader)?, value);
         }
-        assert_eq!(remaining_le(&reader), 0);
+        assert_eq!(DataReader::<LittleEndian>::remaining(&reader), 0);
         Ok(())
     }
 
