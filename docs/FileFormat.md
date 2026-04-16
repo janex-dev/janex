@@ -502,17 +502,40 @@ The structure of the `VerificationInfo` is as follows:
 
 ```rust
 struct VerificationInfo {
-    verification_type: String,
+    verification_type: VerificationType,
     data: Vec<u8>,
 }
 ```
 
+#### `VerificationType` Structure
+
 The supported verification types are:
 
-- `Checksum`: `data` is actually a `Checksum`, which is calculated based on the bytes from the start of the `FileMetadataSection` structure 
-  up to the `verification_info` field (i.e., ignoring the `verification_info`, `end_mark`, `metadata_length`, and `file_length` fields).
-- `OpenPGP`: OpenPGP signature for the `FileMetadata` section (ignoring the `verification_info`, `end_mark`, `metadata_length`, and `file_length` fields).
-- `CMS`: CMS signature for the `FileMetadata` section (ignoring the `verification_info`, `end_mark`, `metadata_length`, and `file_length` fields).
+```rust
+#[repr(u8)]
+enum VerificationType {
+    /// No verification.
+    /// 
+    /// The data field is empty.
+    None = 0,
+    
+    /// Checksum verification.
+    /// 
+    /// The data field contains a `Checksum` for the `FileMetadataSection` structure (ignoring the `verification_info`, `end_mark`, `metadata_length`, and `file_length` fields).
+    Checksum = 1,
+    
+    /// OpenPGP signature verification.
+    /// 
+    /// The data field contains an OpenPGP signature for the `FileMetadata` section (ignoring the `verification_info`, `end_mark`, `metadata_length`, and `file_length` fields).
+    OpenPGP = 2,
+    
+    /// CMS signature verification.
+    /// 
+    /// The data field contains a CMS signature for the `FileMetadata` section (ignoring the `verification_info`, `end_mark`, `metadata_length`, and `file_length` fields).
+    CMS = 3,
+}
+
+```
 
 If you want to sign or verify the integrity of the entire file, you should ensure that each element
 in the `section_table` contains a valid and secure `checksum`.
