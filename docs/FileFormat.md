@@ -514,6 +514,9 @@ The supported verification types are:
 - `OpenPGP`: OpenPGP signature for the `FileMetadata` section (ignoring the `verification_info`, `end_mark`, `metadata_length`, and `file_length` fields).
 - `CMS`: CMS signature for the `FileMetadata` section (ignoring the `verification_info`, `end_mark`, `metadata_length`, and `file_length` fields).
 
+If you want to sign or verify the integrity of the entire file, you should ensure that each element
+in the `section_table` contains a valid and secure `checksum`.
+
 ### `Attributes` Section
 
 ```rust
