@@ -19,7 +19,7 @@ impl Platform {
         Self { os, cpu }
     }
 
-    /// Detects the current host platform using `os_info` plus Rust's compile-time target constants.
+    /// Detects the current host platform using runtime system information.
     pub fn current() -> Self {
         Self {
             os: OperatingSystem::current(),
@@ -113,6 +113,15 @@ impl Cpu {
 
     /// Detects the current host CPU architecture.
     pub fn current() -> Self {
+        let info = os_info::get();
+        if let Some(arch) = info.architecture() {
+            // Use the native host architecture when the OS can report it.
+            // This lets a 32-bit launcher still recognize x86-64 or arm64 hosts.
+            return Self::new(arch);
+        }
+
+        // Fall back to the compile-time target only on platforms where runtime
+        // architecture detection is unavailable.
         Self::new(std::env::consts::ARCH)
     }
 }
