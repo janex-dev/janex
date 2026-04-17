@@ -466,6 +466,7 @@ pub(crate) fn compress_with_string_pool(
     bytes: &[u8],
     string_pool: &mut StringPool,
 ) -> Result<Vec<u8>, Error> {
+    let shared_utf8_kinds = collect_shared_utf8_kinds(&ClassFile::parse_from_bytes(bytes)?)?;
     let mut reader = ArrayDataReader::new(bytes);
     let magic = reader.read_u32_be()?;
     if magic != ClassFile::MAGIC_NUMBER {
@@ -486,7 +487,7 @@ pub(crate) fn compress_with_string_pool(
     writer.write_u16_be(constant_pool_count);
 
     let mut skip_slot = false;
-    for _ in 1..constant_pool_count {
+    for constant_pool_index in 1..constant_pool_count {
         if skip_slot {
             skip_slot = false;
             continue;
@@ -497,17 +498,27 @@ pub(crate) fn compress_with_string_pool(
             ConstantPoolInfo::TAG_Utf8 => {
                 let length = reader.read_u16_be()? as usize;
                 let bytes = reader.read_u8_array(length)?;
-                let value = decode_modified_utf8(bytes.as_ref())?;
-                if let Some((package_name, class_name)) = split_package_name(&value) {
-                    let package_name_index = string_pool.push(package_name);
-                    let class_name_index = string_pool.push(class_name);
-                    writer.write_u8(ClassFile::TAG_EXTERNAL_UTF8_CLASS);
-                    writer.write_vuint(package_name_index);
-                    writer.write_vuint(class_name_index);
-                } else {
-                    let string_pool_index = string_pool.push(value);
-                    writer.write_u8(ClassFile::TAG_EXTERNAL_UTF8);
-                    writer.write_vuint(string_pool_index);
+                match shared_utf8_kinds[constant_pool_index as usize] {
+                    SharedUtf8Kind::NotShared => {
+                        writer.write_u8(ConstantPoolInfo::TAG_Utf8);
+                        writer.write_u16_be(length as u16);
+                        writer.write_all(bytes.as_ref());
+                    }
+                    SharedUtf8Kind::Utf8 => {
+                        let value = decode_modified_utf8(bytes.as_ref())?;
+                        let string_pool_index = string_pool.push(value);
+                        writer.write_u8(ClassFile::TAG_EXTERNAL_UTF8);
+                        writer.write_vuint(string_pool_index);
+                    }
+                    SharedUtf8Kind::ClassName => {
+                        let value = decode_modified_utf8(bytes.as_ref())?;
+                        let (package_name, class_name) = split_class_name(&value);
+                        let package_name_index = string_pool.push(package_name);
+                        let class_name_index = string_pool.push(class_name);
+                        writer.write_u8(ClassFile::TAG_EXTERNAL_UTF8_CLASS);
+                        writer.write_vuint(package_name_index);
+                        writer.write_vuint(class_name_index);
+                    }
                 }
             }
             ConstantPoolInfo::TAG_Long | ConstantPoolInfo::TAG_Double => {
@@ -617,6 +628,11 @@ fn copy_constant(
 ) -> Result<(), Error> {
     writer.write_u8(tag);
     match tag {
+        ConstantPoolInfo::TAG_Utf8 => {
+            let length = reader.read_u16_be()?;
+            writer.write_u16_be(length);
+            writer.write_all(reader.read_u8_array(length as usize)?.as_ref());
+        }
         ConstantPoolInfo::TAG_Integer
         | ConstantPoolInfo::TAG_Float
         | ConstantPoolInfo::TAG_Fieldref
@@ -723,10 +739,71 @@ fn encode_modified_utf8(value: &str) -> Vec<u8> {
     bytes
 }
 
-fn split_package_name(value: &str) -> Option<(&str, &str)> {
-    let (package_name, class_name) = value.rsplit_once('/')?;
-    if package_name.is_empty() || class_name.is_empty() {
-        return None;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SharedUtf8Kind {
+    NotShared,
+    Utf8,
+    ClassName,
+}
+
+fn collect_shared_utf8_kinds(class_file: &ClassFile) -> Result<Vec<SharedUtf8Kind>, Error> {
+    let mut kinds = vec![SharedUtf8Kind::NotShared; class_file.constant_pool_count as usize];
+    for constant in class_file.constant_pool.iter() {
+        match constant {
+            ConstantPoolInfo::Class { name_index } => {
+                *kinds.get_mut(*name_index as usize).ok_or_else(|| {
+                    Error::InvalidReference(format!(
+                        "class name index {} points outside the constant pool",
+                        name_index
+                    ))
+                })? = SharedUtf8Kind::ClassName;
+            }
+            ConstantPoolInfo::Package { name_index } => {
+                let kind = kinds.get_mut(*name_index as usize).ok_or_else(|| {
+                    Error::InvalidReference(format!(
+                        "package name index {} points outside the constant pool",
+                        name_index
+                    ))
+                })?;
+                if *kind != SharedUtf8Kind::ClassName {
+                    *kind = SharedUtf8Kind::Utf8;
+                }
+            }
+            ConstantPoolInfo::NameAndType {
+                name_index,
+                descriptor_index,
+            } => {
+                let name_kind = kinds.get_mut(*name_index as usize).ok_or_else(|| {
+                    Error::InvalidReference(format!(
+                        "name-and-type name index {} points outside the constant pool",
+                        name_index
+                    ))
+                })?;
+                if *name_kind != SharedUtf8Kind::ClassName {
+                    *name_kind = SharedUtf8Kind::Utf8;
+                }
+                let descriptor_kind =
+                    kinds.get_mut(*descriptor_index as usize).ok_or_else(|| {
+                        Error::InvalidReference(format!(
+                            "name-and-type descriptor index {} points outside the constant pool",
+                            descriptor_index
+                        ))
+                    })?;
+                if *descriptor_kind != SharedUtf8Kind::ClassName {
+                    *descriptor_kind = SharedUtf8Kind::Utf8;
+                }
+            }
+            _ => {}
+        }
     }
-    Some((package_name, class_name))
+    Ok(kinds)
+}
+
+fn split_class_name(value: &str) -> (&str, &str) {
+    if let Some((package_name, class_name)) = value.rsplit_once('/')
+        && !class_name.is_empty()
+    {
+        return (package_name, class_name);
+    }
+    ("", value)
 }

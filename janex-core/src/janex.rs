@@ -1958,11 +1958,11 @@ mod tests {
         let mut writer = VecDataWriter::new();
         writer.write_u32_be(crate::classfile::ClassFile::MAGIC_NUMBER);
         writer.write_u16_be(0);
-        writer.write_u16_be(52);
-        writer.write_u16_be(5);
+        writer.write_u16_be(53);
+        writer.write_u16_be(12);
         writer.write_u8(crate::classfile::ConstantPoolInfo::TAG_Utf8);
-        writer.write_u16_be(5);
-        writer.write_all(b"Hello");
+        writer.write_u16_be(15);
+        writer.write_all(b"com/example/App");
         writer.write_u8(crate::classfile::ConstantPoolInfo::TAG_Class);
         writer.write_u16_be(1);
         writer.write_u8(crate::classfile::ConstantPoolInfo::TAG_Utf8);
@@ -1970,6 +1970,25 @@ mod tests {
         writer.write_all(b"java/lang/Object");
         writer.write_u8(crate::classfile::ConstantPoolInfo::TAG_Class);
         writer.write_u16_be(3);
+        writer.write_u8(crate::classfile::ConstantPoolInfo::TAG_Utf8);
+        writer.write_u16_be(9);
+        writer.write_all(b"fieldName");
+        writer.write_u8(crate::classfile::ConstantPoolInfo::TAG_Utf8);
+        writer.write_u16_be(1);
+        writer.write_all(b"I");
+        writer.write_u8(crate::classfile::ConstantPoolInfo::TAG_NameAndType);
+        writer.write_u16_be(5);
+        writer.write_u16_be(6);
+        writer.write_u8(crate::classfile::ConstantPoolInfo::TAG_Utf8);
+        writer.write_u16_be(7);
+        writer.write_all(b"literal");
+        writer.write_u8(crate::classfile::ConstantPoolInfo::TAG_String);
+        writer.write_u16_be(8);
+        writer.write_u8(crate::classfile::ConstantPoolInfo::TAG_Utf8);
+        writer.write_u16_be(11);
+        writer.write_all(b"com/example");
+        writer.write_u8(crate::classfile::ConstantPoolInfo::TAG_Package);
+        writer.write_u16_be(10);
         writer.write_u16_be(0x0021);
         writer.write_u16_be(2);
         writer.write_u16_be(4);
@@ -2335,8 +2354,17 @@ mod tests {
         )?;
 
         assert!(transformed.contains(&crate::classfile::ClassFile::TAG_EXTERNAL_UTF8_CLASS));
+        assert!(transformed.contains(&crate::classfile::ClassFile::TAG_EXTERNAL_UTF8));
         assert!(string_pool.iter().any(|value| value == "java/lang"));
         assert!(string_pool.iter().any(|value| value == "Object"));
+        assert!(string_pool.iter().any(|value| value == "com/example"));
+        assert!(string_pool.iter().any(|value| value == "App"));
+        assert!(string_pool.iter().any(|value| value == "fieldName"));
+        assert!(string_pool.iter().any(|value| value == "I"));
+        assert!(string_pool.iter().all(|value| value != "literal"));
+        assert!(transformed
+            .windows(b"literal".len())
+            .any(|window| window == b"literal"));
         assert_eq!(
             decode_resource_content(
                 &CompressInfo {
