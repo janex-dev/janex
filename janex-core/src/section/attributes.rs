@@ -8,6 +8,7 @@ use crate::janex::{
     write_len_prefixed_slice,
 };
 
+/// Parses an `Attributes` section from its encoded bytes.
 pub(crate) fn parse(bytes: &[u8]) -> Result<AttributesSection, Error> {
     let mut reader = ArrayDataReader::new(bytes);
     let magic = DataReader::read_u64_le(&mut reader)?;
@@ -23,6 +24,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<AttributesSection, Error> {
     Ok(AttributesSection { attributes })
 }
 
+/// Encodes an `Attributes` section into its on-disk representation.
 pub(crate) fn encode(
     writer: &mut VecDataWriter,
     section: &AttributesSection,
@@ -32,9 +34,11 @@ pub(crate) fn encode(
 }
 
 impl AttributesSection {
+    /// The `Attributes` section magic number (`"ATTRIBS."`).
     pub const MAGIC_NUMBER: u64 = SectionType::ATTRIBUTES_RAW;
 }
 
+/// Reads one name/value attribute entry.
 fn read_attribute<R: DataReader>(reader: &mut R) -> Result<Attribute, Error> {
     Ok(Attribute {
         name: reader.read_string()?,
@@ -42,6 +46,7 @@ fn read_attribute<R: DataReader>(reader: &mut R) -> Result<Attribute, Error> {
     })
 }
 
+/// Writes one name/value attribute entry.
 fn write_attribute(writer: &mut VecDataWriter, attribute: &Attribute) -> Result<(), Error> {
     writer.write_string(&attribute.name);
     writer.write_bytes(&attribute.value);

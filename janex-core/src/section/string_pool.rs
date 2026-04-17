@@ -12,7 +12,9 @@ use std::collections::BTreeMap;
 /// A deduplicated pool of UTF-8 strings used by Janex sections.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StringPool {
+    /// The pool strings in index order.
     strings: Vec<String>,
+    /// Reverse lookup from string content to pool index.
     indices: BTreeMap<String, u64>,
 }
 
@@ -88,6 +90,7 @@ impl StringPool {
         self.strings.iter().map(String::as_str)
     }
 
+    /// Inserts a string that is known to be unique already, used while reconstructing a `StringPool` from encoded data.
     fn push_existing(&mut self, value: String) -> Result<(), Error> {
         if self.indices.contains_key(&value) {
             return Err(Error::InvalidValue(
@@ -108,6 +111,7 @@ impl Default for StringPool {
     }
 }
 
+/// Parses a `StringPool` section from its encoded bytes.
 pub(crate) fn parse_string_pool_section(bytes: &[u8]) -> Result<StringPoolSection, Error> {
     let mut reader = ArrayDataReader::new(bytes);
     let magic = DataReader::read_u64_le(&mut reader)?;
@@ -150,6 +154,7 @@ pub(crate) fn parse_string_pool_section(bytes: &[u8]) -> Result<StringPoolSectio
     })
 }
 
+/// Encodes a `StringPool` section into its on-disk representation.
 pub(crate) fn encode_string_pool_section(
     writer: &mut VecDataWriter,
     section: &StringPoolSection,
@@ -167,6 +172,7 @@ pub(crate) fn encode_string_pool_section(
 }
 
 impl StringPoolSection {
+    /// The `StringPool` section magic number (`"STRPOOL\0"`).
     pub const MAGIC_NUMBER: u64 = 0x004c_4f4f_5052_5453;
 
     /// Creates a string-pool section using no compression.

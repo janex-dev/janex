@@ -32,6 +32,7 @@ pub struct JanexFile {
     pub fields: Vec<TaggedField<u32>>,
     /// Integrity information for the metadata section itself.
     pub verification: VerificationInfo,
+    /// All non-metadata sections stored in file order.
     sections: Vec<Section>,
 }
 
@@ -48,6 +49,7 @@ pub struct JanexBuilder {
     pub fields: Vec<TaggedField<u32>>,
     /// Integrity information for the metadata section itself.
     pub verification: VerificationInfo,
+    /// Collected section payloads that will become the file body.
     sections: Vec<Section>,
 }
 
@@ -117,7 +119,9 @@ pub struct AttributesSection {
 /// One name/value attribute inside `AttributesSection`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Attribute {
+    /// The attribute name.
     pub name: String,
+    /// The raw attribute value bytes.
     pub value: Box<[u8]>,
 }
 
@@ -184,18 +188,29 @@ pub enum ConfigField {
     /// Nested configuration groups.
     SubGroups(Vec<ConfigGroup>),
     /// An unrecognized configuration field preserved as raw bytes.
-    Unknown { field_type: u32, payload: Box<[u8]> },
+    Unknown {
+        /// The unrecognized 4-byte field type tag.
+        field_type: u32,
+        /// The raw length-prefixed field payload.
+        payload: Box<[u8]>,
+    },
 }
 
 /// A reference to either an embedded resource group or a remote Maven artifact.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResourceGroupReference {
     /// A reference to a local `ResourceGroup`.
-    Local { group_name: String },
+    Local {
+        /// The unique `ResourceGroup.name` referenced by this entry.
+        group_name: String,
+    },
     /// A reference to a Maven artifact downloaded at launch time.
     Maven {
+        /// The Maven coordinates in `groupId:artifactId:version` form.
         gav: String,
+        /// The Maven repository base URL used to download the artifact.
         repository: String,
+        /// The expected checksum of the downloaded artifact.
         checksum: AnyChecksum,
     },
 }
@@ -214,20 +229,29 @@ pub struct JavaAgent {
 pub enum Resource {
     /// A regular file whose bytes live in the `DataPool`.
     File {
+        /// The path of the file within the resource group.
         path: ResourcePath,
+        /// The compression metadata for the file content stored in the `DataPool`.
         compress_info: CompressInfo,
+        /// The byte offset of the compressed file bytes inside the `DataPool`.
         content_offset: u64,
+        /// Optional metadata fields attached to the file entry.
         fields: Vec<ResourceField>,
     },
     /// A directory marker.
     Directory {
+        /// The path of the directory within the resource group.
         path: ResourcePath,
+        /// Optional metadata fields attached to the directory entry.
         fields: Vec<ResourceField>,
     },
     /// A symbolic-link entry.
     SymbolicLink {
+        /// The path of the symbolic link within the resource group.
         path: ResourcePath,
+        /// The target path referenced by the symbolic link.
         target: ResourcePath,
+        /// Optional metadata fields attached to the symbolic-link entry.
         fields: Vec<ResourceField>,
     },
 }
@@ -239,7 +263,9 @@ pub enum ResourcePath {
     String(String),
     /// Stores directory and file-name components via string-pool indices.
     Ref {
+        /// The index of the directory component in the shared `StringPool`.
         directory_index: u64,
+        /// The index of the file-name component in the shared `StringPool`.
         file_name_index: u64,
     },
 }
@@ -247,36 +273,62 @@ pub enum ResourcePath {
 /// Optional metadata attached to a `Resource`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResourceField {
+    /// Checksum of the uncompressed resource content.
     Checksum(AnyChecksum),
+    /// UTF-8 comment string attached to the resource.
     Comment(String),
+    /// Resource creation timestamp.
     FileCreateTime(Timestamp),
+    /// Resource last-modification timestamp.
     FileModifyTime(Timestamp),
+    /// Resource last-access timestamp.
     FileAccessTime(Timestamp),
+    /// POSIX file permission bits.
     PosixFilePermissions(u16),
-    Custom { name: String, content: Box<[u8]> },
-    Unknown { id: u8, payload: Box<[u8]> },
+    /// Application-defined custom metadata.
+    Custom {
+        /// The custom field name.
+        name: String,
+        /// The raw custom field content bytes.
+        content: Box<[u8]>,
+    },
+    /// An unrecognized resource field preserved as raw bytes.
+    Unknown {
+        /// The unrecognized 1-byte field identifier.
+        id: u8,
+        /// The raw length-prefixed field payload.
+        payload: Box<[u8]>,
+    },
 }
 
 /// A nanosecond-precision timestamp relative to the Unix epoch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Timestamp {
+    /// The number of seconds elapsed since the Unix epoch.
     pub epoch_second: i64,
+    /// The sub-second nanosecond component in the range `[0, 1_000_000_000)`.
     pub nanos: u32,
 }
 
 /// A tagged payload preserved as raw bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaggedField<T> {
+    /// The integer tag identifying the payload type.
     pub tag: T,
+    /// The raw payload bytes following the tag.
     pub payload: Box<[u8]>,
 }
 
 /// Compression metadata for an encoded Janex payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompressInfo {
+    /// The compression method applied to the payload.
     pub method: CompressMethod,
+    /// The byte length of the uncompressed payload.
     pub uncompressed_size: u64,
+    /// The byte length of the compressed payload.
     pub compressed_size: u64,
+    /// Method-specific compression options.
     pub options: Box<[u8]>,
 }
 
@@ -284,31 +336,47 @@ pub struct CompressInfo {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum CompressMethod {
+    /// No compression.
     None = 0,
+    /// Multiple compression layers applied in sequence.
     Composite = 1,
+    /// Janex's class-file-aware compression transform.
     Classfile = 2,
+    /// Zstandard compression.
     Zstd = 3,
 }
 
 /// Well-known Janex section type tags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SectionType {
+    /// Arbitrary padding bytes.
     Padding,
+    /// Bytes stored before the `JanexFile` structure.
     ExternalHeader,
+    /// Bytes stored after the `JanexFile` structure.
     ExternalTail,
+    /// The `FileMetadata` section.
     FileMetadata,
+    /// The `Attributes` section.
     Attributes,
+    /// The `DataPool` section.
     DataPool,
+    /// The `RootConfigGroup` section.
     RootConfigGroup,
+    /// The `ResourceGroups` section.
     ResourceGroups,
+    /// The `StringPool` section.
     StringPool,
+    /// An unrecognized section type tag.
     Unknown(u64),
 }
 
 /// An unrecognized section body preserved as raw bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnknownSection {
+    /// The unrecognized section type tag.
     pub section_type: SectionType,
+    /// The raw encoded section bytes.
     pub bytes: Box<[u8]>,
 }
 
@@ -349,37 +417,57 @@ pub struct SectionMetadata {
 /// A file-backed Janex reader that keeps only `FileMetadata` in memory.
 #[derive(Debug)]
 pub struct JanexArchive<R> {
+    /// The underlying seekable reader from which sections are loaded on demand.
     reader: R,
+    /// The eagerly loaded `FileMetadata` view.
     metadata: JanexMetadata,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SectionInfoRecord {
+    /// The section type stored in `FileMetadata.section_table`.
     section_type: SectionType,
+    /// The section identifier unique within the section type.
     id: u64,
+    /// Section-scoped extension fields.
     options: Vec<TaggedField<u32>>,
+    /// The encoded length of the section payload.
     length: u64,
+    /// The checksum recorded for the encoded section payload.
     checksum: AnyChecksum,
 }
 
 #[derive(Debug)]
 struct ParsedMetadata {
+    /// The parsed file-format major version.
     major_version: u32,
+    /// The parsed file-format minor version.
     minor_version: u32,
+    /// The parsed file-level flags.
     flags: u64,
+    /// The parsed `section_table` entries from `FileMetadata`.
     section_table: Vec<SectionInfoRecord>,
+    /// The parsed metadata extension fields.
     fields: Vec<TaggedField<u32>>,
+    /// The parsed verification payload.
     verification: VerificationInfo,
+    /// The `metadata_length` footer value.
     metadata_length: u64,
+    /// The `file_length` footer value.
     file_length: u64,
+    /// The byte offset at which the verification payload starts inside the metadata bytes.
     verification_offset: usize,
 }
 
 impl JanexFile {
+    /// The Janex file header magic stored at the logical start of the file.
     pub const MAGIC_NUMBER: u64 = 0x5050_4158_454e_414a;
+    /// The section type magic stored at the start of the encoded `FileMetadata` payload.
     pub const FILE_METADATA_MAGIC_NUMBER: u64 = 0x4154_4144_4154_454d;
+    /// The footer marker used to locate `FileMetadata` from the end of the file.
     pub const END_MARK: u64 = 0x444e_4558_454e_414a;
 
+    /// Creates an empty in-memory Janex file using the current format version defaults.
     fn new(sections: Vec<Section>) -> Self {
         Self {
             major_version: CURRENT_MAJOR_VERSION,
@@ -582,6 +670,7 @@ impl JanexFile {
         Ok(writer.into_inner())
     }
 
+    /// Validates section ordering, uniqueness, and cross-section references before encoding.
     fn validate(&self) -> Result<(), Error> {
         let sections_len = self.sections.len();
         let mut root_config_group_count = 0usize;
@@ -839,6 +928,7 @@ impl JanexBuilder {
         Ok(file)
     }
 
+    /// Replaces a singleton section type in place or appends it if it was not present yet.
     fn replace_unique_section(&mut self, section: Section) {
         let section_type = section.content.section_type();
         if let Some(existing) = self
@@ -888,6 +978,7 @@ impl<T> SectionBuilder<T> {
         self
     }
 
+    /// Converts the builder metadata and typed payload into an internal `Section`.
     fn into_section(self, content: impl FnOnce(T) -> SectionContent) -> Section {
         Section {
             id: self.id,
@@ -1344,6 +1435,7 @@ impl<R: Read + Seek> JanexArchive<R> {
         )
     }
 
+    /// Decodes the first indexed section whose type matches `section_type`.
     fn read_first_section_of_type(
         &mut self,
         section_type: SectionType,
@@ -1359,6 +1451,7 @@ impl<R: Read + Seek> JanexArchive<R> {
         Ok(None)
     }
 
+    /// Reads, verifies, and parses one section body by index.
     fn decode_section(&mut self, index: usize) -> Result<SectionContent, Error> {
         let section_type = self
             .metadata
@@ -1434,16 +1527,26 @@ impl Default for CompressInfo {
 }
 
 impl SectionType {
+    /// Raw section-type tag for `Padding`.
     pub const PADDING_RAW: u64 = 0x0047_4e49_4444_4150;
+    /// Raw section-type tag for `ExternalHeader`.
     pub const EXTERNAL_HEADER_RAW: u64 = 0x4441_4548_4c54_5845;
+    /// Raw section-type tag for `ExternalTail`.
     pub const EXTERNAL_TAIL_RAW: u64 = 0x4c49_4154_4c54_5845;
+    /// Raw section-type tag for `FileMetadata`.
     pub const FILE_METADATA_RAW: u64 = 0x4154_4144_4154_454d;
+    /// Raw section-type tag for `Attributes`.
     pub const ATTRIBUTES_RAW: u64 = 0x2e53_4249_5254_5441;
+    /// Raw section-type tag for `DataPool`.
     pub const DATA_POOL_RAW: u64 = 0x4c4f_4f50_4154_4144;
+    /// Raw section-type tag for `RootConfigGroup`.
     pub const ROOT_CONFIG_GROUP_RAW: u64 = 0x5055_4f52_4747_4643;
+    /// Raw section-type tag for `ResourceGroups`.
     pub const RESOURCE_GROUPS_RAW: u64 = 0x0053_5052_4753_4552;
+    /// Raw section-type tag for `StringPool`.
     pub const STRING_POOL_RAW: u64 = 0x004c_4f4f_5052_5453;
 
+    /// Returns the raw 64-bit section-type tag stored in `FileMetadata.section_table`.
     pub const fn raw(self) -> u64 {
         match self {
             SectionType::Padding => Self::PADDING_RAW,
@@ -1459,6 +1562,7 @@ impl SectionType {
         }
     }
 
+    /// Converts a raw 64-bit section-type tag into the typed `SectionType` representation.
     pub const fn from_raw(value: u64) -> Self {
         match value {
             Self::PADDING_RAW => SectionType::Padding,
@@ -1478,6 +1582,7 @@ impl SectionType {
 impl TryFrom<u8> for CompressMethod {
     type Error = Error;
 
+    /// Converts a raw compression-method tag into `CompressMethod`.
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(CompressMethod::None),
@@ -1495,12 +1600,14 @@ impl TryFrom<u8> for CompressMethod {
 impl TryFrom<u64> for SectionType {
     type Error = Error;
 
+    /// Converts a raw section-type tag into `SectionType`, preserving unknown values.
     fn try_from(value: u64) -> Result<Self, Self::Error> {
         Ok(SectionType::from_raw(value))
     }
 }
 
 impl ParsedMetadata {
+    /// Verifies the parsed metadata bytes using the configured verification payload.
     fn verify<V: DetachedSignatureVerifier + ?Sized>(
         &self,
         metadata_bytes: &[u8],
@@ -1511,6 +1618,7 @@ impl ParsedMetadata {
     }
 }
 
+/// Parses the encoded `FileMetadata` section footer and metadata records.
 fn read_metadata(bytes: &[u8]) -> Result<ParsedMetadata, Error> {
     let mut reader = ArrayDataReader::new(bytes);
     let magic = DataReader::read_u64_le(&mut reader)?;
@@ -1557,6 +1665,7 @@ fn read_metadata(bytes: &[u8]) -> Result<ParsedMetadata, Error> {
     })
 }
 
+/// Reads one `SectionInfo` record from `FileMetadata.section_table`.
 fn read_section_info_record<R: DataReader>(reader: &mut R) -> Result<SectionInfoRecord, Error> {
     Ok(SectionInfoRecord {
         section_type: SectionType::try_from(reader.read_u64_le()?)?,
@@ -1567,6 +1676,7 @@ fn read_section_info_record<R: DataReader>(reader: &mut R) -> Result<SectionInfo
     })
 }
 
+/// Writes one `SectionInfo` record into `FileMetadata.section_table`.
 fn write_section_info_record(
     writer: &mut VecDataWriter,
     record: &SectionInfoRecord,
@@ -1579,6 +1689,7 @@ fn write_section_info_record(
     Ok(())
 }
 
+/// Reads one `CompressInfo` structure from the input stream.
 pub(crate) fn read_compress_info<R: DataReader>(reader: &mut R) -> Result<CompressInfo, Error> {
     Ok(CompressInfo {
         method: CompressMethod::try_from(reader.read_u8()?)?,
@@ -1588,6 +1699,7 @@ pub(crate) fn read_compress_info<R: DataReader>(reader: &mut R) -> Result<Compre
     })
 }
 
+/// Writes one `CompressInfo` structure to the output stream.
 pub(crate) fn write_compress_info(
     writer: &mut VecDataWriter,
     info: &CompressInfo,
@@ -1599,6 +1711,7 @@ pub(crate) fn write_compress_info(
     Ok(())
 }
 
+/// Reads a `CompressedData<[u8]>` payload, decompresses it, and returns both the header and the decompressed bytes.
 pub(crate) fn read_compressed_blob<R: DataReader>(
     reader: &mut R,
 ) -> Result<(CompressInfo, Vec<u8>), Error> {
@@ -1614,6 +1727,7 @@ pub(crate) fn read_compressed_blob<R: DataReader>(
     Ok((info, data))
 }
 
+/// Writes a `CompressedData<[u8]>` payload using the provided compression template and uncompressed bytes.
 pub(crate) fn write_compressed_blob(
     writer: &mut VecDataWriter,
     info: &CompressInfo,
@@ -1631,6 +1745,7 @@ pub(crate) fn write_compressed_blob(
     Ok(())
 }
 
+/// Compresses arbitrary section bytes using the compression methods supported for non-resource payloads.
 fn compress_bytes(info: &CompressInfo, data: &[u8]) -> Result<Vec<u8>, Error> {
     match info.method {
         CompressMethod::None => Ok(data.to_vec()),
@@ -1650,6 +1765,7 @@ fn compress_bytes(info: &CompressInfo, data: &[u8]) -> Result<Vec<u8>, Error> {
     }
 }
 
+/// Compresses resource content bytes, including Janex's class-file-aware transform when requested.
 fn compress_resource_bytes(
     info: &CompressInfo,
     data: &[u8],
@@ -1670,6 +1786,7 @@ fn compress_resource_bytes(
     }
 }
 
+/// Decompresses arbitrary section bytes using the compression methods supported for non-resource payloads.
 fn decompress_bytes(info: &CompressInfo, data: &[u8]) -> Result<Vec<u8>, Error> {
     match info.method {
         CompressMethod::None => Ok(data.to_vec()),
@@ -1689,6 +1806,7 @@ fn decompress_bytes(info: &CompressInfo, data: &[u8]) -> Result<Vec<u8>, Error> 
     }
 }
 
+/// Decompresses resource content bytes, resolving class-file-aware compression through the shared `StringPool`.
 fn decompress_resource_bytes(
     info: &CompressInfo,
     data: &[u8],
@@ -1716,6 +1834,7 @@ fn decompress_resource_bytes(
     }
 }
 
+/// Parses the `Vec<CompressInfo>` payload stored inside `CompressMethod::Composite` options.
 fn parse_composite_layers(bytes: &[u8]) -> Result<Vec<CompressInfo>, Error> {
     let mut reader = ArrayDataReader::new(bytes);
     let layers = read_len_prefixed_vec(&mut reader, read_compress_info)?;
@@ -1723,6 +1842,7 @@ fn parse_composite_layers(bytes: &[u8]) -> Result<Vec<CompressInfo>, Error> {
     Ok(layers)
 }
 
+/// Locates one file resource in the decoded sections, reads its bytes from the `DataPool`, decompresses them, and verifies optional checksums.
 fn read_file_resource_from_sections(
     resource_groups: &ResourceGroupsSection,
     string_pool: Option<&StringPool>,
@@ -1788,6 +1908,7 @@ fn read_file_resource_from_sections(
     Ok(None)
 }
 
+/// Reads a `TaggedPayload<u32>` from the input stream.
 pub(crate) fn read_tagged_field_u32<R: DataReader>(
     reader: &mut R,
 ) -> Result<TaggedField<u32>, Error> {
@@ -1797,6 +1918,7 @@ pub(crate) fn read_tagged_field_u32<R: DataReader>(
     })
 }
 
+/// Writes a `TaggedPayload<u32>` to the output stream.
 pub(crate) fn write_tagged_field_u32(
     writer: &mut VecDataWriter,
     field: &TaggedField<u32>,
@@ -1806,6 +1928,7 @@ pub(crate) fn write_tagged_field_u32(
     Ok(())
 }
 
+/// Reads a Janex `Vec<T>` using the supplied element decoder.
 pub(crate) fn read_len_prefixed_vec<R, T, F>(
     reader: &mut R,
     mut read_item: F,
@@ -1822,6 +1945,7 @@ where
     Ok(items)
 }
 
+/// Writes a Janex `Vec<T>` using the supplied element encoder.
 pub(crate) fn write_len_prefixed_slice<T, F>(
     writer: &mut VecDataWriter,
     items: &[T],
@@ -1837,6 +1961,7 @@ where
     Ok(())
 }
 
+/// Encodes a nested payload into a temporary buffer and writes it as a length-prefixed byte sequence.
 pub(crate) fn write_payload<F>(writer: &mut VecDataWriter, encode: F) -> Result<(), Error>
 where
     F: FnOnce(&mut VecDataWriter) -> Result<(), Error>,
@@ -1847,6 +1972,7 @@ where
     Ok(())
 }
 
+/// Reads an exact byte range from a seekable source.
 fn read_exact_at<R: Read + Seek>(
     reader: &mut R,
     offset: u64,
@@ -1858,6 +1984,7 @@ fn read_exact_at<R: Read + Seek>(
     Ok(bytes.into_boxed_slice())
 }
 
+/// Ensures that a nested decoder consumed the entire input slice it was given.
 pub(crate) fn ensure_fully_consumed(
     reader: &impl DataReader,
     context: &'static str,
@@ -1870,6 +1997,7 @@ pub(crate) fn ensure_fully_consumed(
     Ok(())
 }
 
+/// Converts a format integer to `usize`, rejecting values that do not fit on the host.
 pub(crate) fn read_usize(value: u64) -> Result<usize, Error> {
     usize::try_from(value)
         .map_err(|_| Error::InvalidSectionLayout("value does not fit in usize".to_string()))

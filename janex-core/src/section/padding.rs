@@ -3,10 +3,12 @@
 
 use crate::io::{DataWriter, VecDataWriter};
 
+/// Preserves a padding or raw passthrough section body without interpretation.
 pub(crate) fn parse(bytes: &[u8]) -> Box<[u8]> {
     bytes.into()
 }
 
+/// Writes a padding or raw passthrough section body verbatim.
 pub(crate) fn encode(writer: &mut VecDataWriter, bytes: &[u8]) {
     writer.write_all(bytes);
 }

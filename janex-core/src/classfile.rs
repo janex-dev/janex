@@ -9,26 +9,40 @@ use crate::string_pool::StringPool;
 ///
 /// See [JVM Spec §4.1](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.1).
 pub struct ClassFile {
+    /// The minor version number stored in the class file header.
     pub minor_version: u16,
+    /// The major version number stored in the class file header.
     pub major_version: u16,
+    /// The declared number of entries in the constant pool, including the unused slot `0`.
     pub constant_pool_count: u16,
+    /// The parsed constant-pool entries in file order.
     pub constant_pool: Box<[ConstantPoolInfo]>,
+    /// The class or interface access flags from the class file header.
     pub access_flags: u16,
+    /// The constant-pool index of the current class.
     pub this_class: u16,
+    /// The constant-pool index of the direct superclass, or `0` for `java/lang/Object`.
     pub super_class: u16,
+    /// The constant-pool indices of all directly implemented interfaces.
     pub interfaces: Box<[u16]>,
+    /// The declared field members of the class.
     pub fields: Box<[MemberInfo]>,
+    /// The declared method members of the class.
     pub methods: Box<[MemberInfo]>,
+    /// The declared number of class-level attributes.
     pub attributes_count: u16,
+    /// The parsed class-level attributes.
     pub attributes: Box<[AttributeInfo]>,
 }
 
 impl ClassFile {
-    /// The magic number for a class file.
+    /// The standard JVM class-file magic number.
     pub const MAGIC_NUMBER: u32 = 0xCAFEBABE;
-    /// The magic number for a Janex-transformed class file.
+    /// The magic number used by Janex's transformed class-file payload.
     pub const TRANSFORMED_MAGIC_NUMBER: u32 = 0x70CAFECA;
+    /// The synthetic constant-pool tag used by Janex for a shared UTF-8 string.
     pub const TAG_EXTERNAL_UTF8: u8 = 0xFF;
+    /// The synthetic constant-pool tag used by Janex for a shared class name split into package and simple name.
     pub const TAG_EXTERNAL_UTF8_CLASS: u8 = 0xFE;
 
     /// Parses a class file from the given bytes.
@@ -107,6 +121,7 @@ impl ClassFile {
         Ok(constant_pool.into())
     }
 
+    /// Reads a field or method table from the class file.
     fn read_members(
         reader: &mut impl DataReader,
         members_count: u16,
@@ -129,6 +144,7 @@ impl ClassFile {
         Ok(fields.into())
     }
 
+    /// Reads an attribute table from the class file.
     fn read_attributes(
         reader: &mut impl DataReader,
         attributes_count: u16,
@@ -152,12 +168,15 @@ impl ClassFile {
 ///
 /// See [JVM Spec §4.4](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4).
 pub enum ConstantPoolInfo {
+    /// Synthetic padding occupying the slot after a `Long` or `Double`.
     Padding,
     /// The CONSTANT_Utf8_info structure is used to represent constant string values.
     ///
     /// See [JVM Spec §4.4.7](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.7)
     Utf8 {
+        /// The byte length of the Modified UTF-8 payload.
         length: u16,
+        /// The raw Modified UTF-8 bytes stored by the class file.
         bytes: Box<[u8]>,
     },
 
@@ -165,6 +184,7 @@ pub enum ConstantPoolInfo {
     ///
     /// See [JVM Spec §4.4.4](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.4)
     Integer {
+        /// The four raw bytes of the integer constant.
         bytes: u32,
     },
 
@@ -172,6 +192,7 @@ pub enum ConstantPoolInfo {
     ///
     /// See [JVM Spec §4.4.4](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.4)
     Float {
+        /// The four raw bytes of the floating-point constant.
         bytes: u32,
     },
 
@@ -179,7 +200,9 @@ pub enum ConstantPoolInfo {
     ///
     /// See [JVM Spec §4.4.5](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.5)
     Long {
+        /// The high 32 bits of the 64-bit integer constant.
         high_bytes: u32,
+        /// The low 32 bits of the 64-bit integer constant.
         low_bytes: u32,
     },
 
@@ -187,7 +210,9 @@ pub enum ConstantPoolInfo {
     ///
     /// See [JVM Spec §4.4.5](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.5)
     Double {
+        /// The high 32 bits of the 64-bit floating-point constant.
         high_bytes: u32,
+        /// The low 32 bits of the 64-bit floating-point constant.
         low_bytes: u32,
     },
 
@@ -195,6 +220,7 @@ pub enum ConstantPoolInfo {
     ///
     /// See [JVM Spec §4.4.1](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.1)
     Class {
+        /// The constant-pool index of the internal class name stored as a UTF-8 constant.
         name_index: u16,
     },
 
@@ -202,6 +228,7 @@ pub enum ConstantPoolInfo {
     ///
     /// See [JVM Spec §4.4.3](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.3)
     String {
+        /// The constant-pool index of the backing UTF-8 string.
         string_index: u16,
     },
 
@@ -209,7 +236,9 @@ pub enum ConstantPoolInfo {
     ///
     /// See [JVM Spec §4.4.2](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.2)
     Fieldref {
+        /// The constant-pool index of the declaring class.
         class_index: u16,
+        /// The constant-pool index of the referenced `NameAndType`.
         name_and_type_index: u16,
     },
 
@@ -217,7 +246,9 @@ pub enum ConstantPoolInfo {
     ///
     /// See [JVM Spec §4.4.2](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.2)
     Methodref {
+        /// The constant-pool index of the declaring class.
         class_index: u16,
+        /// The constant-pool index of the referenced `NameAndType`.
         name_and_type_index: u16,
     },
 
@@ -225,7 +256,9 @@ pub enum ConstantPoolInfo {
     ///
     /// See [JVM Spec §4.4.2](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.2)
     InterfaceMethodref {
+        /// The constant-pool index of the declaring interface.
         class_index: u16,
+        /// The constant-pool index of the referenced `NameAndType`.
         name_and_type_index: u16,
     },
 
@@ -233,7 +266,9 @@ pub enum ConstantPoolInfo {
     ///
     /// See [JVM Spec §4.4.6](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.6)
     NameAndType {
+        /// The constant-pool index of the referenced member name.
         name_index: u16,
+        /// The constant-pool index of the referenced descriptor string.
         descriptor_index: u16,
     },
 
@@ -241,7 +276,9 @@ pub enum ConstantPoolInfo {
     ///
     /// See [JVM Spec §4.4.8](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.8)
     MethodHandle {
+        /// The method-handle kind discriminator from the class file.
         reference_kind: u8,
+        /// The constant-pool index of the referenced field or method.
         reference_index: u16,
     },
 
@@ -249,6 +286,7 @@ pub enum ConstantPoolInfo {
     ///
     /// See [JVM Spec §4.4.9](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.9)
     MethodType {
+        /// The constant-pool index of the descriptor string.
         descriptor_index: u16,
     },
 
@@ -256,7 +294,9 @@ pub enum ConstantPoolInfo {
     ///
     /// See [JVM Spec §4.4.10](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.10)
     Dynamic {
+        /// The index into the BootstrapMethods attribute table.
         bootstrap_method_attr_index: u16,
+        /// The constant-pool index of the referenced `NameAndType`.
         name_and_type_index: u16,
     },
 
@@ -264,7 +304,9 @@ pub enum ConstantPoolInfo {
     ///
     /// See [JVM Spec §4.4.10](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.10)
     InvokeDynamic {
+        /// The index into the BootstrapMethods attribute table.
         bootstrap_method_attr_index: u16,
+        /// The constant-pool index of the referenced `NameAndType`.
         name_and_type_index: u16,
     },
 
@@ -272,6 +314,7 @@ pub enum ConstantPoolInfo {
     ///
     /// See [JVM Spec §4.4.11](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.11)
     Module {
+        /// The constant-pool index of the module name.
         name_index: u16,
     },
 
@@ -279,30 +322,49 @@ pub enum ConstantPoolInfo {
     ///
     /// See [JVM Spec §4.4.12](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.4.12)
     Package {
+        /// The constant-pool index of the package name.
         name_index: u16,
     },
 }
 
 #[allow(non_upper_case_globals)]
 impl ConstantPoolInfo {
+    /// Raw tag value for `CONSTANT_Utf8_info`.
     pub const TAG_Utf8: u8 = 1;
+    /// Raw tag value for `CONSTANT_Integer_info`.
     pub const TAG_Integer: u8 = 3;
+    /// Raw tag value for `CONSTANT_Float_info`.
     pub const TAG_Float: u8 = 4;
+    /// Raw tag value for `CONSTANT_Long_info`.
     pub const TAG_Long: u8 = 5;
+    /// Raw tag value for `CONSTANT_Double_info`.
     pub const TAG_Double: u8 = 6;
+    /// Raw tag value for `CONSTANT_Class_info`.
     pub const TAG_Class: u8 = 7;
+    /// Raw tag value for `CONSTANT_String_info`.
     pub const TAG_String: u8 = 8;
+    /// Raw tag value for `CONSTANT_Fieldref_info`.
     pub const TAG_Fieldref: u8 = 9;
+    /// Raw tag value for `CONSTANT_Methodref_info`.
     pub const TAG_Methodref: u8 = 10;
+    /// Raw tag value for `CONSTANT_InterfaceMethodref_info`.
     pub const TAG_InterfaceMethodref: u8 = 11;
+    /// Raw tag value for `CONSTANT_NameAndType_info`.
     pub const TAG_NameAndType: u8 = 12;
+    /// Raw tag value for `CONSTANT_MethodHandle_info`.
     pub const TAG_MethodHandle: u8 = 15;
+    /// Raw tag value for `CONSTANT_MethodType_info`.
     pub const TAG_MethodType: u8 = 16;
+    /// Raw tag value for `CONSTANT_Dynamic_info`.
     pub const TAG_Dynamic: u8 = 17;
+    /// Raw tag value for `CONSTANT_InvokeDynamic_info`.
     pub const TAG_InvokeDynamic: u8 = 18;
+    /// Raw tag value for `CONSTANT_Module_info`.
     pub const TAG_Module: u8 = 19;
+    /// Raw tag value for `CONSTANT_Package_info`.
     pub const TAG_Package: u8 = 20;
 
+    /// Returns the raw constant-pool tag for this parsed entry.
     pub const fn tag(&self) -> u8 {
         match self {
             ConstantPoolInfo::Padding => panic!("Padding constant pool entry has no tag"),
@@ -326,6 +388,7 @@ impl ConstantPoolInfo {
         }
     }
 
+    /// Reads one constant-pool entry from the class-file stream.
     pub fn read_constant(reader: &mut impl DataReader) -> Result<ConstantPoolInfo, Error> {
         let tag = reader.read_u8()?;
         Ok(match tag {
@@ -446,10 +509,15 @@ impl ConstantPoolInfo {
 /// See [JVM Spec §4.5](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.5)
 /// and [JVM Spec §4.6](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.6).
 pub struct MemberInfo {
+    /// The JVM access flags of the field or method.
     pub access_flags: u16,
+    /// The constant-pool index of the member name.
     pub name_index: u16,
+    /// The constant-pool index of the member descriptor.
     pub descriptor_index: u16,
+    /// The declared number of attributes attached to this member.
     pub attributes_count: u16,
+    /// The parsed member attributes.
     pub attributes: Box<[AttributeInfo]>,
 }
 
@@ -457,11 +525,15 @@ pub struct MemberInfo {
 ///
 /// See [JVM Spec §4.7](https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.7).
 pub struct AttributeInfo {
+    /// The constant-pool index of the attribute name.
     pub attribute_name_index: u16,
+    /// The byte length of the attribute payload.
     pub attribute_length: u32,
+    /// The raw attribute bytes.
     pub info: Box<[u8]>,
 }
 
+/// Rewrites a standard class file into Janex's transformed class-file form and interns eligible strings into the shared `StringPool`.
 pub(crate) fn compress_with_string_pool(
     bytes: &[u8],
     string_pool: &mut StringPool,
@@ -533,6 +605,7 @@ pub(crate) fn compress_with_string_pool(
     Ok(writer.into_inner())
 }
 
+/// Restores a Janex-transformed class file back to the standard JVM class-file form using the shared `StringPool`.
 pub(crate) fn decompress_with_string_pool(
     bytes: &[u8],
     string_pool: &StringPool,
@@ -621,6 +694,7 @@ pub(crate) fn decompress_with_string_pool(
     Ok(writer.into_inner())
 }
 
+/// Copies a non-shared constant-pool entry verbatim from one class-file stream to another.
 fn copy_constant(
     reader: &mut impl DataReader,
     writer: &mut VecDataWriter,
@@ -661,6 +735,7 @@ fn copy_constant(
     Ok(())
 }
 
+/// Decodes a Modified UTF-8 byte sequence from a class file into a Rust `String`.
 fn decode_modified_utf8(bytes: &[u8]) -> Result<String, Error> {
     let mut utf16 = Vec::with_capacity(bytes.len());
     let mut index = 0usize;
@@ -720,6 +795,7 @@ fn decode_modified_utf8(bytes: &[u8]) -> Result<String, Error> {
     String::from_utf16(&utf16).map_err(|_| Error::InvalidValue("invalid modified UTF-8 string"))
 }
 
+/// Encodes a Rust `str` into the Modified UTF-8 form used by JVM class files.
 fn encode_modified_utf8(value: &str) -> Vec<u8> {
     let mut bytes = Vec::new();
     for code_unit in value.encode_utf16() {
@@ -741,11 +817,15 @@ fn encode_modified_utf8(value: &str) -> Vec<u8> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SharedUtf8Kind {
+    /// Keep the `Utf8` constant inline in the transformed class file.
     NotShared,
+    /// Replace the `Utf8` constant with `TAG_EXTERNAL_UTF8`.
     Utf8,
+    /// Replace the `Utf8` constant with `TAG_EXTERNAL_UTF8_CLASS`.
     ClassName,
 }
 
+/// Classifies each constant-pool UTF-8 entry according to Janex's sharing policy.
 fn collect_shared_utf8_kinds(class_file: &ClassFile) -> Result<Vec<SharedUtf8Kind>, Error> {
     let mut kinds = vec![SharedUtf8Kind::NotShared; class_file.constant_pool_count as usize];
     for constant in class_file.constant_pool.iter() {
@@ -799,6 +879,7 @@ fn collect_shared_utf8_kinds(class_file: &ClassFile) -> Result<Vec<SharedUtf8Kin
     Ok(kinds)
 }
 
+/// Splits an internal JVM class name into package name and simple class name for `CONSTANT_External_String_Class`.
 fn split_class_name(value: &str) -> (&str, &str) {
     if let Some((package_name, class_name)) = value.rsplit_once('/')
         && !class_name.is_empty()

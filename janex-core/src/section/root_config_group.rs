@@ -12,6 +12,7 @@ use std::collections::HashSet;
 
 const DEFAULT_MAVEN_REPOSITORY: &str = "https://repo1.maven.org/maven2";
 
+/// Parses a `RootConfigGroup` section from its encoded bytes.
 pub(crate) fn parse(bytes: &[u8]) -> Result<RootConfigGroupSection, Error> {
     let mut reader = ArrayDataReader::new(bytes);
     let magic = DataReader::read_u64_le(&mut reader)?;
@@ -26,6 +27,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<RootConfigGroupSection, Error> {
     Ok(RootConfigGroupSection { root_group })
 }
 
+/// Encodes a `RootConfigGroup` section into its on-disk representation.
 pub(crate) fn encode(
     writer: &mut VecDataWriter,
     section: &RootConfigGroupSection,
@@ -35,12 +37,15 @@ pub(crate) fn encode(
 }
 
 impl RootConfigGroupSection {
+    /// The `RootConfigGroup` section magic number (`"CFGGROUP"`).
     pub const MAGIC_NUMBER: u64 = 0x5055_4f52_4747_4643;
 }
 
 impl ConfigGroup {
+    /// The `ConfigGroup` structure magic number (`"CGRP"`).
     pub const MAGIC_NUMBER: u32 = 0x5052_4743;
 
+    /// Validates configuration fields and local resource-group references within this configuration subtree.
     pub(crate) fn validate(&self, local_group_names: &HashSet<String>) -> Result<(), Error> {
         for field in &self.fields {
             match field {
@@ -81,9 +86,12 @@ impl ConfigGroup {
 }
 
 impl ResourceGroupReference {
+    /// Type tag for `ResourceGroupReference::Local`.
     const TAG_LOCAL: u32 = 0x0043_4f4c;
+    /// Type tag for `ResourceGroupReference::Maven`.
     const TAG_MAVEN: u32 = 0x0056_4147;
 
+    /// Validates that the reference is structurally valid and points to a known local group when applicable.
     fn validate(&self, local_group_names: &HashSet<String>) -> Result<(), Error> {
         match self {
             ResourceGroupReference::Local { group_name } => {
@@ -108,6 +116,7 @@ impl ResourceGroupReference {
     }
 }
 
+/// Reads one encoded `ConfigGroup`.
 fn read_config_group<R: DataReader>(reader: &mut R) -> Result<ConfigGroup, Error> {
     let magic = reader.read_u32_le()?;
     if magic != ConfigGroup::MAGIC_NUMBER {
@@ -122,11 +131,13 @@ fn read_config_group<R: DataReader>(reader: &mut R) -> Result<ConfigGroup, Error
     })
 }
 
+/// Writes one `ConfigGroup`.
 fn write_config_group(writer: &mut VecDataWriter, group: &ConfigGroup) -> Result<(), Error> {
     writer.write_u32_le(ConfigGroup::MAGIC_NUMBER);
     write_len_prefixed_slice(writer, &group.fields, write_config_field)
 }
 
+/// Reads one encoded `ConfigField`, preserving unknown fields as raw payloads.
 fn read_config_field<R: DataReader>(reader: &mut R) -> Result<ConfigField, Error> {
     let field_type = reader.read_u32_le()?;
     Ok(match field_type {
@@ -177,6 +188,7 @@ fn read_config_field<R: DataReader>(reader: &mut R) -> Result<ConfigField, Error
     })
 }
 
+/// Writes one `ConfigField` to the output stream.
 fn write_config_field(writer: &mut VecDataWriter, field: &ConfigField) -> Result<(), Error> {
     match field {
         ConfigField::Condition(value) => {
@@ -235,6 +247,7 @@ fn write_config_field(writer: &mut VecDataWriter, field: &ConfigField) -> Result
     Ok(())
 }
 
+/// Reads a `ResourceGroupReference` used by class path, module path, or agent configuration.
 fn read_resource_group_reference<R: DataReader>(
     reader: &mut R,
 ) -> Result<ResourceGroupReference, Error> {
@@ -263,6 +276,7 @@ fn read_resource_group_reference<R: DataReader>(
     }
 }
 
+/// Writes a `ResourceGroupReference` to the output stream.
 fn write_resource_group_reference(
     writer: &mut VecDataWriter,
     reference: &ResourceGroupReference,
@@ -286,6 +300,7 @@ fn write_resource_group_reference(
     Ok(())
 }
 
+/// Reads one `JavaAgent` entry.
 fn read_java_agent<R: DataReader>(reader: &mut R) -> Result<JavaAgent, Error> {
     Ok(JavaAgent {
         reference: read_resource_group_reference(reader)?,
@@ -293,6 +308,7 @@ fn read_java_agent<R: DataReader>(reader: &mut R) -> Result<JavaAgent, Error> {
     })
 }
 
+/// Writes one `JavaAgent` entry.
 fn write_java_agent(writer: &mut VecDataWriter, agent: &JavaAgent) -> Result<(), Error> {
     write_resource_group_reference(writer, &agent.reference)?;
     writer.write_string(&agent.option);

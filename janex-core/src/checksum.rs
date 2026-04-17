@@ -11,14 +11,19 @@ use xxhash_rust::xxh64::xxh64;
 pub trait Checksum<const SIZE: usize>:
     Sized + std::fmt::Debug + Clone + Copy + PartialEq + Eq
 {
+    /// The Janex `ChecksumAlgorithm` identifier stored in the binary format.
     const ALGORITHM_ID: u16;
 
+    /// Creates the checksum wrapper from its fixed-size raw byte array.
     fn from_array(bytes: [u8; SIZE]) -> Self;
 
+    /// Returns the checksum as its fixed-size raw byte array.
     fn as_array(&self) -> &[u8; SIZE];
 
+    /// Computes the checksum over the provided bytes.
     fn compute(bytes: &[u8]) -> Self;
 
+    /// Parses the checksum from a byte slice and validates its length.
     fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
         let expected = SIZE as u64;
         let actual = bytes.len() as u64;
@@ -27,10 +32,12 @@ pub trait Checksum<const SIZE: usize>:
         Ok(Self::from_array(bytes))
     }
 
+    /// Returns the checksum as an untyped byte slice.
     fn as_bytes(&self) -> &[u8] {
         self.as_array()
     }
 
+    /// Wraps the concrete checksum value in `AnyChecksum`.
     fn to_any(self) -> AnyChecksum
     where
         Self: Into<AnyChecksum>,
@@ -65,6 +72,7 @@ impl Checksum<0> for NoChecksum {
 pub struct Xxh64Checksum([u8; 8]);
 
 impl Xxh64Checksum {
+    /// Creates an XXH64 checksum from its raw bytes.
     pub const fn new(bytes: [u8; 8]) -> Self {
         Self(bytes)
     }
@@ -91,6 +99,7 @@ impl Checksum<8> for Xxh64Checksum {
 pub struct Sha256Checksum([u8; 32]);
 
 impl Sha256Checksum {
+    /// Creates a SHA-256 checksum from its raw bytes.
     pub const fn new(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
@@ -117,6 +126,7 @@ impl Checksum<32> for Sha256Checksum {
 pub struct Sha512Checksum([u8; 64]);
 
 impl Sha512Checksum {
+    /// Creates a SHA-512 checksum from its raw bytes.
     pub const fn new(bytes: [u8; 64]) -> Self {
         Self(bytes)
     }
@@ -149,6 +159,7 @@ impl Checksum<64> for Sha512Checksum {
 pub struct Sm3Checksum([u8; 32]);
 
 impl Sm3Checksum {
+    /// Creates an SM3 checksum from its raw bytes.
     pub const fn new(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
@@ -173,10 +184,15 @@ impl Checksum<32> for Sm3Checksum {
 /// Runtime wrapper used by the Janex format, which carries the chosen checksum algorithm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnyChecksum {
+    /// No checksum bytes are stored.
     None(NoChecksum),
+    /// XXH64 checksum bytes.
     XXH64(Xxh64Checksum),
+    /// SHA-256 checksum bytes.
     SHA256(Sha256Checksum),
+    /// SHA-512 checksum bytes.
     SHA512(Sha512Checksum),
+    /// SM3 checksum bytes.
     SM3(Sm3Checksum),
 }
 
@@ -271,10 +287,12 @@ impl From<Sm3Checksum> for AnyChecksum {
 pub struct OpenPgpSignature(Box<[u8]>);
 
 impl OpenPgpSignature {
+    /// Creates a detached OpenPGP signature wrapper from owned bytes.
     pub fn new(signature: Vec<u8>) -> Self {
         Self(signature.into_boxed_slice())
     }
 
+    /// Returns the detached OpenPGP signature bytes.
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
@@ -297,10 +315,12 @@ impl From<Box<[u8]>> for OpenPgpSignature {
 pub struct CmsSignature(Box<[u8]>);
 
 impl CmsSignature {
+    /// Creates a detached CMS signature wrapper from owned bytes.
     pub fn new(signature: Vec<u8>) -> Self {
         Self(signature.into_boxed_slice())
     }
 
+    /// Returns the detached CMS signature bytes.
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
@@ -321,9 +341,13 @@ impl From<Box<[u8]>> for CmsSignature {
 /// Metadata verification strategies supported by the current implementation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VerificationInfo {
+    /// No metadata verification payload is stored.
     None,
+    /// A checksum over the `FileMetadata` prefix.
     Checksum(AnyChecksum),
+    /// Detached OpenPGP signature bytes.
     OpenPgp(OpenPgpSignature),
+    /// Detached CMS signature bytes.
     Cms(CmsSignature),
 }
 
@@ -333,6 +357,7 @@ pub enum VerificationInfo {
 /// OpenPGP and CMS, callers typically need external public keys, certificates,
 /// or trust policy, so `JanexArchive::open_with_verifier` accepts one of these.
 pub trait DetachedSignatureVerifier {
+    /// Verifies a detached OpenPGP signature over the supplied metadata prefix.
     fn verify_openpgp(
         &self,
         signed_bytes: &[u8],
@@ -344,6 +369,7 @@ pub trait DetachedSignatureVerifier {
         ))
     }
 
+    /// Verifies a detached CMS signature over the supplied metadata prefix.
     fn verify_cms(&self, signed_bytes: &[u8], signature: &CmsSignature) -> Result<(), Error> {
         let _ = (signed_bytes, signature);
         Err(Error::VerificationFailed(
@@ -359,6 +385,7 @@ pub struct RejectingDetachedSignatureVerifier;
 impl DetachedSignatureVerifier for RejectingDetachedSignatureVerifier {}
 
 impl VerificationInfo {
+    /// Verifies the metadata prefix bytes according to this verification payload.
     pub(crate) fn verify<V: DetachedSignatureVerifier + ?Sized>(
         &self,
         signed_bytes: &[u8],
@@ -377,6 +404,7 @@ impl VerificationInfo {
     }
 }
 
+/// Reads a Janex `Checksum` structure from the input stream.
 pub(crate) fn read_checksum<R: DataReader>(reader: &mut R) -> Result<AnyChecksum, Error> {
     let algorithm = reader.read_u16_le()?;
     let reserved = reader.read_u8()?;
@@ -388,6 +416,7 @@ pub(crate) fn read_checksum<R: DataReader>(reader: &mut R) -> Result<AnyChecksum
     AnyChecksum::from_raw(algorithm, checksum.as_ref())
 }
 
+/// Writes a Janex `Checksum` structure to the output stream.
 pub(crate) fn write_checksum(
     writer: &mut VecDataWriter,
     checksum: &AnyChecksum,
@@ -398,6 +427,7 @@ pub(crate) fn write_checksum(
     Ok(())
 }
 
+/// Reads a `VerificationInfo` payload from `FileMetadata`.
 pub(crate) fn read_verification_info<R: DataReader>(
     reader: &mut R,
 ) -> Result<VerificationInfo, Error> {
@@ -445,6 +475,7 @@ pub(crate) fn read_verification_info<R: DataReader>(
     }
 }
 
+/// Encodes a `VerificationInfo` payload for storage in `FileMetadata`.
 pub(crate) fn encode_verification_info(verification: &VerificationInfo) -> Result<Vec<u8>, Error> {
     let mut writer = VecDataWriter::new();
     match verification {
@@ -470,6 +501,7 @@ pub(crate) fn encode_verification_info(verification: &VerificationInfo) -> Resul
     Ok(writer.into_inner())
 }
 
+/// Recomputes a checksum and compares it with the declared value.
 pub(crate) fn verify_checksum(
     checksum: &AnyChecksum,
     bytes: &[u8],
@@ -484,6 +516,7 @@ pub(crate) fn verify_checksum(
     Ok(())
 }
 
+/// Computes a checksum using the same algorithm variant as the provided template.
 pub(crate) fn compute_checksum(template: &AnyChecksum, bytes: &[u8]) -> AnyChecksum {
     template.compute_like(bytes)
 }

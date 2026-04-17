@@ -13,6 +13,7 @@ use crate::janex::{
 use crate::string_pool::StringPool;
 use std::collections::HashSet;
 
+/// Parses a `ResourceGroups` section from its encoded bytes.
 pub(crate) fn parse(bytes: &[u8]) -> Result<ResourceGroupsSection, Error> {
     let mut reader = ArrayDataReader::new(bytes);
     let magic = DataReader::read_u64_le(&mut reader)?;
@@ -27,6 +28,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ResourceGroupsSection, Error> {
     Ok(ResourceGroupsSection { groups })
 }
 
+/// Encodes a `ResourceGroups` section into its on-disk representation.
 pub(crate) fn encode(
     writer: &mut VecDataWriter,
     section: &ResourceGroupsSection,
@@ -36,12 +38,15 @@ pub(crate) fn encode(
 }
 
 impl ResourceGroupsSection {
+    /// The `ResourceGroups` section magic number (`"RESGRPS\0"`).
     pub const MAGIC_NUMBER: u64 = 0x0053_5052_4753_4552;
 }
 
 impl ResourceGroup {
+    /// The `ResourceGroup` structure magic number (`"RESG"`).
     pub const MAGIC_NUMBER: u32 = 0x4753_4552;
 
+    /// Validates resource-path uniqueness, string-pool references, and `DataPool` offsets for this resource group.
     pub(crate) fn validate(
         &self,
         string_pool: Option<&StringPool>,
@@ -88,10 +93,14 @@ impl ResourceGroup {
 }
 
 impl Resource {
+    /// Type tag for a regular file resource.
     const TAG_FILE: u32 = 0x0053_4552;
+    /// Type tag for a directory resource.
     const TAG_DIRECTORY: u32 = 0x0052_4944;
+    /// Type tag for a symbolic-link resource.
     const TAG_SYMBOLIC_LINK: u32 = 0x4c4d_5953;
 
+    /// Returns the path of the resource regardless of its specific variant.
     pub(crate) fn path(&self) -> &ResourcePath {
         match self {
             Resource::File { path, .. }
@@ -102,6 +111,7 @@ impl Resource {
 }
 
 impl ResourcePath {
+    /// Resolves the logical resource path to a UTF-8 string, consulting the shared `StringPool` when necessary.
     pub(crate) fn resolve(&self, string_pool: Option<&StringPool>) -> Result<String, Error> {
         match self {
             ResourcePath::String(path) => {
@@ -154,6 +164,7 @@ impl Timestamp {
     }
 }
 
+/// Reads one encoded `ResourceGroup`.
 fn read_resource_group<R: DataReader>(reader: &mut R) -> Result<ResourceGroup, Error> {
     let magic = reader.read_u32_le()?;
     if magic != ResourceGroup::MAGIC_NUMBER {
@@ -182,6 +193,7 @@ fn read_resource_group<R: DataReader>(reader: &mut R) -> Result<ResourceGroup, E
     })
 }
 
+/// Writes one `ResourceGroup`.
 fn write_resource_group(writer: &mut VecDataWriter, group: &ResourceGroup) -> Result<(), Error> {
     writer.write_u32_le(ResourceGroup::MAGIC_NUMBER);
     writer.write_string(&group.name);
@@ -196,6 +208,7 @@ fn write_resource_group(writer: &mut VecDataWriter, group: &ResourceGroup) -> Re
     Ok(())
 }
 
+/// Reads one encoded `Resource` entry.
 fn read_resource<R: DataReader>(reader: &mut R) -> Result<Resource, Error> {
     let tag = reader.read_u32_le()?;
     match tag {
@@ -221,6 +234,7 @@ fn read_resource<R: DataReader>(reader: &mut R) -> Result<Resource, Error> {
     }
 }
 
+/// Writes one `Resource` entry to the output stream.
 fn write_resource(writer: &mut VecDataWriter, resource: &Resource) -> Result<(), Error> {
     match resource {
         Resource::File {
@@ -254,6 +268,7 @@ fn write_resource(writer: &mut VecDataWriter, resource: &Resource) -> Result<(),
     Ok(())
 }
 
+/// Reads a `ResourcePath` in either inline-string or string-pool-reference form.
 fn read_resource_path<R: DataReader>(reader: &mut R) -> Result<ResourcePath, Error> {
     let length = reader.read_vuint()?;
     if length == 0 {
@@ -269,6 +284,7 @@ fn read_resource_path<R: DataReader>(reader: &mut R) -> Result<ResourcePath, Err
     }
 }
 
+/// Writes a `ResourcePath` using the encoding selected by the `ResourcePath` variant.
 fn write_resource_path(writer: &mut VecDataWriter, path: &ResourcePath) -> Result<(), Error> {
     match path {
         ResourcePath::String(path) => {
@@ -288,6 +304,7 @@ fn write_resource_path(writer: &mut VecDataWriter, path: &ResourcePath) -> Resul
     Ok(())
 }
 
+/// Reads one `ResourceField`, preserving unknown field identifiers as raw payloads.
 fn read_resource_field<R: DataReader>(reader: &mut R) -> Result<ResourceField, Error> {
     let tag = reader.read_u8()?;
     match tag {
@@ -333,6 +350,7 @@ fn read_resource_field<R: DataReader>(reader: &mut R) -> Result<ResourceField, E
     }
 }
 
+/// Writes one `ResourceField` to the output stream.
 fn write_resource_field(writer: &mut VecDataWriter, field: &ResourceField) -> Result<(), Error> {
     match field {
         ResourceField::Checksum(checksum) => {
@@ -378,6 +396,7 @@ fn write_resource_field(writer: &mut VecDataWriter, field: &ResourceField) -> Re
     Ok(())
 }
 
+/// Reads a timestamp payload embedded inside a length-prefixed `ResourceField`.
 fn read_timestamp_payload(bytes: &[u8], name: &'static str) -> Result<Timestamp, Error> {
     let mut reader = ArrayDataReader::new(bytes);
     let timestamp = read_timestamp(&mut reader)?;
@@ -385,6 +404,7 @@ fn read_timestamp_payload(bytes: &[u8], name: &'static str) -> Result<Timestamp,
     Ok(timestamp)
 }
 
+/// Reads the binary `Timestamp` structure used by Janex resources.
 fn read_timestamp<R: DataReader>(reader: &mut R) -> Result<Timestamp, Error> {
     let timestamp = Timestamp {
         epoch_second: reader.read_i64_le()?,
@@ -394,6 +414,7 @@ fn read_timestamp<R: DataReader>(reader: &mut R) -> Result<Timestamp, Error> {
     Ok(timestamp)
 }
 
+/// Writes the binary `Timestamp` structure used by Janex resources.
 fn write_timestamp(writer: &mut VecDataWriter, timestamp: &Timestamp) -> Result<(), Error> {
     timestamp.validate()?;
     writer.write_i64_le(timestamp.epoch_second);
@@ -401,6 +422,7 @@ fn write_timestamp(writer: &mut VecDataWriter, timestamp: &Timestamp) -> Result<
     Ok(())
 }
 
+/// Validates that a resource path obeys Janex's path-segment constraints.
 pub(crate) fn validate_resource_path(path: &str) -> Result<(), Error> {
     if path.is_empty() || path.starts_with('/') || path.ends_with('/') {
         return Err(Error::InvalidValue(

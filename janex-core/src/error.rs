@@ -6,19 +6,33 @@ use std::fmt::{Display, Formatter};
 /// Errors produced while decoding, validating, or encoding Janex data.
 #[derive(Debug)]
 pub enum Error {
+    /// The input ended before the expected number of bytes could be read.
     UnexpectedEndOfFile,
+    /// A fixed magic number in the input did not match the expected value.
     InvalidMagicNumber { expected: u64, actual: u64 },
+    /// A `vuint` encoding was malformed or exceeded the supported width.
     InvalidVUInt,
+    /// UTF-8 decoding failed while parsing a Janex string.
     InvalidUtf8(std::string::FromUtf8Error),
+    /// The input requested a format feature that this implementation does not support.
     UnsupportedFeature(&'static str),
+    /// A class-file constant-pool tag was not recognized.
     UnknownConstantPoolInfo { tag: u8 },
+    /// A Janex enum discriminant or type tag was not recognized.
     UnknownEnumValue { name: &'static str, value: u64 },
+    /// A field or payload contained a semantically invalid value.
     InvalidValue(&'static str),
+    /// A checksum payload had the wrong byte length for its declared algorithm.
     InvalidChecksumLength { expected: u64, actual: u64 },
+    /// The overall Janex file or section layout was invalid.
     InvalidSectionLayout(String),
+    /// A cross-reference pointed to a missing or out-of-range target.
     InvalidReference(String),
+    /// Metadata or resource verification failed.
     VerificationFailed(String),
+    /// Compression or decompression failed.
     CompressionError(String),
+    /// An underlying I/O operation failed.
     Io(std::io::Error),
 }
 

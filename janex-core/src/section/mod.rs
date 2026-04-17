@@ -16,6 +16,7 @@ pub mod string_pool;
 #[cfg(test)]
 pub(crate) use resource_groups::validate_resource_path;
 
+/// Parses one section body according to its `SectionType`.
 pub(crate) fn parse_section_content(
     section_type: SectionType,
     bytes: &[u8],
@@ -43,6 +44,7 @@ pub(crate) fn parse_section_content(
     }
 }
 
+/// Encodes one typed section body into its binary representation.
 pub(crate) fn encode_section_content(section: &SectionContent) -> Result<Vec<u8>, Error> {
     let mut writer = VecDataWriter::new();
     match section {
@@ -63,6 +65,7 @@ pub(crate) fn encode_section_content(section: &SectionContent) -> Result<Vec<u8>
 }
 
 impl SectionContent {
+    /// Returns the logical `SectionType` corresponding to this in-memory section body.
     pub(crate) fn section_type(&self) -> SectionType {
         match self {
             SectionContent::Padding(_) => SectionType::Padding,
@@ -78,6 +81,7 @@ impl SectionContent {
     }
 }
 
+/// Builds the common error used when a nested `FileMetadata` section is encountered in the file body.
 fn unsupported_section_error() -> Error {
     Error::UnsupportedFeature("nested metadata sections are not implemented")
 }

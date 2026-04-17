@@ -1,5 +1,7 @@
-// Copyright (c) 2025 Glavo
+// Copyright (c) 2026 Glavo
 // SPDX-License-Identifier: MPL-2.0
+
+//! Core Janex file-format types, binary codecs, and validation logic.
 
 pub mod checksum;
 pub mod classfile;

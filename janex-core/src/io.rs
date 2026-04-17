@@ -118,6 +118,7 @@ pub trait DataReader {
 
 /// A `DataReader` backed by an immutable byte slice.
 pub struct ArrayDataReader<'a> {
+    /// The unread suffix of the source byte slice.
     bytes: &'a [u8],
 }
 
@@ -228,6 +229,7 @@ pub trait DataWriter {
 
 /// A `DataWriter` that appends encoded bytes into a `Vec<u8>`.
 pub struct VecDataWriter {
+    /// The output buffer receiving encoded bytes.
     bytes: Vec<u8>,
 }
 
