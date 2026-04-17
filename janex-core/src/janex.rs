@@ -4,11 +4,11 @@
 use crate::checksum::AnyChecksum;
 use crate::error::Error;
 use crate::io::{ArrayDataReader, DataReader, DataWriter, VecDataWriter};
+use crate::section::{encode_section_content, parse_section_content};
 use crate::string_pool::StringPool;
 use std::collections::HashSet;
 use std::io::{Read, Seek, SeekFrom};
 
-const DEFAULT_MAVEN_REPOSITORY: &str = "https://repo1.maven.org/maven2";
 const CURRENT_MAJOR_VERSION: u32 = 0;
 const CURRENT_MINOR_VERSION: u32 = 0;
 
@@ -879,81 +879,6 @@ impl<R: Read + Seek> JanexArchive<R> {
     }
 }
 
-impl SectionContent {
-    fn section_type(&self) -> SectionType {
-        match self {
-            SectionContent::Padding(_) => SectionType::Padding,
-            SectionContent::RootConfigGroup(_) => SectionType::RootConfigGroup,
-            SectionContent::ResourceGroups(_) => SectionType::ResourceGroups,
-            SectionContent::StringPool(_) => SectionType::StringPool,
-            SectionContent::DataPool(_) => SectionType::DataPool,
-        }
-    }
-}
-
-impl RootConfigGroupSection {
-    pub const MAGIC_NUMBER: u64 = 0x5055_4f52_4747_4643;
-}
-
-impl ResourceGroupsSection {
-    pub const MAGIC_NUMBER: u64 = 0x0053_5052_4753_4552;
-}
-
-impl StringPoolSection {
-    pub const MAGIC_NUMBER: u64 = 0x004c_4f4f_5052_5453;
-
-    /// Creates a string-pool section using no compression.
-    pub fn new(strings: StringPool) -> Self {
-        Self {
-            compression: CompressInfo::none(),
-            strings,
-        }
-    }
-}
-
-impl DataPoolSection {
-    pub const MAGIC_NUMBER: u64 = 0x4c4f_4f50_4154_4144;
-}
-
-impl ResourceGroup {
-    pub const MAGIC_NUMBER: u32 = 0x4753_4552;
-}
-
-impl ConfigGroup {
-    pub const MAGIC_NUMBER: u32 = 0x5052_4743;
-}
-
-impl ResourceGroupReference {
-    const TAG_LOCAL: u32 = 0x0043_4f4c;
-    const TAG_MAVEN: u32 = 0x0056_4147;
-}
-
-impl Resource {
-    const TAG_FILE: u32 = 0x0053_4552;
-    const TAG_DIRECTORY: u32 = 0x0052_4944;
-    const TAG_SYMBOLIC_LINK: u32 = 0x4c4d_5953;
-
-    fn path(&self) -> &ResourcePath {
-        match self {
-            Resource::File { path, .. }
-            | Resource::Directory { path, .. }
-            | Resource::SymbolicLink { path, .. } => path,
-        }
-    }
-}
-
-impl Timestamp {
-    /// Validates the timestamp against the format's `[0, 1_000_000_000)` nanosecond range.
-    pub fn validate(&self) -> Result<(), Error> {
-        if self.nanos >= 1_000_000_000 {
-            return Err(Error::InvalidValue(
-                "timestamp nanos must be in the range [0, 1_000_000_000)",
-            ));
-        }
-        Ok(())
-    }
-}
-
 impl TaggedField<u32> {
     /// Creates a 32-bit tagged payload from raw bytes.
     pub fn new(tag: u32, payload: Vec<u8>) -> Self {
@@ -1031,157 +956,6 @@ impl TryFrom<u64> for SectionType {
     }
 }
 
-impl ResourceGroup {
-    fn validate(
-        &self,
-        string_pool: Option<&StringPool>,
-        data_pool_len: Option<u64>,
-    ) -> Result<(), Error> {
-        let mut paths = HashSet::new();
-        for resource in &self.resources {
-            let path = resource.path().resolve(string_pool)?;
-            if !paths.insert(path.clone()) {
-                return Err(Error::InvalidSectionLayout(format!(
-                    "resource group '{}' contains duplicate path '{}'",
-                    self.name, path
-                )));
-            }
-
-            if let Resource::File {
-                compress_info,
-                content_offset,
-                ..
-            } = resource
-            {
-                let data_pool_len = data_pool_len.ok_or_else(|| {
-                    Error::InvalidReference(format!(
-                        "resource group '{}' contains files but no data pool section is present",
-                        self.name
-                    ))
-                })?;
-                let end = content_offset
-                    .checked_add(compress_info.compressed_size)
-                    .ok_or_else(|| {
-                        Error::InvalidReference("resource content offset overflow".to_string())
-                    })?;
-                if end > data_pool_len {
-                    return Err(Error::InvalidReference(format!(
-                        "resource '{}' points outside the data pool",
-                        path
-                    )));
-                }
-            }
-        }
-
-        Ok(())
-    }
-}
-
-impl ConfigGroup {
-    fn validate(&self, local_group_names: &HashSet<String>) -> Result<(), Error> {
-        for field in &self.fields {
-            match field {
-                ConfigField::Condition(value)
-                | ConfigField::MainClass(value)
-                | ConfigField::MainModule(value) => {
-                    if value.is_empty() {
-                        return Err(Error::InvalidValue(
-                            "configuration strings must not be empty",
-                        ));
-                    }
-                }
-                ConfigField::ModulePath(items) | ConfigField::ClassPath(items) => {
-                    for item in items {
-                        item.validate(local_group_names)?;
-                    }
-                }
-                ConfigField::Agents(items) => {
-                    for item in items {
-                        item.reference.validate(local_group_names)?;
-                    }
-                }
-                ConfigField::JvmOptions(options) => {
-                    if options.iter().any(String::is_empty) {
-                        return Err(Error::InvalidValue("JVM options must not be empty"));
-                    }
-                }
-                ConfigField::SubGroups(groups) => {
-                    for group in groups {
-                        group.validate(local_group_names)?;
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
-impl ResourceGroupReference {
-    fn validate(&self, local_group_names: &HashSet<String>) -> Result<(), Error> {
-        match self {
-            ResourceGroupReference::Local { group_name } => {
-                if !local_group_names.is_empty() && !local_group_names.contains(group_name) {
-                    return Err(Error::InvalidReference(format!(
-                        "unknown local resource group '{}'",
-                        group_name
-                    )));
-                }
-            }
-            ResourceGroupReference::Maven {
-                gav,
-                repository,
-                checksum: _,
-            } => {
-                if gav.is_empty() || repository.is_empty() {
-                    return Err(Error::InvalidValue("Maven references must not be empty"));
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
-impl ResourcePath {
-    fn resolve(&self, string_pool: Option<&StringPool>) -> Result<String, Error> {
-        match self {
-            ResourcePath::String(path) => {
-                validate_resource_path(path)?;
-                Ok(path.clone())
-            }
-            ResourcePath::Ref {
-                directory_index,
-                file_name_index,
-            } => {
-                let string_pool = string_pool.ok_or_else(|| {
-                    Error::InvalidReference(
-                        "resource path uses string-pool references but no string pool exists"
-                            .to_string(),
-                    )
-                })?;
-                let directory = string_pool.get(*directory_index).ok_or_else(|| {
-                    Error::InvalidReference(format!(
-                        "invalid string pool index {} in resource path",
-                        directory_index
-                    ))
-                })?;
-                let file_name = string_pool.get(*file_name_index).ok_or_else(|| {
-                    Error::InvalidReference(format!(
-                        "invalid string pool index {} in resource path",
-                        file_name_index
-                    ))
-                })?;
-                let path = if directory.is_empty() {
-                    file_name.to_string()
-                } else {
-                    format!("{directory}/{file_name}")
-                };
-                validate_resource_path(&path)?;
-                Ok(path)
-            }
-        }
-    }
-}
-
 impl ParsedMetadata {
     fn verify(&self, metadata_bytes: &[u8]) -> Result<(), Error> {
         match &self.verification {
@@ -1238,143 +1012,6 @@ fn read_metadata(bytes: &[u8]) -> Result<ParsedMetadata, Error> {
         metadata_length,
         file_length,
         verification_offset,
-    })
-}
-
-fn parse_section_content(section_type: SectionType, bytes: &[u8]) -> Result<SectionContent, Error> {
-    match section_type {
-        SectionType::Padding => Ok(SectionContent::Padding(bytes.into())),
-        SectionType::RootConfigGroup => Ok(SectionContent::RootConfigGroup(
-            parse_root_config_group_section(bytes)?,
-        )),
-        SectionType::ResourceGroups => Ok(SectionContent::ResourceGroups(
-            parse_resource_groups_section(bytes)?,
-        )),
-        SectionType::StringPool => Ok(SectionContent::StringPool(parse_string_pool_section(
-            bytes,
-        )?)),
-        SectionType::DataPool => Ok(SectionContent::DataPool(parse_data_pool_section(bytes)?)),
-        SectionType::ExternalHeader
-        | SectionType::ExternalTail
-        | SectionType::FileMetadata
-        | SectionType::Attributes => Err(Error::UnsupportedFeature(
-            "external header/tail, attributes, and nested metadata sections are not implemented",
-        )),
-    }
-}
-
-fn encode_section_content(section: &SectionContent) -> Result<Vec<u8>, Error> {
-    let mut writer = VecDataWriter::new();
-    match section {
-        SectionContent::Padding(bytes) => writer.write_all(bytes),
-        SectionContent::RootConfigGroup(section) => {
-            writer.write_u64_le(RootConfigGroupSection::MAGIC_NUMBER);
-            write_config_group(&mut writer, &section.root_group)?;
-        }
-        SectionContent::ResourceGroups(section) => {
-            writer.write_u64_le(ResourceGroupsSection::MAGIC_NUMBER);
-            write_len_prefixed_slice(&mut writer, &section.groups, write_resource_group)?;
-        }
-        SectionContent::StringPool(section) => {
-            writer.write_u64_le(StringPoolSection::MAGIC_NUMBER);
-            writer.write_vuint(section.strings.len() as u64);
-            let strings: Vec<&str> = section.strings.iter().collect();
-            for string in &strings {
-                writer.write_vuint(string.len() as u64);
-            }
-            let uncompressed = strings.concat().into_bytes();
-            write_compressed_blob(&mut writer, &section.compression, &uncompressed)?;
-        }
-        SectionContent::DataPool(section) => {
-            writer.write_u64_le(DataPoolSection::MAGIC_NUMBER);
-            writer.write_all(&section.bytes);
-        }
-    }
-    Ok(writer.into_inner())
-}
-
-fn parse_root_config_group_section(bytes: &[u8]) -> Result<RootConfigGroupSection, Error> {
-    let mut reader = ArrayDataReader::new(bytes);
-    let magic = DataReader::read_u64_le(&mut reader)?;
-    if magic != RootConfigGroupSection::MAGIC_NUMBER {
-        return Err(Error::InvalidMagicNumber {
-            expected: RootConfigGroupSection::MAGIC_NUMBER,
-            actual: magic,
-        });
-    }
-    let root_group = read_config_group(&mut reader)?;
-    ensure_fully_consumed(&reader, "root config group section")?;
-    Ok(RootConfigGroupSection { root_group })
-}
-
-fn parse_resource_groups_section(bytes: &[u8]) -> Result<ResourceGroupsSection, Error> {
-    let mut reader = ArrayDataReader::new(bytes);
-    let magic = DataReader::read_u64_le(&mut reader)?;
-    if magic != ResourceGroupsSection::MAGIC_NUMBER {
-        return Err(Error::InvalidMagicNumber {
-            expected: ResourceGroupsSection::MAGIC_NUMBER,
-            actual: magic,
-        });
-    }
-    let groups = read_len_prefixed_vec(&mut reader, read_resource_group)?;
-    ensure_fully_consumed(&reader, "resource groups section")?;
-    Ok(ResourceGroupsSection { groups })
-}
-
-fn parse_string_pool_section(bytes: &[u8]) -> Result<StringPoolSection, Error> {
-    let mut reader = ArrayDataReader::new(bytes);
-    let magic = DataReader::read_u64_le(&mut reader)?;
-    if magic != StringPoolSection::MAGIC_NUMBER {
-        return Err(Error::InvalidMagicNumber {
-            expected: StringPoolSection::MAGIC_NUMBER,
-            actual: magic,
-        });
-    }
-
-    let count = read_usize(DataReader::read_vuint(&mut reader)?)?;
-    let mut sizes = Vec::with_capacity(count);
-    for _ in 0..count {
-        sizes.push(read_usize(DataReader::read_vuint(&mut reader)?)?);
-    }
-
-    let (compression, data) = read_compressed_blob(&mut reader)?;
-    ensure_fully_consumed(&reader, "string pool section")?;
-
-    let expected_total: usize = sizes.iter().sum();
-    if expected_total != data.len() {
-        return Err(Error::InvalidSectionLayout(
-            "string pool byte count does not match the declared sizes".to_string(),
-        ));
-    }
-
-    let mut strings = Vec::with_capacity(count);
-    let mut offset = 0usize;
-    for size in sizes {
-        let end = offset.checked_add(size).ok_or_else(|| {
-            Error::InvalidSectionLayout("string pool offset overflow".to_string())
-        })?;
-        strings.push(String::from_utf8(data[offset..end].to_vec())?);
-        offset = end;
-    }
-
-    Ok(StringPoolSection {
-        compression,
-        strings: StringPool::new(strings)?,
-    })
-}
-
-fn parse_data_pool_section(bytes: &[u8]) -> Result<DataPoolSection, Error> {
-    let mut reader = ArrayDataReader::new(bytes);
-    let magic = DataReader::read_u64_le(&mut reader)?;
-    if magic != DataPoolSection::MAGIC_NUMBER {
-        return Err(Error::InvalidMagicNumber {
-            expected: DataPoolSection::MAGIC_NUMBER,
-            actual: magic,
-        });
-    }
-    let remaining = DataReader::remaining(&reader);
-    Ok(DataPoolSection {
-        bytes: DataReader::read_u8_array(&mut reader, remaining)?,
     })
 }
 
@@ -1442,436 +1079,7 @@ fn encode_verification_info(verification: &VerificationInfo) -> Result<Vec<u8>, 
     Ok(writer.into_inner())
 }
 
-fn read_config_group<R: DataReader>(reader: &mut R) -> Result<ConfigGroup, Error> {
-    let magic = reader.read_u32_le()?;
-    if magic != ConfigGroup::MAGIC_NUMBER {
-        return Err(Error::InvalidMagicNumber {
-            expected: ConfigGroup::MAGIC_NUMBER as u64,
-            actual: magic as u64,
-        });
-    }
-
-    Ok(ConfigGroup {
-        fields: read_len_prefixed_vec(reader, read_config_field)?,
-    })
-}
-
-fn write_config_group(writer: &mut VecDataWriter, group: &ConfigGroup) -> Result<(), Error> {
-    writer.write_u32_le(ConfigGroup::MAGIC_NUMBER);
-    write_len_prefixed_slice(writer, &group.fields, write_config_field)
-}
-
-fn read_config_field<R: DataReader>(reader: &mut R) -> Result<ConfigField, Error> {
-    let field_type = reader.read_u32_le()?;
-    Ok(match field_type {
-        0x444e_4f43 => ConfigField::Condition(reader.read_string()?),
-        0x534c_434d => ConfigField::MainClass(reader.read_string()?),
-        0x444f_4d4d => ConfigField::MainModule(reader.read_string()?),
-        0x5044_4f4d => {
-            let payload = reader.read_bytes()?;
-            let mut payload_reader = ArrayDataReader::new(payload.as_ref());
-            let items = read_len_prefixed_vec(&mut payload_reader, read_resource_group_reference)?;
-            ensure_fully_consumed(&payload_reader, "module path config field")?;
-            ConfigField::ModulePath(items)
-        }
-        0x5053_4c43 => {
-            let payload = reader.read_bytes()?;
-            let mut payload_reader = ArrayDataReader::new(payload.as_ref());
-            let items = read_len_prefixed_vec(&mut payload_reader, read_resource_group_reference)?;
-            ensure_fully_consumed(&payload_reader, "class path config field")?;
-            ConfigField::ClassPath(items)
-        }
-        0x544e_4741 => {
-            let payload = reader.read_bytes()?;
-            let mut payload_reader = ArrayDataReader::new(payload.as_ref());
-            let items = read_len_prefixed_vec(&mut payload_reader, read_java_agent)?;
-            ensure_fully_consumed(&payload_reader, "agents config field")?;
-            ConfigField::Agents(items)
-        }
-        0x5450_4f4a => {
-            let payload = reader.read_bytes()?;
-            let mut payload_reader = ArrayDataReader::new(payload.as_ref());
-            let options = read_len_prefixed_vec(&mut payload_reader, |reader| {
-                DataReader::read_string(reader)
-            })?;
-            ensure_fully_consumed(&payload_reader, "JVM options config field")?;
-            ConfigField::JvmOptions(options)
-        }
-        0x5052_4753 => {
-            let payload = reader.read_bytes()?;
-            let mut payload_reader = ArrayDataReader::new(payload.as_ref());
-            let groups = read_len_prefixed_vec(&mut payload_reader, read_config_group)?;
-            ensure_fully_consumed(&payload_reader, "subgroup config field")?;
-            ConfigField::SubGroups(groups)
-        }
-        _ => {
-            return Err(Error::UnknownEnumValue {
-                name: "config field",
-                value: field_type as u64,
-            });
-        }
-    })
-}
-
-fn write_config_field(writer: &mut VecDataWriter, field: &ConfigField) -> Result<(), Error> {
-    match field {
-        ConfigField::Condition(value) => {
-            writer.write_u32_le(0x444e_4f43);
-            writer.write_string(value);
-        }
-        ConfigField::MainClass(value) => {
-            writer.write_u32_le(0x534c_434d);
-            writer.write_string(value);
-        }
-        ConfigField::MainModule(value) => {
-            writer.write_u32_le(0x444f_4d4d);
-            writer.write_string(value);
-        }
-        ConfigField::ModulePath(items) => {
-            writer.write_u32_le(0x5044_4f4d);
-            write_payload(writer, |payload| {
-                write_len_prefixed_slice(payload, items, write_resource_group_reference)
-            })?;
-        }
-        ConfigField::ClassPath(items) => {
-            writer.write_u32_le(0x5053_4c43);
-            write_payload(writer, |payload| {
-                write_len_prefixed_slice(payload, items, write_resource_group_reference)
-            })?;
-        }
-        ConfigField::Agents(items) => {
-            writer.write_u32_le(0x544e_4741);
-            write_payload(writer, |payload| {
-                write_len_prefixed_slice(payload, items, write_java_agent)
-            })?;
-        }
-        ConfigField::JvmOptions(options) => {
-            writer.write_u32_le(0x5450_4f4a);
-            write_payload(writer, |payload| {
-                write_len_prefixed_slice(payload, options, |writer, value| {
-                    writer.write_string(value);
-                    Ok(())
-                })
-            })?;
-        }
-        ConfigField::SubGroups(groups) => {
-            writer.write_u32_le(0x5052_4753);
-            write_payload(writer, |payload| {
-                write_len_prefixed_slice(payload, groups, write_config_group)
-            })?;
-        }
-    }
-    Ok(())
-}
-
-fn read_resource_group_reference<R: DataReader>(
-    reader: &mut R,
-) -> Result<ResourceGroupReference, Error> {
-    let tag = reader.read_u32_le()?;
-    match tag {
-        ResourceGroupReference::TAG_LOCAL => Ok(ResourceGroupReference::Local {
-            group_name: reader.read_string()?,
-        }),
-        ResourceGroupReference::TAG_MAVEN => {
-            let gav = reader.read_string()?;
-            let repository = reader.read_string()?;
-            Ok(ResourceGroupReference::Maven {
-                gav,
-                repository: if repository.is_empty() {
-                    DEFAULT_MAVEN_REPOSITORY.to_string()
-                } else {
-                    repository
-                },
-                checksum: read_checksum(reader)?,
-            })
-        }
-        _ => Err(Error::UnknownEnumValue {
-            name: "resource group reference type",
-            value: tag as u64,
-        }),
-    }
-}
-
-fn write_resource_group_reference(
-    writer: &mut VecDataWriter,
-    reference: &ResourceGroupReference,
-) -> Result<(), Error> {
-    match reference {
-        ResourceGroupReference::Local { group_name } => {
-            writer.write_u32_le(ResourceGroupReference::TAG_LOCAL);
-            writer.write_string(group_name);
-        }
-        ResourceGroupReference::Maven {
-            gav,
-            repository,
-            checksum,
-        } => {
-            writer.write_u32_le(ResourceGroupReference::TAG_MAVEN);
-            writer.write_string(gav);
-            writer.write_string(repository);
-            write_checksum(writer, checksum)?;
-        }
-    }
-    Ok(())
-}
-
-fn read_java_agent<R: DataReader>(reader: &mut R) -> Result<JavaAgent, Error> {
-    Ok(JavaAgent {
-        reference: read_resource_group_reference(reader)?,
-        option: reader.read_string()?,
-    })
-}
-
-fn write_java_agent(writer: &mut VecDataWriter, agent: &JavaAgent) -> Result<(), Error> {
-    write_resource_group_reference(writer, &agent.reference)?;
-    writer.write_string(&agent.option);
-    Ok(())
-}
-
-fn read_resource_group<R: DataReader>(reader: &mut R) -> Result<ResourceGroup, Error> {
-    let magic = reader.read_u32_le()?;
-    if magic != ResourceGroup::MAGIC_NUMBER {
-        return Err(Error::InvalidMagicNumber {
-            expected: ResourceGroup::MAGIC_NUMBER as u64,
-            actual: magic as u64,
-        });
-    }
-
-    let name = reader.read_string()?;
-    let fields = read_len_prefixed_vec(reader, read_tagged_field_u32)?;
-    let resources_count = read_usize(reader.read_vuint()?)?;
-    let (resources_compression, resources_data) = read_compressed_blob(reader)?;
-    let mut resources_reader = ArrayDataReader::new(&resources_data);
-    let mut resources = Vec::with_capacity(resources_count);
-    for _ in 0..resources_count {
-        resources.push(read_resource(&mut resources_reader)?);
-    }
-    ensure_fully_consumed(&resources_reader, "resource group payload")?;
-
-    Ok(ResourceGroup {
-        name,
-        fields,
-        resources_compression,
-        resources,
-    })
-}
-
-fn write_resource_group(writer: &mut VecDataWriter, group: &ResourceGroup) -> Result<(), Error> {
-    writer.write_u32_le(ResourceGroup::MAGIC_NUMBER);
-    writer.write_string(&group.name);
-    write_len_prefixed_slice(writer, &group.fields, write_tagged_field_u32)?;
-    writer.write_vuint(group.resources.len() as u64);
-
-    let mut payload = VecDataWriter::new();
-    for resource in &group.resources {
-        write_resource(&mut payload, resource)?;
-    }
-    write_compressed_blob(writer, &group.resources_compression, &payload.into_inner())?;
-    Ok(())
-}
-
-fn read_resource<R: DataReader>(reader: &mut R) -> Result<Resource, Error> {
-    let tag = reader.read_u32_le()?;
-    match tag {
-        Resource::TAG_FILE => Ok(Resource::File {
-            path: read_resource_path(reader)?,
-            compress_info: read_compress_info(reader)?,
-            content_offset: reader.read_vuint()?,
-            fields: read_len_prefixed_vec(reader, read_resource_field)?,
-        }),
-        Resource::TAG_DIRECTORY => Ok(Resource::Directory {
-            path: read_resource_path(reader)?,
-            fields: read_len_prefixed_vec(reader, read_resource_field)?,
-        }),
-        Resource::TAG_SYMBOLIC_LINK => Ok(Resource::SymbolicLink {
-            path: read_resource_path(reader)?,
-            target: read_resource_path(reader)?,
-            fields: read_len_prefixed_vec(reader, read_resource_field)?,
-        }),
-        _ => Err(Error::UnknownEnumValue {
-            name: "resource type",
-            value: tag as u64,
-        }),
-    }
-}
-
-fn write_resource(writer: &mut VecDataWriter, resource: &Resource) -> Result<(), Error> {
-    match resource {
-        Resource::File {
-            path,
-            compress_info,
-            content_offset,
-            fields,
-        } => {
-            writer.write_u32_le(Resource::TAG_FILE);
-            write_resource_path(writer, path)?;
-            write_compress_info(writer, compress_info)?;
-            writer.write_vuint(*content_offset);
-            write_len_prefixed_slice(writer, fields, write_resource_field)?;
-        }
-        Resource::Directory { path, fields } => {
-            writer.write_u32_le(Resource::TAG_DIRECTORY);
-            write_resource_path(writer, path)?;
-            write_len_prefixed_slice(writer, fields, write_resource_field)?;
-        }
-        Resource::SymbolicLink {
-            path,
-            target,
-            fields,
-        } => {
-            writer.write_u32_le(Resource::TAG_SYMBOLIC_LINK);
-            write_resource_path(writer, path)?;
-            write_resource_path(writer, target)?;
-            write_len_prefixed_slice(writer, fields, write_resource_field)?;
-        }
-    }
-    Ok(())
-}
-
-fn read_resource_path<R: DataReader>(reader: &mut R) -> Result<ResourcePath, Error> {
-    let length = reader.read_vuint()?;
-    if length == 0 {
-        Ok(ResourcePath::Ref {
-            directory_index: reader.read_vuint()?,
-            file_name_index: reader.read_vuint()?,
-        })
-    } else {
-        let body = reader.read_u8_array(read_usize(length)?)?;
-        let path = String::from_utf8(body.into_vec())?;
-        validate_resource_path(&path)?;
-        Ok(ResourcePath::String(path))
-    }
-}
-
-fn write_resource_path(writer: &mut VecDataWriter, path: &ResourcePath) -> Result<(), Error> {
-    match path {
-        ResourcePath::String(path) => {
-            validate_resource_path(path)?;
-            writer.write_vuint(path.len() as u64);
-            writer.write_all(path.as_bytes());
-        }
-        ResourcePath::Ref {
-            directory_index,
-            file_name_index,
-        } => {
-            writer.write_vuint(0);
-            writer.write_vuint(*directory_index);
-            writer.write_vuint(*file_name_index);
-        }
-    }
-    Ok(())
-}
-
-fn read_resource_field<R: DataReader>(reader: &mut R) -> Result<ResourceField, Error> {
-    let tag = reader.read_u8()?;
-    match tag {
-        0x01 => {
-            let payload = reader.read_bytes()?;
-            let mut payload_reader = ArrayDataReader::new(payload.as_ref());
-            let checksum = read_checksum(&mut payload_reader)?;
-            ensure_fully_consumed(&payload_reader, "resource checksum field")?;
-            Ok(ResourceField::Checksum(checksum))
-        }
-        0x02 => Ok(ResourceField::Comment(reader.read_string()?)),
-        0x03 => Ok(ResourceField::FileCreateTime(read_timestamp_payload(
-            reader.read_bytes()?.as_ref(),
-            "resource creation timestamp",
-        )?)),
-        0x04 => Ok(ResourceField::FileModifyTime(read_timestamp_payload(
-            reader.read_bytes()?.as_ref(),
-            "resource modification timestamp",
-        )?)),
-        0x05 => Ok(ResourceField::FileAccessTime(read_timestamp_payload(
-            reader.read_bytes()?.as_ref(),
-            "resource access timestamp",
-        )?)),
-        0x06 => {
-            let payload = reader.read_bytes()?;
-            let mut payload_reader = ArrayDataReader::new(payload.as_ref());
-            let permissions = DataReader::read_u16_le(&mut payload_reader)?;
-            ensure_fully_consumed(&payload_reader, "POSIX permission field")?;
-            Ok(ResourceField::PosixFilePermissions(permissions))
-        }
-        0x7f => {
-            let payload = reader.read_bytes()?;
-            let mut payload_reader = ArrayDataReader::new(payload.as_ref());
-            let name = DataReader::read_string(&mut payload_reader)?;
-            let content = DataReader::read_bytes(&mut payload_reader)?;
-            ensure_fully_consumed(&payload_reader, "custom resource field")?;
-            Ok(ResourceField::Custom { name, content })
-        }
-        _ => Err(Error::UnknownEnumValue {
-            name: "resource field",
-            value: tag as u64,
-        }),
-    }
-}
-
-fn write_resource_field(writer: &mut VecDataWriter, field: &ResourceField) -> Result<(), Error> {
-    match field {
-        ResourceField::Checksum(checksum) => {
-            writer.write_u8(0x01);
-            write_payload(writer, |payload| write_checksum(payload, checksum))?;
-        }
-        ResourceField::Comment(comment) => {
-            writer.write_u8(0x02);
-            writer.write_string(comment);
-        }
-        ResourceField::FileCreateTime(timestamp) => {
-            writer.write_u8(0x03);
-            write_payload(writer, |payload| write_timestamp(payload, timestamp))?;
-        }
-        ResourceField::FileModifyTime(timestamp) => {
-            writer.write_u8(0x04);
-            write_payload(writer, |payload| write_timestamp(payload, timestamp))?;
-        }
-        ResourceField::FileAccessTime(timestamp) => {
-            writer.write_u8(0x05);
-            write_payload(writer, |payload| write_timestamp(payload, timestamp))?;
-        }
-        ResourceField::PosixFilePermissions(permissions) => {
-            writer.write_u8(0x06);
-            write_payload(writer, |payload| {
-                payload.write_u16_le(*permissions);
-                Ok(())
-            })?;
-        }
-        ResourceField::Custom { name, content } => {
-            writer.write_u8(0x7f);
-            write_payload(writer, |payload| {
-                payload.write_string(name);
-                payload.write_bytes(content);
-                Ok(())
-            })?;
-        }
-    }
-    Ok(())
-}
-
-fn read_timestamp_payload(bytes: &[u8], name: &'static str) -> Result<Timestamp, Error> {
-    let mut reader = ArrayDataReader::new(bytes);
-    let timestamp = read_timestamp(&mut reader)?;
-    ensure_fully_consumed(&reader, name)?;
-    Ok(timestamp)
-}
-
-fn read_timestamp<R: DataReader>(reader: &mut R) -> Result<Timestamp, Error> {
-    let timestamp = Timestamp {
-        epoch_second: reader.read_i64_le()?,
-        nanos: reader.read_u32_le()?,
-    };
-    timestamp.validate()?;
-    Ok(timestamp)
-}
-
-fn write_timestamp(writer: &mut VecDataWriter, timestamp: &Timestamp) -> Result<(), Error> {
-    timestamp.validate()?;
-    writer.write_i64_le(timestamp.epoch_second);
-    writer.write_u32_le(timestamp.nanos);
-    Ok(())
-}
-
-fn read_compress_info<R: DataReader>(reader: &mut R) -> Result<CompressInfo, Error> {
+pub(crate) fn read_compress_info<R: DataReader>(reader: &mut R) -> Result<CompressInfo, Error> {
     Ok(CompressInfo {
         method: CompressMethod::try_from(reader.read_u8()?)?,
         uncompressed_size: reader.read_vuint()?,
@@ -1880,7 +1088,10 @@ fn read_compress_info<R: DataReader>(reader: &mut R) -> Result<CompressInfo, Err
     })
 }
 
-fn write_compress_info(writer: &mut VecDataWriter, info: &CompressInfo) -> Result<(), Error> {
+pub(crate) fn write_compress_info(
+    writer: &mut VecDataWriter,
+    info: &CompressInfo,
+) -> Result<(), Error> {
     writer.write_u8(info.method as u8);
     writer.write_vuint(info.uncompressed_size);
     writer.write_vuint(info.compressed_size);
@@ -1888,7 +1099,9 @@ fn write_compress_info(writer: &mut VecDataWriter, info: &CompressInfo) -> Resul
     Ok(())
 }
 
-fn read_compressed_blob<R: DataReader>(reader: &mut R) -> Result<(CompressInfo, Vec<u8>), Error> {
+pub(crate) fn read_compressed_blob<R: DataReader>(
+    reader: &mut R,
+) -> Result<(CompressInfo, Vec<u8>), Error> {
     let info = read_compress_info(reader)?;
     let compressed_size = read_usize(info.compressed_size)?;
     let compressed = reader.read_u8_array(compressed_size)?;
@@ -1901,7 +1114,7 @@ fn read_compressed_blob<R: DataReader>(reader: &mut R) -> Result<(CompressInfo, 
     Ok((info, data))
 }
 
-fn write_compressed_blob(
+pub(crate) fn write_compressed_blob(
     writer: &mut VecDataWriter,
     info: &CompressInfo,
     uncompressed: &[u8],
@@ -1918,7 +1131,7 @@ fn write_compressed_blob(
     Ok(())
 }
 
-fn read_checksum<R: DataReader>(reader: &mut R) -> Result<AnyChecksum, Error> {
+pub(crate) fn read_checksum<R: DataReader>(reader: &mut R) -> Result<AnyChecksum, Error> {
     let algorithm = reader.read_u16_le()?;
     let reserved = reader.read_u8()?;
     if reserved != 0 {
@@ -1929,7 +1142,10 @@ fn read_checksum<R: DataReader>(reader: &mut R) -> Result<AnyChecksum, Error> {
     AnyChecksum::from_raw(algorithm, checksum.as_ref())
 }
 
-fn write_checksum(writer: &mut VecDataWriter, checksum: &AnyChecksum) -> Result<(), Error> {
+pub(crate) fn write_checksum(
+    writer: &mut VecDataWriter,
+    checksum: &AnyChecksum,
+) -> Result<(), Error> {
     writer.write_u16_le(checksum.algorithm_id());
     writer.write_u8(0);
     writer.write_bytes(checksum.as_bytes());
@@ -1995,14 +1211,16 @@ fn parse_composite_layers(bytes: &[u8]) -> Result<Vec<CompressInfo>, Error> {
     Ok(layers)
 }
 
-fn read_tagged_field_u32<R: DataReader>(reader: &mut R) -> Result<TaggedField<u32>, Error> {
+pub(crate) fn read_tagged_field_u32<R: DataReader>(
+    reader: &mut R,
+) -> Result<TaggedField<u32>, Error> {
     Ok(TaggedField {
         tag: reader.read_u32_le()?,
         payload: reader.read_bytes()?,
     })
 }
 
-fn write_tagged_field_u32(
+pub(crate) fn write_tagged_field_u32(
     writer: &mut VecDataWriter,
     field: &TaggedField<u32>,
 ) -> Result<(), Error> {
@@ -2011,7 +1229,10 @@ fn write_tagged_field_u32(
     Ok(())
 }
 
-fn read_len_prefixed_vec<R, T, F>(reader: &mut R, mut read_item: F) -> Result<Vec<T>, Error>
+pub(crate) fn read_len_prefixed_vec<R, T, F>(
+    reader: &mut R,
+    mut read_item: F,
+) -> Result<Vec<T>, Error>
 where
     R: DataReader,
     F: FnMut(&mut R) -> Result<T, Error>,
@@ -2024,7 +1245,7 @@ where
     Ok(items)
 }
 
-fn write_len_prefixed_slice<T, F>(
+pub(crate) fn write_len_prefixed_slice<T, F>(
     writer: &mut VecDataWriter,
     items: &[T],
     mut write_item: F,
@@ -2039,31 +1260,13 @@ where
     Ok(())
 }
 
-fn write_payload<F>(writer: &mut VecDataWriter, encode: F) -> Result<(), Error>
+pub(crate) fn write_payload<F>(writer: &mut VecDataWriter, encode: F) -> Result<(), Error>
 where
     F: FnOnce(&mut VecDataWriter) -> Result<(), Error>,
 {
     let mut payload = VecDataWriter::new();
     encode(&mut payload)?;
     writer.write_bytes(&payload.into_inner());
-    Ok(())
-}
-
-fn validate_resource_path(path: &str) -> Result<(), Error> {
-    if path.is_empty() || path.starts_with('/') || path.ends_with('/') {
-        return Err(Error::InvalidValue(
-            "resource path must not be empty or start/end with '/'",
-        ));
-    }
-
-    for part in path.split('/') {
-        if part.is_empty() || part == "." || part == ".." {
-            return Err(Error::InvalidValue(
-                "resource path segments must not be empty, '.' or '..'",
-            ));
-        }
-    }
-
     Ok(())
 }
 
@@ -2078,7 +1281,10 @@ fn read_exact_at<R: Read + Seek>(
     Ok(bytes.into_boxed_slice())
 }
 
-fn ensure_fully_consumed(reader: &impl DataReader, context: &'static str) -> Result<(), Error> {
+pub(crate) fn ensure_fully_consumed(
+    reader: &impl DataReader,
+    context: &'static str,
+) -> Result<(), Error> {
     if reader.remaining() != 0 {
         return Err(Error::InvalidSectionLayout(format!(
             "{context} has trailing bytes"
@@ -2087,7 +1293,7 @@ fn ensure_fully_consumed(reader: &impl DataReader, context: &'static str) -> Res
     Ok(())
 }
 
-fn read_usize(value: u64) -> Result<usize, Error> {
+pub(crate) fn read_usize(value: u64) -> Result<usize, Error> {
     usize::try_from(value)
         .map_err(|_| Error::InvalidSectionLayout("value does not fit in usize".to_string()))
 }
@@ -2230,8 +1436,8 @@ mod tests {
 
     #[test]
     fn reject_invalid_path() {
-        assert!(validate_resource_path("foo//bar").is_err());
-        assert!(validate_resource_path("../bar").is_err());
-        assert!(validate_resource_path("/bar").is_err());
+        assert!(crate::section::validate_resource_path("foo//bar").is_err());
+        assert!(crate::section::validate_resource_path("../bar").is_err());
+        assert!(crate::section::validate_resource_path("/bar").is_err());
     }
 }
