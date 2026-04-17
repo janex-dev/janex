@@ -1,13 +1,14 @@
 // Copyright (c) 2026 Glavo
 // SPDX-License-Identifier: MPL-2.0
 
+use crate::checksum::{read_checksum, write_checksum};
 use crate::error::Error;
 use crate::io::{ArrayDataReader, DataReader, DataWriter, VecDataWriter};
 use crate::janex::{
     Resource, ResourceField, ResourceGroup, ResourceGroupsSection, ResourcePath, Timestamp,
-    ensure_fully_consumed, read_checksum, read_compress_info, read_compressed_blob,
-    read_len_prefixed_vec, read_tagged_field_u32, read_usize, write_checksum, write_compress_info,
-    write_compressed_blob, write_len_prefixed_slice, write_payload, write_tagged_field_u32,
+    ensure_fully_consumed, read_compress_info, read_compressed_blob, read_len_prefixed_vec,
+    read_tagged_field_u32, read_usize, write_compress_info, write_compressed_blob,
+    write_len_prefixed_slice, write_payload, write_tagged_field_u32,
 };
 use crate::string_pool::StringPool;
 use std::collections::HashSet;

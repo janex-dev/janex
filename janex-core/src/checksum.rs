@@ -1,7 +1,8 @@
-//  Copyright (c) 2026 Glavo
-//  SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Glavo
+// SPDX-License-Identifier: MPL-2.0
 
 use crate::error::Error;
+use crate::io::{ArrayDataReader, DataReader, DataWriter, VecDataWriter};
 use sha2::{Digest, Sha256, Sha512};
 use sm3::Sm3;
 use xxhash_rust::xxh64::xxh64;
@@ -263,4 +264,226 @@ impl From<Sm3Checksum> for AnyChecksum {
     fn from(value: Sm3Checksum) -> Self {
         Self::SM3(value)
     }
+}
+
+/// Detached OpenPGP signature bytes stored in `VerificationInfo`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenPgpSignature(Box<[u8]>);
+
+impl OpenPgpSignature {
+    pub fn new(signature: Vec<u8>) -> Self {
+        Self(signature.into_boxed_slice())
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl From<Vec<u8>> for OpenPgpSignature {
+    fn from(value: Vec<u8>) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<Box<[u8]>> for OpenPgpSignature {
+    fn from(value: Box<[u8]>) -> Self {
+        Self(value)
+    }
+}
+
+/// Detached CMS signature bytes stored in `VerificationInfo`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CmsSignature(Box<[u8]>);
+
+impl CmsSignature {
+    pub fn new(signature: Vec<u8>) -> Self {
+        Self(signature.into_boxed_slice())
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl From<Vec<u8>> for CmsSignature {
+    fn from(value: Vec<u8>) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<Box<[u8]>> for CmsSignature {
+    fn from(value: Box<[u8]>) -> Self {
+        Self(value)
+    }
+}
+
+/// Metadata verification strategies supported by the current implementation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VerificationInfo {
+    None,
+    Checksum(AnyChecksum),
+    OpenPgp(OpenPgpSignature),
+    Cms(CmsSignature),
+}
+
+/// Callback interface for detached-signature verification.
+///
+/// Janex stores only the detached signature bytes in `VerificationInfo`. For
+/// OpenPGP and CMS, callers typically need external public keys, certificates,
+/// or trust policy, so `JanexArchive::open_with_verifier` accepts one of these.
+pub trait DetachedSignatureVerifier {
+    fn verify_openpgp(
+        &self,
+        signed_bytes: &[u8],
+        signature: &OpenPgpSignature,
+    ) -> Result<(), Error> {
+        let _ = (signed_bytes, signature);
+        Err(Error::VerificationFailed(
+            "OpenPGP verification requires an external detached-signature verifier".to_string(),
+        ))
+    }
+
+    fn verify_cms(&self, signed_bytes: &[u8], signature: &CmsSignature) -> Result<(), Error> {
+        let _ = (signed_bytes, signature);
+        Err(Error::VerificationFailed(
+            "CMS verification requires an external detached-signature verifier".to_string(),
+        ))
+    }
+}
+
+/// Default verifier used by `open()`/`read_all()`, which rejects detached signatures.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RejectingDetachedSignatureVerifier;
+
+impl DetachedSignatureVerifier for RejectingDetachedSignatureVerifier {}
+
+impl VerificationInfo {
+    pub(crate) fn verify<V: DetachedSignatureVerifier + ?Sized>(
+        &self,
+        signed_bytes: &[u8],
+        verifier: &V,
+    ) -> Result<(), Error> {
+        match self {
+            VerificationInfo::None => Ok(()),
+            VerificationInfo::Checksum(checksum) => {
+                verify_checksum(checksum, signed_bytes, "metadata")
+            }
+            VerificationInfo::OpenPgp(signature) => {
+                verifier.verify_openpgp(signed_bytes, signature)
+            }
+            VerificationInfo::Cms(signature) => verifier.verify_cms(signed_bytes, signature),
+        }
+    }
+}
+
+pub(crate) fn read_checksum<R: DataReader>(reader: &mut R) -> Result<AnyChecksum, Error> {
+    let algorithm = reader.read_u16_le()?;
+    let reserved = reader.read_u8()?;
+    if reserved != 0 {
+        return Err(Error::InvalidValue("checksum reserved byte must be zero"));
+    }
+
+    let checksum = reader.read_bytes()?;
+    AnyChecksum::from_raw(algorithm, checksum.as_ref())
+}
+
+pub(crate) fn write_checksum(
+    writer: &mut VecDataWriter,
+    checksum: &AnyChecksum,
+) -> Result<(), Error> {
+    writer.write_u16_le(checksum.algorithm_id());
+    writer.write_u8(0);
+    writer.write_bytes(checksum.as_bytes());
+    Ok(())
+}
+
+pub(crate) fn read_verification_info<R: DataReader>(
+    reader: &mut R,
+) -> Result<VerificationInfo, Error> {
+    let verification_type = reader.read_u8()?;
+    let data = reader.read_bytes()?;
+    match verification_type {
+        0 => {
+            if !data.is_empty() {
+                return Err(Error::InvalidValue(
+                    "VerificationType::None must not contain a payload",
+                ));
+            }
+            Ok(VerificationInfo::None)
+        }
+        1 => {
+            let mut payload_reader = ArrayDataReader::new(data.as_ref());
+            let checksum = read_checksum(&mut payload_reader)?;
+            if payload_reader.remaining() != 0 {
+                return Err(Error::InvalidSectionLayout(
+                    "verification checksum has trailing bytes".to_string(),
+                ));
+            }
+            Ok(VerificationInfo::Checksum(checksum))
+        }
+        2 => {
+            if data.is_empty() {
+                return Err(Error::InvalidValue(
+                    "VerificationType::OpenPGP must contain a detached signature payload",
+                ));
+            }
+            Ok(VerificationInfo::OpenPgp(data.into()))
+        }
+        3 => {
+            if data.is_empty() {
+                return Err(Error::InvalidValue(
+                    "VerificationType::CMS must contain a detached signature payload",
+                ));
+            }
+            Ok(VerificationInfo::Cms(data.into()))
+        }
+        _ => Err(Error::UnknownEnumValue {
+            name: "verification type",
+            value: verification_type as u64,
+        }),
+    }
+}
+
+pub(crate) fn encode_verification_info(verification: &VerificationInfo) -> Result<Vec<u8>, Error> {
+    let mut writer = VecDataWriter::new();
+    match verification {
+        VerificationInfo::None => {
+            writer.write_u8(0);
+            writer.write_bytes(&[]);
+        }
+        VerificationInfo::Checksum(checksum) => {
+            writer.write_u8(1);
+            let mut payload = VecDataWriter::new();
+            write_checksum(&mut payload, checksum)?;
+            writer.write_bytes(&payload.into_inner());
+        }
+        VerificationInfo::OpenPgp(signature) => {
+            writer.write_u8(2);
+            writer.write_bytes(signature.as_bytes());
+        }
+        VerificationInfo::Cms(signature) => {
+            writer.write_u8(3);
+            writer.write_bytes(signature.as_bytes());
+        }
+    }
+    Ok(writer.into_inner())
+}
+
+pub(crate) fn verify_checksum(
+    checksum: &AnyChecksum,
+    bytes: &[u8],
+    name: &'static str,
+) -> Result<(), Error> {
+    let expected = compute_checksum(checksum, bytes);
+    if &expected != checksum {
+        return Err(Error::VerificationFailed(format!(
+            "{name} checksum mismatch"
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) fn compute_checksum(template: &AnyChecksum, bytes: &[u8]) -> AnyChecksum {
+    template.compute_like(bytes)
 }

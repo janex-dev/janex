@@ -1,7 +1,14 @@
 // Copyright (c) 2026 Glavo
 // SPDX-License-Identifier: MPL-2.0
 
-use crate::checksum::AnyChecksum;
+use crate::checksum::{
+    AnyChecksum, compute_checksum, encode_verification_info, read_checksum, read_verification_info,
+    verify_checksum, write_checksum,
+};
+pub use crate::checksum::{
+    CmsSignature, DetachedSignatureVerifier, OpenPgpSignature, RejectingDetachedSignatureVerifier,
+    VerificationInfo,
+};
 use crate::error::Error;
 use crate::io::{ArrayDataReader, DataReader, DataWriter, VecDataWriter};
 use crate::section::{encode_section_content, parse_section_content};
@@ -258,13 +265,6 @@ pub enum CompressMethod {
     Zstd = 3,
 }
 
-/// Metadata verification strategies supported by the current implementation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum VerificationInfo {
-    None,
-    Checksum(AnyChecksum),
-}
-
 /// Well-known Janex section type tags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u64)]
@@ -372,6 +372,14 @@ impl JanexFile {
         JanexArchive::open(std::io::Cursor::new(bytes))?.decode_all()
     }
 
+    /// Eagerly parses a Janex file using a detached-signature verifier when needed.
+    pub fn read_all_with_verifier<V: DetachedSignatureVerifier + ?Sized>(
+        bytes: &[u8],
+        verifier: &V,
+    ) -> Result<Self, Error> {
+        JanexArchive::open_with_verifier(std::io::Cursor::new(bytes), verifier)?.decode_all()
+    }
+
     /// Returns the number of sections stored in the file body.
     pub fn sections_len(&self) -> usize {
         self.sections.len()
@@ -418,6 +426,8 @@ impl JanexFile {
             VerificationInfo::Checksum(checksum) => {
                 VerificationInfo::Checksum(compute_checksum(checksum, &metadata_prefix))
             }
+            VerificationInfo::OpenPgp(signature) => VerificationInfo::OpenPgp(signature.clone()),
+            VerificationInfo::Cms(signature) => VerificationInfo::Cms(signature.clone()),
         };
         let verification_bytes = encode_verification_info(&verification)?;
         let metadata_length = metadata_prefix.len() + verification_bytes.len() + 24;
@@ -765,7 +775,15 @@ impl SectionMetadata {
 
 impl<R: Read + Seek> JanexArchive<R> {
     /// Opens a Janex file from a seekable reader and loads only `FileMetadata`.
-    pub fn open(mut reader: R) -> Result<Self, Error> {
+    pub fn open(reader: R) -> Result<Self, Error> {
+        Self::open_with_verifier(reader, &RejectingDetachedSignatureVerifier)
+    }
+
+    /// Opens a Janex file using a detached-signature verifier when needed.
+    pub fn open_with_verifier<V: DetachedSignatureVerifier + ?Sized>(
+        mut reader: R,
+        verifier: &V,
+    ) -> Result<Self, Error> {
         let file_size = reader.seek(SeekFrom::End(0))?;
         if file_size < 24 {
             return Err(Error::UnexpectedEndOfFile);
@@ -827,7 +845,7 @@ impl<R: Read + Seek> JanexArchive<R> {
         {
             return Err(Error::UnsupportedFeature("unsupported Janex file version"));
         }
-        parsed_metadata.verify(&metadata_bytes)?;
+        parsed_metadata.verify(&metadata_bytes, verifier)?;
 
         let mut next_section_offset = file_start + 8;
         let mut sections = Vec::with_capacity(parsed_metadata.section_table.len());
@@ -1070,15 +1088,13 @@ impl TryFrom<u64> for SectionType {
 }
 
 impl ParsedMetadata {
-    fn verify(&self, metadata_bytes: &[u8]) -> Result<(), Error> {
-        match &self.verification {
-            VerificationInfo::None => Ok(()),
-            VerificationInfo::Checksum(checksum) => verify_checksum(
-                checksum,
-                &metadata_bytes[..self.verification_offset],
-                "metadata",
-            ),
-        }
+    fn verify<V: DetachedSignatureVerifier + ?Sized>(
+        &self,
+        metadata_bytes: &[u8],
+        verifier: &V,
+    ) -> Result<(), Error> {
+        self.verification
+            .verify(&metadata_bytes[..self.verification_offset], verifier)
     }
 }
 
@@ -1150,48 +1166,6 @@ fn write_section_info_record(
     Ok(())
 }
 
-fn read_verification_info<R: DataReader>(reader: &mut R) -> Result<VerificationInfo, Error> {
-    let verification_type = reader.read_u8()?;
-    let data = reader.read_bytes()?;
-    match verification_type {
-        0 => {
-            if !data.is_empty() {
-                return Err(Error::InvalidValue(
-                    "VerificationType::None must not contain a payload",
-                ));
-            }
-            Ok(VerificationInfo::None)
-        }
-        1 => {
-            let mut payload_reader = ArrayDataReader::new(data.as_ref());
-            let checksum = read_checksum(&mut payload_reader)?;
-            ensure_fully_consumed(&payload_reader, "verification checksum")?;
-            Ok(VerificationInfo::Checksum(checksum))
-        }
-        2 => Err(Error::UnsupportedFeature("OpenPGP verification")),
-        3 => Err(Error::UnsupportedFeature("CMS verification")),
-        _ => Err(Error::UnknownEnumValue {
-            name: "verification type",
-            value: verification_type as u64,
-        }),
-    }
-}
-
-fn encode_verification_info(verification: &VerificationInfo) -> Result<Vec<u8>, Error> {
-    let mut writer = VecDataWriter::new();
-    match verification {
-        VerificationInfo::None => {
-            writer.write_u8(0);
-            writer.write_bytes(&[]);
-        }
-        VerificationInfo::Checksum(checksum) => {
-            writer.write_u8(1);
-            write_payload(&mut writer, |payload| write_checksum(payload, checksum))?;
-        }
-    }
-    Ok(writer.into_inner())
-}
-
 pub(crate) fn read_compress_info<R: DataReader>(reader: &mut R) -> Result<CompressInfo, Error> {
     Ok(CompressInfo {
         method: CompressMethod::try_from(reader.read_u8()?)?,
@@ -1242,41 +1216,6 @@ pub(crate) fn write_compressed_blob(
     write_compress_info(writer, &actual_info)?;
     writer.write_all(&compressed);
     Ok(())
-}
-
-pub(crate) fn read_checksum<R: DataReader>(reader: &mut R) -> Result<AnyChecksum, Error> {
-    let algorithm = reader.read_u16_le()?;
-    let reserved = reader.read_u8()?;
-    if reserved != 0 {
-        return Err(Error::InvalidValue("checksum reserved byte must be zero"));
-    }
-
-    let checksum = reader.read_bytes()?;
-    AnyChecksum::from_raw(algorithm, checksum.as_ref())
-}
-
-pub(crate) fn write_checksum(
-    writer: &mut VecDataWriter,
-    checksum: &AnyChecksum,
-) -> Result<(), Error> {
-    writer.write_u16_le(checksum.algorithm_id());
-    writer.write_u8(0);
-    writer.write_bytes(checksum.as_bytes());
-    Ok(())
-}
-
-fn verify_checksum(checksum: &AnyChecksum, bytes: &[u8], name: &'static str) -> Result<(), Error> {
-    let expected = compute_checksum(checksum, bytes);
-    if &expected != checksum {
-        return Err(Error::VerificationFailed(format!(
-            "{name} checksum mismatch"
-        )));
-    }
-    Ok(())
-}
-
-fn compute_checksum(template: &AnyChecksum, bytes: &[u8]) -> AnyChecksum {
-    template.compute_like(bytes)
 }
 
 fn compress_bytes(info: &CompressInfo, data: &[u8]) -> Result<Vec<u8>, Error> {
@@ -1414,37 +1353,12 @@ pub(crate) fn read_usize(value: u64) -> Result<usize, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::checksum::{Checksum, Sha256Checksum};
+    use crate::checksum::{
+        Checksum, CmsSignature, DetachedSignatureVerifier, OpenPgpSignature, Sha256Checksum,
+    };
     use std::io::Cursor;
 
-    #[test]
-    fn vuint_roundtrip() -> Result<(), Error> {
-        let values = [
-            0,
-            1,
-            0x7f,
-            0x80,
-            0x3fff,
-            0x4000,
-            u32::MAX as u64,
-            u64::MAX >> 1,
-        ];
-        let mut writer = VecDataWriter::new();
-        for value in values {
-            writer.write_vuint(value);
-        }
-
-        let bytes = writer.into_inner();
-        let mut reader = ArrayDataReader::new(&bytes);
-        for value in values {
-            assert_eq!(DataReader::read_vuint(&mut reader)?, value);
-        }
-        assert_eq!(DataReader::remaining(&reader), 0);
-        Ok(())
-    }
-
-    #[test]
-    fn janex_roundtrip() -> Result<(), Error> {
+    fn sample_file(verification: VerificationInfo) -> Result<JanexFile, Error> {
         let mut string_pool = StringPool::with_empty_root();
         let dir_index = string_pool.push("com/example");
         let file_index = string_pool.push("App.class");
@@ -1452,7 +1366,7 @@ mod tests {
         let section_checksum = Sha256Checksum::new([0; 32]).to_any();
         let mut builder = JanexFile::builder();
         builder.fields = vec![TaggedField::<u32>::new(0xfeed_beef, b"meta".to_vec())];
-        builder.verification = VerificationInfo::Checksum(Sha256Checksum::new([0; 32]).to_any());
+        builder.verification = verification;
         builder
             .with_string_pool(
                 SectionBuilder::new(StringPoolSection {
@@ -1512,7 +1426,60 @@ mod tests {
                 .with_checksum(section_checksum),
             );
 
-        let file = builder.build()?;
+        builder.build()
+    }
+
+    struct AcceptingDetachedVerifier;
+
+    impl DetachedSignatureVerifier for AcceptingDetachedVerifier {
+        fn verify_openpgp(
+            &self,
+            signed_bytes: &[u8],
+            signature: &OpenPgpSignature,
+        ) -> Result<(), Error> {
+            assert!(!signed_bytes.is_empty());
+            assert_eq!(signature.as_bytes(), b"pgp-signature");
+            Ok(())
+        }
+
+        fn verify_cms(&self, signed_bytes: &[u8], signature: &CmsSignature) -> Result<(), Error> {
+            assert!(!signed_bytes.is_empty());
+            assert_eq!(signature.as_bytes(), b"cms-signature");
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn vuint_roundtrip() -> Result<(), Error> {
+        let values = [
+            0,
+            1,
+            0x7f,
+            0x80,
+            0x3fff,
+            0x4000,
+            u32::MAX as u64,
+            u64::MAX >> 1,
+        ];
+        let mut writer = VecDataWriter::new();
+        for value in values {
+            writer.write_vuint(value);
+        }
+
+        let bytes = writer.into_inner();
+        let mut reader = ArrayDataReader::new(&bytes);
+        for value in values {
+            assert_eq!(DataReader::read_vuint(&mut reader)?, value);
+        }
+        assert_eq!(DataReader::remaining(&reader), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn janex_roundtrip() -> Result<(), Error> {
+        let file = sample_file(VerificationInfo::Checksum(
+            Sha256Checksum::new([0; 32]).to_any(),
+        ))?;
 
         let encoded = file.write()?;
 
@@ -1524,7 +1491,7 @@ mod tests {
         assert_eq!(root_group.root_group.fields.len(), 3);
 
         let string_pool = archive.read_string_pool()?.unwrap();
-        assert_eq!(string_pool.strings.get(file_index), Some("App.class"));
+        assert_eq!(string_pool.strings.get(2), Some("App.class"));
 
         let resource_groups = archive.read_resource_groups()?.unwrap();
         assert_eq!(resource_groups.groups.len(), 1);
@@ -1534,6 +1501,46 @@ mod tests {
 
         let eager = archive.decode_all()?;
         assert_eq!(eager.write()?, encoded);
+        Ok(())
+    }
+
+    #[test]
+    fn openpgp_verification_uses_external_verifier() -> Result<(), Error> {
+        let file = sample_file(VerificationInfo::OpenPgp(b"pgp-signature".to_vec().into()))?;
+        let encoded = file.write()?;
+
+        let error = JanexFile::read_all(&encoded).unwrap_err();
+        match error {
+            Error::VerificationFailed(message) => {
+                assert!(message.contains("OpenPGP verification requires"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+
+        let decoded = JanexFile::read_all_with_verifier(&encoded, &AcceptingDetachedVerifier)?;
+        assert_eq!(decoded.write()?, encoded);
+        Ok(())
+    }
+
+    #[test]
+    fn cms_verification_uses_external_verifier() -> Result<(), Error> {
+        let file = sample_file(VerificationInfo::Cms(b"cms-signature".to_vec().into()))?;
+        let encoded = file.write()?;
+
+        let error = JanexArchive::open(Cursor::new(encoded.clone())).unwrap_err();
+        match error {
+            Error::VerificationFailed(message) => {
+                assert!(message.contains("CMS verification requires"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+
+        let mut archive = JanexArchive::open_with_verifier(
+            Cursor::new(encoded.clone()),
+            &AcceptingDetachedVerifier,
+        )?;
+        assert_eq!(archive.read_data_pool()?.unwrap().bytes.as_ref(), b"hello");
+        assert_eq!(archive.decode_all()?.write()?, encoded);
         Ok(())
     }
 
