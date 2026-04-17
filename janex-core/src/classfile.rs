@@ -538,6 +538,7 @@ pub(crate) fn compress_with_string_pool(
     bytes: &[u8],
     string_pool: &mut StringPool,
 ) -> Result<Vec<u8>, Error> {
+    // The sharing decision is made from a parsed view first so references can be classified by semantic role.
     let shared_utf8_kinds = collect_shared_utf8_kinds(&ClassFile::parse_from_bytes(bytes)?)?;
     let mut reader = ArrayDataReader::new(bytes);
     let magic = reader.read_u32_be()?;
@@ -561,6 +562,7 @@ pub(crate) fn compress_with_string_pool(
     let mut skip_slot = false;
     for constant_pool_index in 1..constant_pool_count {
         if skip_slot {
+            // `Long` and `Double` consume two constant-pool indices in the JVM format.
             skip_slot = false;
             continue;
         }
@@ -572,6 +574,7 @@ pub(crate) fn compress_with_string_pool(
                 let bytes = reader.read_u8_array(length)?;
                 match shared_utf8_kinds[constant_pool_index as usize] {
                     SharedUtf8Kind::NotShared => {
+                        // Strings outside Janex's sharing policy stay in standard `CONSTANT_Utf8_info` form.
                         writer.write_u8(ConstantPoolInfo::TAG_Utf8);
                         writer.write_u16_be(length as u16);
                         writer.write_all(bytes.as_ref());
@@ -584,6 +587,7 @@ pub(crate) fn compress_with_string_pool(
                     }
                     SharedUtf8Kind::ClassName => {
                         let value = decode_modified_utf8(bytes.as_ref())?;
+                        // Class names share package and simple-name components independently.
                         let (package_name, class_name) = split_class_name(&value);
                         let package_name_index = string_pool.push(package_name);
                         let class_name_index = string_pool.push(class_name);
@@ -632,6 +636,7 @@ pub(crate) fn decompress_with_string_pool(
     let mut skip_slot = false;
     for _ in 1..constant_pool_count {
         if skip_slot {
+            // The physical bytes were already copied; this iteration is only the logical padding slot.
             skip_slot = false;
             continue;
         }
@@ -646,6 +651,7 @@ pub(crate) fn decompress_with_string_pool(
                         string_pool_index
                     ))
                 })?;
+                // Janex external strings are materialized back into standard Modified UTF-8 constants.
                 let bytes = encode_modified_utf8(value);
                 let length = u16::try_from(bytes.len()).map_err(|_| {
                     Error::InvalidValue("modified UTF-8 string is too large for a class file")
@@ -674,6 +680,7 @@ pub(crate) fn decompress_with_string_pool(
                 } else {
                     format!("{package_name}/{class_name}")
                 };
+                // Split package/class entries are rejoined into the JVM internal class-name form.
                 let bytes = encode_modified_utf8(&value);
                 let length = u16::try_from(bytes.len()).map_err(|_| {
                     Error::InvalidValue("modified UTF-8 string is too large for a class file")
@@ -742,6 +749,7 @@ fn decode_modified_utf8(bytes: &[u8]) -> Result<String, Error> {
     while index < bytes.len() {
         let first = bytes[index];
         if first & 0x80 == 0 {
+            // Plain ASCII bytes are encoded directly, except that Modified UTF-8 reserves `0x00`.
             if first == 0 {
                 return Err(Error::InvalidValue(
                     "modified UTF-8 must not contain embedded zero bytes",
@@ -760,6 +768,7 @@ fn decode_modified_utf8(bytes: &[u8]) -> Result<String, Error> {
             if second & 0xC0 != 0x80 {
                 return Err(Error::InvalidValue("invalid modified UTF-8 string"));
             }
+            // Two-byte sequences cover U+0000 and the rest of the 11-bit range.
             let value = (((first & 0x1F) as u16) << 6) | ((second & 0x3F) as u16);
             if value < 0x80 && !(first == 0xC0 && second == 0x80) {
                 return Err(Error::InvalidValue("invalid modified UTF-8 string"));
@@ -778,6 +787,7 @@ fn decode_modified_utf8(bytes: &[u8]) -> Result<String, Error> {
             if second & 0xC0 != 0x80 || third & 0xC0 != 0x80 {
                 return Err(Error::InvalidValue("invalid modified UTF-8 string"));
             }
+            // Three-byte sequences encode one UTF-16 code unit; surrogate pairing is handled by `String::from_utf16`.
             let value = (((first & 0x0F) as u16) << 12)
                 | (((second & 0x3F) as u16) << 6)
                 | ((third & 0x3F) as u16);
@@ -831,6 +841,7 @@ fn collect_shared_utf8_kinds(class_file: &ClassFile) -> Result<Vec<SharedUtf8Kin
     for constant in class_file.constant_pool.iter() {
         match constant {
             ConstantPoolInfo::Class { name_index } => {
+                // Class names always take precedence because they can use the split package/simple-name encoding.
                 *kinds.get_mut(*name_index as usize).ok_or_else(|| {
                     Error::InvalidReference(format!(
                         "class name index {} points outside the constant pool",
@@ -853,6 +864,7 @@ fn collect_shared_utf8_kinds(class_file: &ClassFile) -> Result<Vec<SharedUtf8Kin
                 name_index,
                 descriptor_index,
             } => {
+                // Name-and-type strings share as plain external UTF-8 unless a `Class` entry already claimed them.
                 let name_kind = kinds.get_mut(*name_index as usize).ok_or_else(|| {
                     Error::InvalidReference(format!(
                         "name-and-type name index {} points outside the constant pool",

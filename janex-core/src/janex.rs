@@ -622,6 +622,7 @@ impl JanexFile {
             }
         }
 
+        // `FileMetadata` signs or checksums only its own prefix, not the whole file body.
         let mut metadata_prefix = VecDataWriter::new();
         metadata_prefix.write_u64_le(Self::FILE_METADATA_MAGIC_NUMBER);
         metadata_prefix.write_u32_le(self.major_version);
@@ -653,6 +654,7 @@ impl JanexFile {
         let mut writer =
             VecDataWriter::with_capacity(external_header_length + file_length + external_tail_length);
         if let Some(external_header) = &external_header {
+            // External header bytes are physically stored before the Janex magic.
             writer.write_all(external_header);
         }
         writer.write_u64_le(Self::MAGIC_NUMBER);
@@ -661,10 +663,12 @@ impl JanexFile {
         }
         writer.write_all(&metadata_prefix);
         writer.write_all(&verification_bytes);
+        // The footer lets readers recover `FileMetadata` by scanning backwards from the end.
         writer.write_u64_le(Self::END_MARK);
         writer.write_u64_le(metadata_length as u64);
         writer.write_u64_le(file_length as u64);
         if let Some(external_tail) = &external_tail {
+            // External tail bytes live after the logical Janex end, so they are not counted in `file_length`.
             writer.write_all(external_tail);
         }
         Ok(writer.into_inner())
@@ -715,6 +719,7 @@ impl JanexFile {
                 SectionContent::ResourceGroups(section) => {
                     resource_groups_count += 1;
                     resource_groups_position = Some(idx);
+                    // Resource-group names form the namespace used by Local references.
                     for group in &section.groups {
                         if !seen_resource_group_names.insert(group.name.clone()) {
                             return Err(Error::InvalidSectionLayout(format!(
@@ -729,6 +734,7 @@ impl JanexFile {
                     string_pool_count += 1;
                     string_pool_position = Some(idx);
                     string_pool_ref = Some(&section.strings);
+                    // FileFormat.md requires string-pool slot `0` to be the empty root segment.
                     if section.strings.is_empty() || section.strings.get(0) != Some("") {
                         return Err(Error::InvalidSectionLayout(
                             "string pool index 0 must be an empty string".to_string(),
@@ -794,6 +800,7 @@ impl JanexFile {
             ));
         }
 
+        // Cross-section validation happens only after the local-resource namespace is complete.
         for section in &self.sections {
             match &section.content {
                 SectionContent::RootConfigGroup(section) => {
@@ -1173,6 +1180,8 @@ impl<R: Read + Seek> JanexArchive<R> {
             return Err(Error::UnexpectedEndOfFile);
         }
 
+        // The last 24 bytes of the logical Janex payload are always:
+        // `end_mark + metadata_length + file_length`.
         let footer_bytes = read_exact_at(&mut reader, janex_end_offset - 24, 24)?;
         let mut footer_reader = ArrayDataReader::new(&footer_bytes);
         let end_mark = DataReader::read_u64_le(&mut footer_reader)?;
@@ -1191,6 +1200,7 @@ impl<R: Read + Seek> JanexArchive<R> {
             ));
         }
 
+        // `file_length` is measured from the Janex magic, so external header bytes sit before `file_start`.
         let file_start = janex_end_offset
             .checked_sub(file_length)
             .ok_or_else(|| Error::InvalidSectionLayout("file_length underflow".to_string()))?;
@@ -1237,11 +1247,14 @@ impl<R: Read + Seek> JanexArchive<R> {
         let mut sections = Vec::with_capacity(parsed_metadata.section_table.len());
         for record in &parsed_metadata.section_table {
             let offset = match record.section_type {
+                // External header bytes are addressed relative to the Janex logical start.
                 SectionType::ExternalHeader => file_start.checked_sub(record.length).ok_or_else(
                     || Error::InvalidSectionLayout("external header underflow".to_string()),
                 )?,
+                // External tail bytes begin immediately after the logical Janex end.
                 SectionType::ExternalTail => janex_end_offset,
                 _ => {
+                    // Normal sections are packed contiguously between the file header and `FileMetadata`.
                     let offset = next_section_offset;
                     next_section_offset =
                         next_section_offset
@@ -1777,6 +1790,7 @@ fn compress_resource_bytes(
         CompressMethod::Composite => {
             let layers = parse_composite_layers(&info.options)?;
             let mut current = data.to_vec();
+            // Resource compression can mix generic layers with `CLASSFILE`, so it uses the shared pool throughout the stack.
             for layer in &layers {
                 current = compress_resource_bytes(layer, &current, string_pool)?;
             }
@@ -1850,6 +1864,7 @@ fn read_file_resource_from_sections(
     group_name: &str,
     path: &str,
 ) -> Result<Option<Box<[u8]>>, Error> {
+    // Resource lookup is by logical group name first, then by resolved resource path.
     let group = match resource_groups
         .groups
         .iter()
@@ -1889,6 +1904,7 @@ fn read_file_resource_from_sections(
                 )));
             }
 
+            // `content_offset` addresses the compressed bytes; checksum fields validate the decoded payload.
             let compressed = &data_pool.bytes[*content_offset as usize..end as usize];
             let data = decode_resource_content(compress_info, compressed, string_pool)?;
             for field in fields {

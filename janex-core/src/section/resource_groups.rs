@@ -311,6 +311,7 @@ fn read_resource_field<R: DataReader>(reader: &mut R) -> Result<ResourceField, E
         0x01 => {
             let payload = reader.read_bytes()?;
             let mut payload_reader = ArrayDataReader::new(payload.as_ref());
+            // Structured sub-payloads are decoded from a nested reader so trailing bytes stay detectable.
             let checksum = read_checksum(&mut payload_reader)?;
             ensure_fully_consumed(&payload_reader, "resource checksum field")?;
             Ok(ResourceField::Checksum(checksum))
@@ -340,6 +341,7 @@ fn read_resource_field<R: DataReader>(reader: &mut R) -> Result<ResourceField, E
             let mut payload_reader = ArrayDataReader::new(payload.as_ref());
             let name = DataReader::read_string(&mut payload_reader)?;
             let content = DataReader::read_bytes(&mut payload_reader)?;
+            // Custom fields keep the outer tag fixed and move application-specific typing into the payload.
             ensure_fully_consumed(&payload_reader, "custom resource field")?;
             Ok(ResourceField::Custom { name, content })
         }

@@ -147,6 +147,7 @@ fn read_config_field<R: DataReader>(reader: &mut R) -> Result<ConfigField, Error
         0x5044_4f4d => {
             let payload = reader.read_bytes()?;
             let mut payload_reader = ArrayDataReader::new(payload.as_ref());
+            // Composite fields are stored as opaque payloads so unknown readers can still skip them.
             let items = read_len_prefixed_vec(&mut payload_reader, read_resource_group_reference)?;
             ensure_fully_consumed(&payload_reader, "module path config field")?;
             ConfigField::ModulePath(items)
@@ -261,6 +262,7 @@ fn read_resource_group_reference<R: DataReader>(
             let repository = reader.read_string()?;
             Ok(ResourceGroupReference::Maven {
                 gav,
+                // The binary form allows an empty repository to mean the Maven Central default.
                 repository: if repository.is_empty() {
                     DEFAULT_MAVEN_REPOSITORY.to_string()
                 } else {
