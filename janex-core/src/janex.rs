@@ -417,6 +417,70 @@ impl JanexFile {
         self.sections.len()
     }
 
+    /// Returns the first attributes section if present.
+    pub fn attributes(&self) -> Option<&AttributesSection> {
+        self.sections.iter().find_map(|section| match &section.content {
+            SectionContent::Attributes(section) => Some(section),
+            _ => None,
+        })
+    }
+
+    /// Returns the external header bytes if present.
+    pub fn external_header(&self) -> Option<&[u8]> {
+        self.sections.iter().find_map(|section| match &section.content {
+            SectionContent::ExternalHeader(section) => Some(section.as_ref()),
+            _ => None,
+        })
+    }
+
+    /// Returns the external tail bytes if present.
+    pub fn external_tail(&self) -> Option<&[u8]> {
+        self.sections.iter().find_map(|section| match &section.content {
+            SectionContent::ExternalTail(section) => Some(section.as_ref()),
+            _ => None,
+        })
+    }
+
+    /// Returns the root configuration section if present.
+    pub fn root_config_group(&self) -> Option<&RootConfigGroupSection> {
+        self.sections.iter().find_map(|section| match &section.content {
+            SectionContent::RootConfigGroup(section) => Some(section),
+            _ => None,
+        })
+    }
+
+    /// Returns the embedded resource-groups section if present.
+    pub fn resource_groups(&self) -> Option<&ResourceGroupsSection> {
+        self.sections.iter().find_map(|section| match &section.content {
+            SectionContent::ResourceGroups(section) => Some(section),
+            _ => None,
+        })
+    }
+
+    /// Returns the string-pool section if present.
+    pub fn string_pool(&self) -> Option<&StringPoolSection> {
+        self.sections.iter().find_map(|section| match &section.content {
+            SectionContent::StringPool(section) => Some(section),
+            _ => None,
+        })
+    }
+
+    /// Returns the data-pool section if present.
+    pub fn data_pool(&self) -> Option<&DataPoolSection> {
+        self.sections.iter().find_map(|section| match &section.content {
+            SectionContent::DataPool(section) => Some(section),
+            _ => None,
+        })
+    }
+
+    /// Iterates over unknown sections preserved from the source file.
+    pub fn unknown_sections(&self) -> impl Iterator<Item = &UnknownSection> + '_ {
+        self.sections.iter().filter_map(|section| match &section.content {
+            SectionContent::Unknown(section) => Some(section),
+            _ => None,
+        })
+    }
+
     /// Reads and decodes one file resource by group name and resource path.
     pub fn read_file_resource_bytes(
         &self,
@@ -1974,6 +2038,11 @@ mod tests {
             Sha256Checksum::new([0; 32]).to_any(),
         ))?;
 
+        assert!(file.root_config_group().is_some());
+        assert!(file.string_pool().is_some());
+        assert!(file.resource_groups().is_some());
+        assert!(file.data_pool().is_some());
+
         let encoded = file.write()?;
 
         let mut archive = JanexArchive::open(Cursor::new(encoded.clone()))?;
@@ -2150,6 +2219,13 @@ mod tests {
         ));
 
         let decoded = archive.decode_all()?;
+        assert_eq!(decoded.external_header(), Some(b"#!/usr/bin/env janex\n".as_slice()));
+        assert_eq!(decoded.external_tail(), Some(b"launcher-jar".as_slice()));
+        assert_eq!(decoded.attributes().unwrap().attributes[0].name, "author");
+        assert!(matches!(
+            decoded.unknown_sections().next().map(|section| section.section_type),
+            Some(SectionType::Unknown(0x1122_3344_5566_7788))
+        ));
         assert_eq!(decoded.write()?, encoded);
         Ok(())
     }
@@ -2239,6 +2315,40 @@ mod tests {
                 .unwrap()
                 .as_ref(),
             class_bytes.as_slice()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn classfile_compression_uses_split_class_strings() -> Result<(), Error> {
+        let class_bytes = sample_classfile_bytes();
+        let mut string_pool = StringPool::with_empty_root();
+        let transformed = encode_resource_content(
+            &CompressInfo {
+                method: CompressMethod::Classfile,
+                uncompressed_size: class_bytes.len() as u64,
+                compressed_size: 0,
+                options: Box::new([]),
+            },
+            &class_bytes,
+            &mut string_pool,
+        )?;
+
+        assert!(transformed.contains(&crate::classfile::ClassFile::TAG_EXTERNAL_UTF8_CLASS));
+        assert!(string_pool.iter().any(|value| value == "java/lang"));
+        assert!(string_pool.iter().any(|value| value == "Object"));
+        assert_eq!(
+            decode_resource_content(
+                &CompressInfo {
+                    method: CompressMethod::Classfile,
+                    uncompressed_size: class_bytes.len() as u64,
+                    compressed_size: transformed.len() as u64,
+                    options: Box::new([]),
+                },
+                &transformed,
+                Some(&string_pool),
+            )?,
+            class_bytes
         );
         Ok(())
     }

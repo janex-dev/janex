@@ -498,9 +498,17 @@ pub(crate) fn compress_with_string_pool(
                 let length = reader.read_u16_be()? as usize;
                 let bytes = reader.read_u8_array(length)?;
                 let value = decode_modified_utf8(bytes.as_ref())?;
-                let string_pool_index = string_pool.push(value);
-                writer.write_u8(ClassFile::TAG_EXTERNAL_UTF8);
-                writer.write_vuint(string_pool_index);
+                if let Some((package_name, class_name)) = split_package_name(&value) {
+                    let package_name_index = string_pool.push(package_name);
+                    let class_name_index = string_pool.push(class_name);
+                    writer.write_u8(ClassFile::TAG_EXTERNAL_UTF8_CLASS);
+                    writer.write_vuint(package_name_index);
+                    writer.write_vuint(class_name_index);
+                } else {
+                    let string_pool_index = string_pool.push(value);
+                    writer.write_u8(ClassFile::TAG_EXTERNAL_UTF8);
+                    writer.write_vuint(string_pool_index);
+                }
             }
             ConstantPoolInfo::TAG_Long | ConstantPoolInfo::TAG_Double => {
                 skip_slot = true;
@@ -713,4 +721,12 @@ fn encode_modified_utf8(value: &str) -> Vec<u8> {
         }
     }
     bytes
+}
+
+fn split_package_name(value: &str) -> Option<(&str, &str)> {
+    let (package_name, class_name) = value.rsplit_once('/')?;
+    if package_name.is_empty() || class_name.is_empty() {
+        return None;
+    }
+    Some((package_name, class_name))
 }
