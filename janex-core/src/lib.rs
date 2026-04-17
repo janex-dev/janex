@@ -8,4 +8,4 @@ pub mod io;
 pub mod janex;
 mod section;
 pub mod platform;
-pub mod string_pool;
+pub use section::string_pool;

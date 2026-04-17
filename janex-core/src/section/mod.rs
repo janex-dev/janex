@@ -4,12 +4,13 @@
 use crate::error::Error;
 use crate::io::VecDataWriter;
 use crate::janex::{SectionContent, SectionType};
+use self::string_pool::{encode_string_pool_section, parse_string_pool_section};
 
 mod data_pool;
 mod padding;
 mod resource_groups;
 mod root_config_group;
-mod string_pool;
+pub mod string_pool;
 
 #[cfg(test)]
 pub(crate) use resource_groups::validate_resource_path;
@@ -26,7 +27,9 @@ pub(crate) fn parse_section_content(
         SectionType::ResourceGroups => Ok(SectionContent::ResourceGroups(
             resource_groups::parse(bytes)?,
         )),
-        SectionType::StringPool => Ok(SectionContent::StringPool(string_pool::parse(bytes)?)),
+        SectionType::StringPool => Ok(SectionContent::StringPool(parse_string_pool_section(
+            bytes,
+        )?)),
         SectionType::DataPool => Ok(SectionContent::DataPool(data_pool::parse(bytes)?)),
         SectionType::ExternalHeader
         | SectionType::ExternalTail
@@ -41,7 +44,7 @@ pub(crate) fn encode_section_content(section: &SectionContent) -> Result<Vec<u8>
         SectionContent::Padding(bytes) => padding::encode(&mut writer, bytes),
         SectionContent::RootConfigGroup(section) => root_config_group::encode(&mut writer, section)?,
         SectionContent::ResourceGroups(section) => resource_groups::encode(&mut writer, section)?,
-        SectionContent::StringPool(section) => string_pool::encode(&mut writer, section)?,
+        SectionContent::StringPool(section) => encode_string_pool_section(&mut writer, section)?,
         SectionContent::DataPool(section) => data_pool::encode(&mut writer, section),
     }
     Ok(writer.into_inner())
