@@ -7,6 +7,9 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+cel-interpreter = "0.10.0"
+os_info = "3.14.0"
+serde = { version = "1.0.228", features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true
 sm3.workspace = true

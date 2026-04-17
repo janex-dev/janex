@@ -507,66 +507,82 @@ impl JanexFile {
 
     /// Returns the first attributes section if present.
     pub fn attributes(&self) -> Option<&AttributesSection> {
-        self.sections.iter().find_map(|section| match &section.content {
-            SectionContent::Attributes(section) => Some(section),
-            _ => None,
-        })
+        self.sections
+            .iter()
+            .find_map(|section| match &section.content {
+                SectionContent::Attributes(section) => Some(section),
+                _ => None,
+            })
     }
 
     /// Returns the external header bytes if present.
     pub fn external_header(&self) -> Option<&[u8]> {
-        self.sections.iter().find_map(|section| match &section.content {
-            SectionContent::ExternalHeader(section) => Some(section.as_ref()),
-            _ => None,
-        })
+        self.sections
+            .iter()
+            .find_map(|section| match &section.content {
+                SectionContent::ExternalHeader(section) => Some(section.as_ref()),
+                _ => None,
+            })
     }
 
     /// Returns the external tail bytes if present.
     pub fn external_tail(&self) -> Option<&[u8]> {
-        self.sections.iter().find_map(|section| match &section.content {
-            SectionContent::ExternalTail(section) => Some(section.as_ref()),
-            _ => None,
-        })
+        self.sections
+            .iter()
+            .find_map(|section| match &section.content {
+                SectionContent::ExternalTail(section) => Some(section.as_ref()),
+                _ => None,
+            })
     }
 
     /// Returns the root configuration section if present.
     pub fn root_config_group(&self) -> Option<&RootConfigGroupSection> {
-        self.sections.iter().find_map(|section| match &section.content {
-            SectionContent::RootConfigGroup(section) => Some(section),
-            _ => None,
-        })
+        self.sections
+            .iter()
+            .find_map(|section| match &section.content {
+                SectionContent::RootConfigGroup(section) => Some(section),
+                _ => None,
+            })
     }
 
     /// Returns the embedded resource-groups section if present.
     pub fn resource_groups(&self) -> Option<&ResourceGroupsSection> {
-        self.sections.iter().find_map(|section| match &section.content {
-            SectionContent::ResourceGroups(section) => Some(section),
-            _ => None,
-        })
+        self.sections
+            .iter()
+            .find_map(|section| match &section.content {
+                SectionContent::ResourceGroups(section) => Some(section),
+                _ => None,
+            })
     }
 
     /// Returns the string-pool section if present.
     pub fn string_pool(&self) -> Option<&StringPoolSection> {
-        self.sections.iter().find_map(|section| match &section.content {
-            SectionContent::StringPool(section) => Some(section),
-            _ => None,
-        })
+        self.sections
+            .iter()
+            .find_map(|section| match &section.content {
+                SectionContent::StringPool(section) => Some(section),
+                _ => None,
+            })
     }
 
     /// Returns the data-pool section if present.
     pub fn data_pool(&self) -> Option<&DataPoolSection> {
-        self.sections.iter().find_map(|section| match &section.content {
-            SectionContent::DataPool(section) => Some(section),
-            _ => None,
-        })
+        self.sections
+            .iter()
+            .find_map(|section| match &section.content {
+                SectionContent::DataPool(section) => Some(section),
+                _ => None,
+            })
     }
 
     /// Iterates over unknown sections preserved from the source file.
     pub fn unknown_sections(&self) -> impl Iterator<Item = &UnknownSection> + '_ {
-        self.sections.iter().filter_map(|section| match &section.content {
-            SectionContent::Unknown(section) => Some(section),
-            _ => None,
-        })
+        self.sections
+            .iter()
+            .filter_map(|section| match &section.content {
+                SectionContent::Unknown(section) => Some(section),
+                _ => None,
+            })
     }
 
     /// Reads and decodes one file resource by group name and resource path.
@@ -575,21 +591,31 @@ impl JanexFile {
         group_name: &str,
         path: &str,
     ) -> Result<Option<Box<[u8]>>, Error> {
-        let resource_groups = match self.sections.iter().find_map(|section| match &section.content {
-            SectionContent::ResourceGroups(section) => Some(section),
-            _ => None,
-        }) {
-            Some(section) => section,
-            None => return Ok(None),
-        };
-        let data_pool = self.sections.iter().find_map(|section| match &section.content {
-            SectionContent::DataPool(section) => Some(section),
-            _ => None,
-        });
-        let string_pool = self.sections.iter().find_map(|section| match &section.content {
-            SectionContent::StringPool(section) => Some(&section.strings),
-            _ => None,
-        });
+        let resource_groups =
+            match self
+                .sections
+                .iter()
+                .find_map(|section| match &section.content {
+                    SectionContent::ResourceGroups(section) => Some(section),
+                    _ => None,
+                }) {
+                Some(section) => section,
+                None => return Ok(None),
+            };
+        let data_pool = self
+            .sections
+            .iter()
+            .find_map(|section| match &section.content {
+                SectionContent::DataPool(section) => Some(section),
+                _ => None,
+            });
+        let string_pool = self
+            .sections
+            .iter()
+            .find_map(|section| match &section.content {
+                SectionContent::StringPool(section) => Some(&section.strings),
+                _ => None,
+            });
         read_file_resource_from_sections(resource_groups, string_pool, data_pool, group_name, path)
     }
 
@@ -651,8 +677,9 @@ impl JanexFile {
         let external_header_length = external_header.as_ref().map_or(0, Vec::len);
         let external_tail_length = external_tail.as_ref().map_or(0, Vec::len);
 
-        let mut writer =
-            VecDataWriter::with_capacity(external_header_length + file_length + external_tail_length);
+        let mut writer = VecDataWriter::with_capacity(
+            external_header_length + file_length + external_tail_length,
+        );
         if let Some(external_header) = &external_header {
             // External header bytes are physically stored before the Janex magic.
             writer.write_all(external_header);
@@ -1248,26 +1275,27 @@ impl<R: Read + Seek> JanexArchive<R> {
         for record in &parsed_metadata.section_table {
             let offset = match record.section_type {
                 // External header bytes are addressed relative to the Janex logical start.
-                SectionType::ExternalHeader => file_start.checked_sub(record.length).ok_or_else(
-                    || Error::InvalidSectionLayout("external header underflow".to_string()),
-                )?,
+                SectionType::ExternalHeader => {
+                    file_start.checked_sub(record.length).ok_or_else(|| {
+                        Error::InvalidSectionLayout("external header underflow".to_string())
+                    })?
+                }
                 // External tail bytes begin immediately after the logical Janex end.
                 SectionType::ExternalTail => janex_end_offset,
                 _ => {
                     // Normal sections are packed contiguously between the file header and `FileMetadata`.
                     let offset = next_section_offset;
-                    next_section_offset =
-                        next_section_offset
-                            .checked_add(record.length)
-                            .ok_or_else(|| {
-                                Error::InvalidSectionLayout("section offset overflow".to_string())
-                            })?;
+                    next_section_offset = next_section_offset
+                        .checked_add(record.length)
+                        .ok_or_else(|| {
+                            Error::InvalidSectionLayout("section offset overflow".to_string())
+                        })?;
                     offset
                 }
             };
-            let end = offset
-                .checked_add(record.length)
-                .ok_or_else(|| Error::InvalidSectionLayout("section offset overflow".to_string()))?;
+            let end = offset.checked_add(record.length).ok_or_else(|| {
+                Error::InvalidSectionLayout("section offset overflow".to_string())
+            })?;
             if end > file_size {
                 return Err(Error::InvalidSectionLayout(
                     "section table points outside the input file".to_string(),
@@ -1888,8 +1916,7 @@ fn read_file_resource_from_sections(
         {
             let data_pool = data_pool.ok_or_else(|| {
                 Error::InvalidReference(
-                    "resource groups contain files but no data pool section is present"
-                        .to_string(),
+                    "resource groups contain files but no data pool section is present".to_string(),
                 )
             })?;
             let end = content_offset
@@ -2286,7 +2313,8 @@ mod tests {
         let mut builder = JanexFile::builder();
         builder
             .with_external_header(
-                SectionBuilder::from(b"#!/usr/bin/env janex\n".to_vec()).with_checksum(section_checksum),
+                SectionBuilder::from(b"#!/usr/bin/env janex\n".to_vec())
+                    .with_checksum(section_checksum),
             )
             .with_attributes(
                 SectionBuilder::new(AttributesSection {
@@ -2298,7 +2326,8 @@ mod tests {
                 .with_checksum(section_checksum),
             )
             .with_string_pool(
-                SectionBuilder::new(StringPoolSection::new(string_pool)).with_checksum(section_checksum),
+                SectionBuilder::new(StringPoolSection::new(string_pool))
+                    .with_checksum(section_checksum),
             )
             .with_root_config_group(
                 SectionBuilder::new(RootConfigGroupSection {
@@ -2348,9 +2377,12 @@ mod tests {
                 .with_checksum(section_checksum),
             )
             .push_unknown_section(
-                SectionBuilder::new(UnknownSection::new(0x1122_3344_5566_7788, b"future-section".to_vec()))
-                    .with_id(3)
-                    .with_checksum(section_checksum),
+                SectionBuilder::new(UnknownSection::new(
+                    0x1122_3344_5566_7788,
+                    b"future-section".to_vec(),
+                ))
+                .with_id(3)
+                .with_checksum(section_checksum),
             )
             .with_external_tail(
                 SectionBuilder::from(b"launcher-jar".to_vec()).with_checksum(section_checksum),
@@ -2362,12 +2394,16 @@ mod tests {
         assert!(JanexArchive::open(Cursor::new(encoded.clone())).is_err());
 
         let janex_end_offset = encoded.len() as u64 - b"launcher-jar".len() as u64;
-        let mut archive = JanexArchive::open_at_end(Cursor::new(encoded.clone()), janex_end_offset)?;
+        let mut archive =
+            JanexArchive::open_at_end(Cursor::new(encoded.clone()), janex_end_offset)?;
         assert_eq!(
             archive.read_external_header()?.unwrap().as_ref(),
             b"#!/usr/bin/env janex\n"
         );
-        assert_eq!(archive.read_external_tail()?.unwrap().as_ref(), b"launcher-jar");
+        assert_eq!(
+            archive.read_external_tail()?.unwrap().as_ref(),
+            b"launcher-jar"
+        );
         assert_eq!(
             archive.read_attributes()?.unwrap().attributes[0].name,
             "author"
@@ -2382,11 +2418,17 @@ mod tests {
         ));
 
         let decoded = archive.decode_all()?;
-        assert_eq!(decoded.external_header(), Some(b"#!/usr/bin/env janex\n".as_slice()));
+        assert_eq!(
+            decoded.external_header(),
+            Some(b"#!/usr/bin/env janex\n".as_slice())
+        );
         assert_eq!(decoded.external_tail(), Some(b"launcher-jar".as_slice()));
         assert_eq!(decoded.attributes().unwrap().attributes[0].name, "author");
         assert!(matches!(
-            decoded.unknown_sections().next().map(|section| section.section_type),
+            decoded
+                .unknown_sections()
+                .next()
+                .map(|section| section.section_type),
             Some(SectionType::Unknown(0x1122_3344_5566_7788))
         ));
         assert_eq!(decoded.write()?, encoded);
@@ -2506,9 +2548,11 @@ mod tests {
         assert!(string_pool.iter().any(|value| value == "fieldName"));
         assert!(string_pool.iter().any(|value| value == "I"));
         assert!(string_pool.iter().all(|value| value != "literal"));
-        assert!(transformed
-            .windows(b"literal".len())
-            .any(|window| window == b"literal"));
+        assert!(
+            transformed
+                .windows(b"literal".len())
+                .any(|window| window == b"literal")
+        );
         assert_eq!(
             decode_resource_content(
                 &CompressInfo {

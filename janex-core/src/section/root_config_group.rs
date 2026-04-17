@@ -47,11 +47,20 @@ impl ConfigGroup {
 
     /// Validates configuration fields and local resource-group references within this configuration subtree.
     pub(crate) fn validate(&self, local_group_names: &HashSet<String>) -> Result<(), Error> {
+        let mut condition_count = 0usize;
         for field in &self.fields {
             match field {
                 ConfigField::Condition(value)
                 | ConfigField::MainClass(value)
                 | ConfigField::MainModule(value) => {
+                    if matches!(field, ConfigField::Condition(_)) {
+                        condition_count += 1;
+                        if condition_count > 1 {
+                            return Err(Error::InvalidValue(
+                                "config groups may contain at most one condition field",
+                            ));
+                        }
+                    }
                     if value.is_empty() {
                         return Err(Error::InvalidValue(
                             "configuration strings must not be empty",

@@ -22,6 +22,8 @@ pub enum Error {
     UnknownEnumValue { name: &'static str, value: u64 },
     /// A field or payload contained a semantically invalid value.
     InvalidValue(&'static str),
+    /// A field or runtime input contained a semantically invalid value with detailed context.
+    InvalidValueMessage(String),
     /// A checksum payload had the wrong byte length for its declared algorithm.
     InvalidChecksumLength { expected: u64, actual: u64 },
     /// The overall Janex file or section layout was invalid.
@@ -30,6 +32,10 @@ pub enum Error {
     InvalidReference(String),
     /// Metadata or resource verification failed.
     VerificationFailed(String),
+    /// Parsing a CEL condition failed.
+    ConditionParse(String),
+    /// Executing a CEL condition failed.
+    ConditionExecution(String),
     /// Compression or decompression failed.
     CompressionError(String),
     /// An underlying I/O operation failed.
@@ -56,6 +62,7 @@ impl Display for Error {
                 write!(f, "unknown {name} value: 0x{value:x}")
             }
             Error::InvalidValue(message) => write!(f, "invalid value: {message}"),
+            Error::InvalidValueMessage(message) => write!(f, "invalid value: {message}"),
             Error::InvalidChecksumLength { expected, actual } => write!(
                 f,
                 "invalid checksum length: expected {expected}, got {actual}"
@@ -63,6 +70,10 @@ impl Display for Error {
             Error::InvalidSectionLayout(message) => write!(f, "invalid section layout: {message}"),
             Error::InvalidReference(message) => write!(f, "invalid reference: {message}"),
             Error::VerificationFailed(message) => write!(f, "verification failed: {message}"),
+            Error::ConditionParse(message) => write!(f, "condition parse failed: {message}"),
+            Error::ConditionExecution(message) => {
+                write!(f, "condition execution failed: {message}")
+            }
             Error::CompressionError(message) => write!(f, "compression error: {message}"),
             Error::Io(error) => write!(f, "{error}"),
         }

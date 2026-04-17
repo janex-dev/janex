@@ -25,10 +25,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<AttributesSection, Error> {
 }
 
 /// Encodes an `Attributes` section into its on-disk representation.
-pub(crate) fn encode(
-    writer: &mut VecDataWriter,
-    section: &AttributesSection,
-) -> Result<(), Error> {
+pub(crate) fn encode(writer: &mut VecDataWriter, section: &AttributesSection) -> Result<(), Error> {
     writer.write_u64_le(AttributesSection::MAGIC_NUMBER);
     write_len_prefixed_slice(writer, &section.attributes, write_attribute)
 }
