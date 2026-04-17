@@ -4,9 +4,9 @@
 use crate::error::Error;
 use crate::io::{ArrayDataReader, DataReader, DataWriter, VecDataWriter};
 use crate::janex::{
+    ConfigField, ConfigGroup, JavaAgent, ResourceGroupReference, RootConfigGroupSection,
     ensure_fully_consumed, read_checksum, read_len_prefixed_vec, write_checksum,
-    write_len_prefixed_slice, write_payload, ConfigField, ConfigGroup, JavaAgent,
-    ResourceGroupReference, RootConfigGroupSection,
+    write_len_prefixed_slice, write_payload,
 };
 use std::collections::HashSet;
 

@@ -4,8 +4,8 @@
 use crate::error::Error;
 use crate::io::{ArrayDataReader, DataReader, DataWriter, VecDataWriter};
 use crate::janex::{
-    ensure_fully_consumed, read_compressed_blob, read_usize, write_compressed_blob,
-    CompressInfo, StringPoolSection,
+    CompressInfo, StringPoolSection, ensure_fully_consumed, read_compressed_blob, read_usize,
+    write_compressed_blob,
 };
 use std::collections::BTreeMap;
 

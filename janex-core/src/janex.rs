@@ -25,13 +25,28 @@ pub struct JanexFile {
     pub fields: Vec<TaggedField<u32>>,
     /// Integrity information for the metadata section itself.
     pub verification: VerificationInfo,
-    /// The ordered list of sections stored in the file body.
-    pub sections: Vec<Section>,
+    sections: Vec<Section>,
 }
 
-/// A section entry recorded in `FileMetadata.section_table`.
+/// Builds a `JanexFile` from typed sections.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Section {
+pub struct JanexBuilder {
+    /// The Janex file-format major version.
+    pub major_version: u32,
+    /// The Janex file-format minor version.
+    pub minor_version: u32,
+    /// Reserved file-level flags.
+    pub flags: u64,
+    /// Opaque metadata fields reserved for forward-compatible extensions.
+    pub fields: Vec<TaggedField<u32>>,
+    /// Integrity information for the metadata section itself.
+    pub verification: VerificationInfo,
+    sections: Vec<Section>,
+}
+
+/// Metadata and typed payload for one section being added to a `JanexBuilder`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SectionBuilder<T> {
     /// The section identifier, unique within its section type.
     pub id: u64,
     /// Section-scoped extension fields.
@@ -39,12 +54,12 @@ pub struct Section {
     /// The checksum policy for the encoded section payload.
     pub checksum: AnyChecksum,
     /// The typed content carried by this section.
-    pub content: SectionContent,
+    pub content: T,
 }
 
 /// The supported Janex section bodies implemented by `janex-core`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SectionContent {
+pub(crate) enum SectionContent {
     /// Arbitrary padding bytes between typed sections.
     Padding(Box<[u8]>),
     /// The launcher root configuration tree.
@@ -55,6 +70,19 @@ pub enum SectionContent {
     StringPool(StringPoolSection),
     /// The raw bytes referenced by file resources.
     DataPool(DataPoolSection),
+}
+
+/// A section entry recorded in `FileMetadata.section_table`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Section {
+    /// The section identifier, unique within its section type.
+    id: u64,
+    /// Section-scoped extension fields.
+    options: Vec<TaggedField<u32>>,
+    /// The checksum policy for the encoded section payload.
+    checksum: AnyChecksum,
+    /// The typed content carried by this section.
+    content: SectionContent,
 }
 
 /// The `RootConfigGroup` section.
@@ -320,8 +348,7 @@ impl JanexFile {
     pub const FILE_METADATA_MAGIC_NUMBER: u64 = 0x4154_4144_4154_454d;
     pub const END_MARK: u64 = 0x444e_4558_454e_414a;
 
-    /// Creates a new Janex file with the current format version and no extra metadata.
-    pub fn new(sections: Vec<Section>) -> Self {
+    fn new(sections: Vec<Section>) -> Self {
         Self {
             major_version: CURRENT_MAJOR_VERSION,
             minor_version: CURRENT_MINOR_VERSION,
@@ -332,103 +359,22 @@ impl JanexFile {
         }
     }
 
+    /// Starts building a Janex file using typed section inputs.
+    pub fn builder() -> JanexBuilder {
+        JanexBuilder::new()
+    }
+
     /// Eagerly parses a Janex file from raw bytes.
     ///
-    /// The reader locates the metadata footer from the end of the input, validates
-    /// section checksums and then decodes each typed section into memory.
+    /// This convenience API now delegates to `JanexArchive` and decodes every
+    /// section after the metadata has been validated.
     pub fn read_all(bytes: &[u8]) -> Result<Self, Error> {
-        if bytes.len() < 24 {
-            return Err(Error::UnexpectedEndOfFile);
-        }
+        JanexArchive::open(std::io::Cursor::new(bytes))?.decode_all()
+    }
 
-        // Janex readers locate the metadata section by reading the fixed-size footer first.
-        let footer_offset = bytes.len() - 24;
-        let mut footer_reader = ArrayDataReader::new(&bytes[footer_offset..]);
-        let end_mark = DataReader::read_u64_le(&mut footer_reader)?;
-        if end_mark != Self::END_MARK {
-            return Err(Error::InvalidMagicNumber {
-                expected: Self::END_MARK,
-                actual: end_mark,
-            });
-        }
-
-        let metadata_length = read_usize(DataReader::read_u64_le(&mut footer_reader)?)?;
-        let file_length = read_usize(DataReader::read_u64_le(&mut footer_reader)?)?;
-        if file_length > bytes.len() {
-            return Err(Error::InvalidSectionLayout(
-                "file_length is larger than the input size".to_string(),
-            ));
-        }
-
-        let file_start = bytes.len() - file_length;
-        let file_end = file_start + file_length;
-        let metadata_start = file_end
-            .checked_sub(metadata_length)
-            .ok_or_else(|| Error::InvalidSectionLayout("metadata_length underflow".to_string()))?;
-        if metadata_start < file_start + 8 {
-            return Err(Error::InvalidSectionLayout(
-                "metadata section overlaps the file header".to_string(),
-            ));
-        }
-
-        let mut file_reader = ArrayDataReader::new(&bytes[file_start..metadata_start]);
-        let magic = DataReader::read_u64_le(&mut file_reader)?;
-        if magic != Self::MAGIC_NUMBER {
-            return Err(Error::InvalidMagicNumber {
-                expected: Self::MAGIC_NUMBER,
-                actual: magic,
-            });
-        }
-
-        let metadata_bytes = &bytes[metadata_start..file_end];
-        let parsed_metadata = read_metadata(metadata_bytes)?;
-        if parsed_metadata.metadata_length != metadata_length as u64 {
-            return Err(Error::InvalidSectionLayout(
-                "metadata_length does not match the footer".to_string(),
-            ));
-        }
-        if parsed_metadata.file_length != file_length as u64 {
-            return Err(Error::InvalidSectionLayout(
-                "file_length does not match the footer".to_string(),
-            ));
-        }
-        if parsed_metadata.major_version != CURRENT_MAJOR_VERSION
-            || parsed_metadata.minor_version != CURRENT_MINOR_VERSION
-        {
-            return Err(Error::UnsupportedFeature("unsupported Janex file version"));
-        }
-        parsed_metadata.verify(metadata_bytes)?;
-
-        let mut sections = Vec::with_capacity(parsed_metadata.section_table.len());
-        for section_info in &parsed_metadata.section_table {
-            let section_bytes =
-                DataReader::read_u8_array(&mut file_reader, read_usize(section_info.length)?)?;
-            verify_checksum(&section_info.checksum, section_bytes.as_ref(), "section")?;
-            let content = parse_section_content(section_info.section_type, section_bytes.as_ref())?;
-            sections.push(Section {
-                id: section_info.id,
-                options: section_info.options.clone(),
-                checksum: section_info.checksum,
-                content,
-            });
-        }
-
-        if DataReader::remaining(&file_reader) != 0 {
-            return Err(Error::InvalidSectionLayout(
-                "section table does not consume the full file body".to_string(),
-            ));
-        }
-
-        let file = Self {
-            major_version: parsed_metadata.major_version,
-            minor_version: parsed_metadata.minor_version,
-            flags: parsed_metadata.flags,
-            fields: parsed_metadata.fields,
-            verification: parsed_metadata.verification,
-            sections,
-        };
-        file.validate()?;
-        Ok(file)
+    /// Returns the number of sections stored in the file body.
+    pub fn sections_len(&self) -> usize {
+        self.sections.len()
     }
 
     /// Encodes the current file into the Janex binary format.
@@ -590,6 +536,150 @@ impl JanexFile {
 impl Default for JanexFile {
     fn default() -> Self {
         Self::new(Vec::new())
+    }
+}
+
+impl JanexBuilder {
+    /// Creates an empty builder using the current Janex format version.
+    pub fn new() -> Self {
+        Self {
+            major_version: CURRENT_MAJOR_VERSION,
+            minor_version: CURRENT_MINOR_VERSION,
+            flags: 0,
+            fields: Vec::new(),
+            verification: VerificationInfo::None,
+            sections: Vec::new(),
+        }
+    }
+
+    /// Adds a padding section without replacing any existing section.
+    pub fn push_padding<S>(&mut self, section: S) -> &mut Self
+    where
+        S: Into<SectionBuilder<Box<[u8]>>>,
+    {
+        self.sections
+            .push(section.into().into_section(SectionContent::Padding));
+        self
+    }
+
+    /// Sets the root configuration section, replacing any existing one in place.
+    pub fn with_root_config_group<S>(&mut self, section: S) -> &mut Self
+    where
+        S: Into<SectionBuilder<RootConfigGroupSection>>,
+    {
+        self.replace_unique_section(section.into().into_section(SectionContent::RootConfigGroup));
+        self
+    }
+
+    /// Sets the resource-groups section, replacing any existing one in place.
+    pub fn with_resource_groups<S>(&mut self, section: S) -> &mut Self
+    where
+        S: Into<SectionBuilder<ResourceGroupsSection>>,
+    {
+        self.replace_unique_section(section.into().into_section(SectionContent::ResourceGroups));
+        self
+    }
+
+    /// Sets the string-pool section, replacing any existing one in place.
+    pub fn with_string_pool<S>(&mut self, section: S) -> &mut Self
+    where
+        S: Into<SectionBuilder<StringPoolSection>>,
+    {
+        self.replace_unique_section(section.into().into_section(SectionContent::StringPool));
+        self
+    }
+
+    /// Sets the data-pool section, replacing any existing one in place.
+    pub fn with_data_pool<S>(&mut self, section: S) -> &mut Self
+    where
+        S: Into<SectionBuilder<DataPoolSection>>,
+    {
+        self.replace_unique_section(section.into().into_section(SectionContent::DataPool));
+        self
+    }
+
+    /// Validates the collected sections and returns a writable `JanexFile`.
+    pub fn build(self) -> Result<JanexFile, Error> {
+        let file = JanexFile {
+            major_version: self.major_version,
+            minor_version: self.minor_version,
+            flags: self.flags,
+            fields: self.fields,
+            verification: self.verification,
+            sections: self.sections,
+        };
+        file.validate()?;
+        Ok(file)
+    }
+
+    fn replace_unique_section(&mut self, section: Section) {
+        let section_type = section.content.section_type();
+        if let Some(existing) = self
+            .sections
+            .iter_mut()
+            .find(|existing| existing.content.section_type() == section_type)
+        {
+            *existing = section;
+        } else {
+            self.sections.push(section);
+        }
+    }
+}
+
+impl Default for JanexBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> SectionBuilder<T> {
+    /// Creates section metadata using default id, options, and no checksum.
+    pub fn new(content: T) -> Self {
+        Self {
+            id: 0,
+            options: Vec::new(),
+            checksum: AnyChecksum::default(),
+            content,
+        }
+    }
+
+    /// Sets the section identifier.
+    pub fn with_id(mut self, id: u64) -> Self {
+        self.id = id;
+        self
+    }
+
+    /// Replaces the section options.
+    pub fn with_options(mut self, options: Vec<TaggedField<u32>>) -> Self {
+        self.options = options;
+        self
+    }
+
+    /// Sets the checksum algorithm template used when encoding the section.
+    pub fn with_checksum(mut self, checksum: AnyChecksum) -> Self {
+        self.checksum = checksum;
+        self
+    }
+
+    fn into_section(self, content: impl FnOnce(T) -> SectionContent) -> Section {
+        Section {
+            id: self.id,
+            options: self.options,
+            checksum: self.checksum,
+            content: content(self.content),
+        }
+    }
+}
+
+impl<T> From<T> for SectionBuilder<T> {
+    fn from(content: T) -> Self {
+        Self::new(content)
+    }
+}
+
+impl From<Vec<u8>> for SectionBuilder<Box<[u8]>> {
+    fn from(content: Vec<u8>) -> Self {
+        Self::new(content.into_boxed_slice())
     }
 }
 
@@ -814,16 +904,29 @@ impl<R: Read + Seek> JanexArchive<R> {
         Ok(bytes)
     }
 
-    /// Reads, verifies and decodes a section on demand.
-    pub fn read_section(&mut self, index: usize) -> Result<SectionContent, Error> {
-        let section_type = self
-            .metadata
-            .sections
-            .get(index)
-            .ok_or_else(|| Error::InvalidReference(format!("invalid section index {index}")))?
-            .section_type;
-        let bytes = self.read_section_bytes(index)?;
-        parse_section_content(section_type, &bytes)
+    /// Decodes every indexed section into an owned `JanexFile`.
+    pub fn decode_all(&mut self) -> Result<JanexFile, Error> {
+        let mut sections = Vec::with_capacity(self.metadata.sections.len());
+        for index in 0..self.metadata.sections.len() {
+            let metadata = self.metadata.sections[index].clone();
+            sections.push(Section {
+                id: metadata.id,
+                options: metadata.options,
+                checksum: metadata.checksum,
+                content: self.decode_section(index)?,
+            });
+        }
+
+        let file = JanexFile {
+            major_version: self.metadata.major_version,
+            minor_version: self.metadata.minor_version,
+            flags: self.metadata.flags,
+            fields: self.metadata.fields.clone(),
+            verification: self.metadata.verification.clone(),
+            sections,
+        };
+        file.validate()?;
+        Ok(file)
     }
 
     /// Reads the first `RootConfigGroup` section, if present.
@@ -866,16 +969,26 @@ impl<R: Read + Seek> JanexArchive<R> {
         &mut self,
         section_type: SectionType,
     ) -> Result<Option<SectionContent>, Error> {
-        if let Some((index, _)) = self
+        if let Some(index) = self
             .metadata
             .sections
             .iter()
-            .enumerate()
-            .find(|(_, section)| section.section_type == section_type)
+            .position(|section| section.section_type == section_type)
         {
-            return self.read_section(index).map(Some);
+            return self.decode_section(index).map(Some);
         }
         Ok(None)
+    }
+
+    fn decode_section(&mut self, index: usize) -> Result<SectionContent, Error> {
+        let section_type = self
+            .metadata
+            .sections
+            .get(index)
+            .ok_or_else(|| Error::InvalidReference(format!("invalid section index {index}")))?
+            .section_type;
+        let bytes = self.read_section_bytes(index)?;
+        parse_section_content(section_type, &bytes)
     }
 }
 
@@ -1336,80 +1449,70 @@ mod tests {
         let dir_index = string_pool.push("com/example");
         let file_index = string_pool.push("App.class");
 
-        let file = JanexFile {
-            major_version: CURRENT_MAJOR_VERSION,
-            minor_version: CURRENT_MINOR_VERSION,
-            flags: 0,
-            fields: vec![TaggedField::<u32>::new(0xfeed_beef, b"meta".to_vec())],
-            verification: VerificationInfo::Checksum(Sha256Checksum::new([0; 32]).to_any()),
-            sections: vec![
-                Section {
-                    id: 0,
-                    options: Vec::new(),
-                    checksum: Sha256Checksum::new([0; 32]).to_any(),
-                    content: SectionContent::StringPool(StringPoolSection {
-                        compression: CompressInfo::none(),
-                        strings: string_pool,
-                    }),
-                },
-                Section {
-                    id: 0,
-                    options: Vec::new(),
-                    checksum: Sha256Checksum::new([0; 32]).to_any(),
-                    content: SectionContent::RootConfigGroup(RootConfigGroupSection {
-                        root_group: ConfigGroup {
-                            fields: vec![
-                                ConfigField::MainClass("com.example.Main".to_string()),
-                                ConfigField::ClassPath(vec![ResourceGroupReference::Local {
-                                    group_name: "app".to_string(),
-                                }]),
-                                ConfigField::JvmOptions(vec!["-Xmx512m".to_string()]),
-                            ],
-                        },
-                    }),
-                },
-                Section {
-                    id: 0,
-                    options: Vec::new(),
-                    checksum: Sha256Checksum::new([0; 32]).to_any(),
-                    content: SectionContent::ResourceGroups(ResourceGroupsSection {
-                        groups: vec![ResourceGroup {
-                            name: "app".to_string(),
-                            fields: Vec::new(),
-                            resources_compression: CompressInfo::none(),
-                            resources: vec![
-                                Resource::Directory {
-                                    path: ResourcePath::String("com".to_string()),
-                                    fields: Vec::new(),
+        let section_checksum = Sha256Checksum::new([0; 32]).to_any();
+        let mut builder = JanexFile::builder();
+        builder.fields = vec![TaggedField::<u32>::new(0xfeed_beef, b"meta".to_vec())];
+        builder.verification = VerificationInfo::Checksum(Sha256Checksum::new([0; 32]).to_any());
+        builder
+            .with_string_pool(
+                SectionBuilder::new(StringPoolSection {
+                    compression: CompressInfo::none(),
+                    strings: string_pool,
+                })
+                .with_checksum(section_checksum),
+            )
+            .with_root_config_group(
+                SectionBuilder::new(RootConfigGroupSection {
+                    root_group: ConfigGroup {
+                        fields: vec![
+                            ConfigField::MainClass("com.example.Main".to_string()),
+                            ConfigField::ClassPath(vec![ResourceGroupReference::Local {
+                                group_name: "app".to_string(),
+                            }]),
+                            ConfigField::JvmOptions(vec!["-Xmx512m".to_string()]),
+                        ],
+                    },
+                })
+                .with_checksum(section_checksum),
+            )
+            .with_resource_groups(
+                SectionBuilder::new(ResourceGroupsSection {
+                    groups: vec![ResourceGroup {
+                        name: "app".to_string(),
+                        fields: Vec::new(),
+                        resources_compression: CompressInfo::none(),
+                        resources: vec![
+                            Resource::Directory {
+                                path: ResourcePath::String("com".to_string()),
+                                fields: Vec::new(),
+                            },
+                            Resource::File {
+                                path: ResourcePath::Ref {
+                                    directory_index: dir_index,
+                                    file_name_index: file_index,
                                 },
-                                Resource::File {
-                                    path: ResourcePath::Ref {
-                                        directory_index: dir_index,
-                                        file_name_index: file_index,
-                                    },
-                                    compress_info: CompressInfo {
-                                        method: CompressMethod::Classfile,
-                                        uncompressed_size: 5,
-                                        compressed_size: 5,
-                                        options: Box::new([]),
-                                    },
-                                    content_offset: 0,
-                                    fields: vec![ResourceField::Comment("class".to_string())],
+                                compress_info: CompressInfo {
+                                    method: CompressMethod::Classfile,
+                                    uncompressed_size: 5,
+                                    compressed_size: 5,
+                                    options: Box::new([]),
                                 },
-                            ],
-                        }],
-                    }),
-                },
-                Section {
-                    id: 0,
-                    options: Vec::new(),
-                    checksum: Sha256Checksum::new([0; 32]).to_any(),
-                    content: SectionContent::DataPool(DataPoolSection {
-                        bytes: b"hello".to_vec().into_boxed_slice(),
-                    }),
-                },
-            ],
-        };
+                                content_offset: 0,
+                                fields: vec![ResourceField::Comment("class".to_string())],
+                            },
+                        ],
+                    }],
+                })
+                .with_checksum(section_checksum),
+            )
+            .with_data_pool(
+                SectionBuilder::new(DataPoolSection {
+                    bytes: b"hello".to_vec().into_boxed_slice(),
+                })
+                .with_checksum(section_checksum),
+            );
+
+        let file = builder.build()?;
 
         let encoded = file.write()?;
 
@@ -1429,7 +1532,7 @@ mod tests {
         let data_pool = archive.read_data_pool()?.unwrap();
         assert_eq!(data_pool.bytes.as_ref(), b"hello");
 
-        let eager = JanexFile::read_all(&encoded)?;
+        let eager = archive.decode_all()?;
         assert_eq!(eager.write()?, encoded);
         Ok(())
     }

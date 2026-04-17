@@ -4,11 +4,10 @@
 use crate::error::Error;
 use crate::io::{ArrayDataReader, DataReader, DataWriter, VecDataWriter};
 use crate::janex::{
+    Resource, ResourceField, ResourceGroup, ResourceGroupsSection, ResourcePath, Timestamp,
     ensure_fully_consumed, read_checksum, read_compress_info, read_compressed_blob,
-    read_len_prefixed_vec, read_tagged_field_u32, read_usize, write_checksum,
-    write_compress_info, write_compressed_blob, write_len_prefixed_slice, write_payload,
-    write_tagged_field_u32, Resource, ResourceField, ResourceGroup, ResourceGroupsSection,
-    ResourcePath, Timestamp,
+    read_len_prefixed_vec, read_tagged_field_u32, read_usize, write_checksum, write_compress_info,
+    write_compressed_blob, write_len_prefixed_slice, write_payload, write_tagged_field_u32,
 };
 use crate::string_pool::StringPool;
 use std::collections::HashSet;

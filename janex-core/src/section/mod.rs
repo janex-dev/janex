@@ -1,10 +1,10 @@
 // Copyright (c) 2026 Glavo
 // SPDX-License-Identifier: MPL-2.0
 
+use self::string_pool::{encode_string_pool_section, parse_string_pool_section};
 use crate::error::Error;
 use crate::io::VecDataWriter;
 use crate::janex::{SectionContent, SectionType};
-use self::string_pool::{encode_string_pool_section, parse_string_pool_section};
 
 mod data_pool;
 mod padding;
@@ -24,9 +24,9 @@ pub(crate) fn parse_section_content(
         SectionType::RootConfigGroup => Ok(SectionContent::RootConfigGroup(
             root_config_group::parse(bytes)?,
         )),
-        SectionType::ResourceGroups => Ok(SectionContent::ResourceGroups(
-            resource_groups::parse(bytes)?,
-        )),
+        SectionType::ResourceGroups => Ok(SectionContent::ResourceGroups(resource_groups::parse(
+            bytes,
+        )?)),
         SectionType::StringPool => Ok(SectionContent::StringPool(parse_string_pool_section(
             bytes,
         )?)),
@@ -42,7 +42,9 @@ pub(crate) fn encode_section_content(section: &SectionContent) -> Result<Vec<u8>
     let mut writer = VecDataWriter::new();
     match section {
         SectionContent::Padding(bytes) => padding::encode(&mut writer, bytes),
-        SectionContent::RootConfigGroup(section) => root_config_group::encode(&mut writer, section)?,
+        SectionContent::RootConfigGroup(section) => {
+            root_config_group::encode(&mut writer, section)?
+        }
         SectionContent::ResourceGroups(section) => resource_groups::encode(&mut writer, section)?,
         SectionContent::StringPool(section) => encode_string_pool_section(&mut writer, section)?,
         SectionContent::DataPool(section) => data_pool::encode(&mut writer, section),
