@@ -69,6 +69,12 @@ pub struct SectionBuilder<T> {
 pub(crate) enum SectionContent {
     /// Arbitrary padding bytes between typed sections.
     Padding(Box<[u8]>),
+    /// Optional metadata attributes.
+    Attributes(AttributesSection),
+    /// Raw bytes stored before the `JanexFile` structure.
+    ExternalHeader(Box<[u8]>),
+    /// Raw bytes stored after the `JanexFile` structure.
+    ExternalTail(Box<[u8]>),
     /// The launcher root configuration tree.
     RootConfigGroup(RootConfigGroupSection),
     /// Embedded resource-group metadata.
@@ -77,6 +83,8 @@ pub(crate) enum SectionContent {
     StringPool(StringPoolSection),
     /// The raw bytes referenced by file resources.
     DataPool(DataPoolSection),
+    /// An unrecognized section preserved as raw bytes.
+    Unknown(UnknownSection),
 }
 
 /// A section entry recorded in `FileMetadata.section_table`.
@@ -97,6 +105,20 @@ struct Section {
 pub struct RootConfigGroupSection {
     /// The root configuration group evaluated by the launcher.
     pub root_group: ConfigGroup,
+}
+
+/// The `Attributes` section.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttributesSection {
+    /// The attributes carried by the file.
+    pub attributes: Vec<Attribute>,
+}
+
+/// One name/value attribute inside `AttributesSection`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attribute {
+    pub name: String,
+    pub value: Box<[u8]>,
 }
 
 /// The `ResourceGroups` section.
@@ -161,6 +183,8 @@ pub enum ConfigField {
     JvmOptions(Vec<String>),
     /// Nested configuration groups.
     SubGroups(Vec<ConfigGroup>),
+    /// An unrecognized configuration field preserved as raw bytes.
+    Unknown { field_type: u32, payload: Box<[u8]> },
 }
 
 /// A reference to either an embedded resource group or a remote Maven artifact.
@@ -230,6 +254,7 @@ pub enum ResourceField {
     FileAccessTime(Timestamp),
     PosixFilePermissions(u16),
     Custom { name: String, content: Box<[u8]> },
+    Unknown { id: u8, payload: Box<[u8]> },
 }
 
 /// A nanosecond-precision timestamp relative to the Unix epoch.
@@ -267,17 +292,24 @@ pub enum CompressMethod {
 
 /// Well-known Janex section type tags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u64)]
 pub enum SectionType {
-    Padding = 0x0047_4e49_4444_4150,
-    ExternalHeader = 0x4441_4548_4c54_5845,
-    ExternalTail = 0x4c49_4154_4c54_5845,
-    FileMetadata = 0x4154_4144_4154_454d,
-    Attributes = 0x2e53_4249_5254_5441,
-    DataPool = 0x4c4f_4f50_4154_4144,
-    RootConfigGroup = 0x5055_4f52_4747_4643,
-    ResourceGroups = 0x0053_5052_4753_4552,
-    StringPool = 0x004c_4f4f_5052_5453,
+    Padding,
+    ExternalHeader,
+    ExternalTail,
+    FileMetadata,
+    Attributes,
+    DataPool,
+    RootConfigGroup,
+    ResourceGroups,
+    StringPool,
+    Unknown(u64),
+}
+
+/// An unrecognized section body preserved as raw bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownSection {
+    pub section_type: SectionType,
+    pub bytes: Box<[u8]>,
 }
 
 /// The eagerly loaded metadata of a Janex file.
@@ -385,6 +417,30 @@ impl JanexFile {
         self.sections.len()
     }
 
+    /// Reads and decodes one file resource by group name and resource path.
+    pub fn read_file_resource_bytes(
+        &self,
+        group_name: &str,
+        path: &str,
+    ) -> Result<Option<Box<[u8]>>, Error> {
+        let resource_groups = match self.sections.iter().find_map(|section| match &section.content {
+            SectionContent::ResourceGroups(section) => Some(section),
+            _ => None,
+        }) {
+            Some(section) => section,
+            None => return Ok(None),
+        };
+        let data_pool = self.sections.iter().find_map(|section| match &section.content {
+            SectionContent::DataPool(section) => Some(section),
+            _ => None,
+        });
+        let string_pool = self.sections.iter().find_map(|section| match &section.content {
+            SectionContent::StringPool(section) => Some(&section.strings),
+            _ => None,
+        });
+        read_file_resource_from_sections(resource_groups, string_pool, data_pool, group_name, path)
+    }
+
     /// Encodes the current file into the Janex binary format.
     ///
     /// Section payloads are serialized first so the metadata section can record
@@ -394,6 +450,8 @@ impl JanexFile {
 
         let mut section_infos = Vec::with_capacity(self.sections.len());
         let mut encoded_sections = Vec::with_capacity(self.sections.len());
+        let mut external_header = None;
+        let mut external_tail = None;
         for section in &self.sections {
             // Section metadata depends on the final encoded byte length and checksum.
             let bytes = encode_section_content(&section.content)?;
@@ -405,7 +463,11 @@ impl JanexFile {
                 length: bytes.len() as u64,
                 checksum,
             });
-            encoded_sections.push(bytes);
+            match section.content {
+                SectionContent::ExternalHeader(_) => external_header = Some(bytes),
+                SectionContent::ExternalTail(_) => external_tail = Some(bytes),
+                _ => encoded_sections.push(bytes),
+            }
         }
 
         let mut metadata_prefix = VecDataWriter::new();
@@ -433,8 +495,14 @@ impl JanexFile {
         let metadata_length = metadata_prefix.len() + verification_bytes.len() + 24;
         let sections_length: usize = encoded_sections.iter().map(Vec::len).sum();
         let file_length = 8 + sections_length + metadata_length;
+        let external_header_length = external_header.as_ref().map_or(0, Vec::len);
+        let external_tail_length = external_tail.as_ref().map_or(0, Vec::len);
 
-        let mut writer = VecDataWriter::with_capacity(file_length);
+        let mut writer =
+            VecDataWriter::with_capacity(external_header_length + file_length + external_tail_length);
+        if let Some(external_header) = &external_header {
+            writer.write_all(external_header);
+        }
         writer.write_u64_le(Self::MAGIC_NUMBER);
         for section in &encoded_sections {
             writer.write_all(section);
@@ -444,14 +512,21 @@ impl JanexFile {
         writer.write_u64_le(Self::END_MARK);
         writer.write_u64_le(metadata_length as u64);
         writer.write_u64_le(file_length as u64);
+        if let Some(external_tail) = &external_tail {
+            writer.write_all(external_tail);
+        }
         Ok(writer.into_inner())
     }
 
     fn validate(&self) -> Result<(), Error> {
+        let sections_len = self.sections.len();
         let mut root_config_group_count = 0usize;
+        let mut attributes_count = 0usize;
         let mut resource_groups_count = 0usize;
         let mut string_pool_count = 0usize;
         let mut data_pool_count = 0usize;
+        let mut external_header_position = None;
+        let mut external_tail_position = None;
         let mut seen_section_keys = HashSet::with_capacity(self.sections.len());
         let mut seen_resource_group_names = HashSet::new();
         let mut local_group_names = HashSet::new();
@@ -461,17 +536,26 @@ impl JanexFile {
         let mut string_pool_ref = None;
 
         for (idx, section) in self.sections.iter().enumerate() {
-            let key = (section.content.section_type() as u64, section.id);
+            let key = (section.content.section_type().raw(), section.id);
             if !seen_section_keys.insert(key) {
                 return Err(Error::InvalidSectionLayout(format!(
                     "duplicate section id {} for section type 0x{:016x}",
                     section.id,
-                    section.content.section_type() as u64
+                    section.content.section_type().raw()
                 )));
             }
 
             match &section.content {
                 SectionContent::Padding(_) => {}
+                SectionContent::Attributes(_) => {
+                    attributes_count += 1;
+                }
+                SectionContent::ExternalHeader(_) => {
+                    external_header_position = Some(idx);
+                }
+                SectionContent::ExternalTail(_) => {
+                    external_tail_position = Some(idx);
+                }
                 SectionContent::RootConfigGroup(_) => {
                     root_config_group_count += 1;
                 }
@@ -502,16 +586,48 @@ impl JanexFile {
                     data_pool_count += 1;
                     data_pool_len = Some(section.bytes.len() as u64);
                 }
+                SectionContent::Unknown(_) => {}
             }
         }
 
-        if root_config_group_count > 1
+        if attributes_count > 1
+            || root_config_group_count > 1
             || resource_groups_count > 1
             || string_pool_count > 1
             || data_pool_count > 1
+            || external_header_position.is_some_and(|_| {
+                self.sections
+                    .iter()
+                    .filter(|section| matches!(section.content, SectionContent::ExternalHeader(_)))
+                    .count()
+                    > 1
+            })
+            || external_tail_position.is_some_and(|_| {
+                self.sections
+                    .iter()
+                    .filter(|section| matches!(section.content, SectionContent::ExternalTail(_)))
+                    .count()
+                    > 1
+            })
         {
             return Err(Error::InvalidSectionLayout(
-                "Janex files may contain at most one root config group, resource groups, string pool, and data pool section".to_string(),
+                "Janex files may contain at most one external header, external tail, attributes, root config group, resource groups, string pool, and data pool section".to_string(),
+            ));
+        }
+
+        if let Some(position) = external_header_position
+            && position != 0
+        {
+            return Err(Error::InvalidSectionLayout(
+                "the external header section must be the first section-table entry".to_string(),
+            ));
+        }
+
+        if let Some(position) = external_tail_position
+            && position + 1 != sections_len
+        {
+            return Err(Error::InvalidSectionLayout(
+                "the external tail section must be the last section-table entry".to_string(),
             ));
         }
 
@@ -572,6 +688,33 @@ impl JanexBuilder {
         self
     }
 
+    /// Sets the attributes section, replacing any existing one in place.
+    pub fn with_attributes<S>(&mut self, section: S) -> &mut Self
+    where
+        S: Into<SectionBuilder<AttributesSection>>,
+    {
+        self.replace_unique_section(section.into().into_section(SectionContent::Attributes));
+        self
+    }
+
+    /// Sets the external header section, replacing any existing one in place.
+    pub fn with_external_header<S>(&mut self, section: S) -> &mut Self
+    where
+        S: Into<SectionBuilder<Box<[u8]>>>,
+    {
+        self.replace_unique_section(section.into().into_section(SectionContent::ExternalHeader));
+        self
+    }
+
+    /// Sets the external tail section, replacing any existing one in place.
+    pub fn with_external_tail<S>(&mut self, section: S) -> &mut Self
+    where
+        S: Into<SectionBuilder<Box<[u8]>>>,
+    {
+        self.replace_unique_section(section.into().into_section(SectionContent::ExternalTail));
+        self
+    }
+
     /// Sets the root configuration section, replacing any existing one in place.
     pub fn with_root_config_group<S>(&mut self, section: S) -> &mut Self
     where
@@ -605,6 +748,16 @@ impl JanexBuilder {
         S: Into<SectionBuilder<DataPoolSection>>,
     {
         self.replace_unique_section(section.into().into_section(SectionContent::DataPool));
+        self
+    }
+
+    /// Adds an unknown section without replacing any existing section.
+    pub fn push_unknown_section<S>(&mut self, section: S) -> &mut Self
+    where
+        S: Into<SectionBuilder<UnknownSection>>,
+    {
+        self.sections
+            .push(section.into().into_section(SectionContent::Unknown));
         self
     }
 
@@ -693,28 +846,52 @@ impl From<Vec<u8>> for SectionBuilder<Box<[u8]>> {
     }
 }
 
+impl UnknownSection {
+    /// Creates an unknown section from its raw section-type tag and payload.
+    pub fn new(section_type: u64, bytes: Vec<u8>) -> Self {
+        Self {
+            section_type: SectionType::Unknown(section_type),
+            bytes: bytes.into_boxed_slice(),
+        }
+    }
+}
+
 impl JanexMetadata {
     /// Validates metadata-level invariants that do not require decoding section bodies.
     pub fn validate(&self) -> Result<(), Error> {
+        let sections_len = self.sections.len();
         let mut root_config_group_count = 0usize;
+        let mut attributes_count = 0usize;
         let mut resource_groups_count = 0usize;
         let mut string_pool_count = 0usize;
         let mut data_pool_count = 0usize;
+        let mut external_header_position = None;
+        let mut external_tail_position = None;
         let mut seen_section_keys = HashSet::with_capacity(self.sections.len());
         let mut string_pool_position = None;
         let mut resource_groups_position = None;
 
         for (idx, section) in self.sections.iter().enumerate() {
-            let key = (section.section_type as u64, section.id);
+            let key = (section.section_type.raw(), section.id);
             if !seen_section_keys.insert(key) {
                 return Err(Error::InvalidSectionLayout(format!(
                     "duplicate section id {} for section type 0x{:016x}",
-                    section.id, section.section_type as u64
+                    section.id,
+                    section.section_type.raw()
                 )));
             }
 
             match section.section_type {
                 SectionType::Padding => {}
+                SectionType::Attributes => {
+                    attributes_count += 1;
+                }
+                SectionType::ExternalHeader => {
+                    external_header_position = Some(idx);
+                }
+                SectionType::ExternalTail => {
+                    external_tail_position = Some(idx);
+                }
                 SectionType::RootConfigGroup => {
                     root_config_group_count += 1;
                 }
@@ -729,24 +906,51 @@ impl JanexMetadata {
                 SectionType::DataPool => {
                     data_pool_count += 1;
                 }
-                SectionType::ExternalHeader
-                | SectionType::ExternalTail
-                | SectionType::FileMetadata
-                | SectionType::Attributes => {
+                SectionType::FileMetadata => {
                     return Err(Error::UnsupportedFeature(
-                        "external header/tail, attributes, and nested metadata sections are not implemented",
+                        "nested metadata sections are not implemented",
                     ));
                 }
+                SectionType::Unknown(_) => {}
             }
         }
 
-        if root_config_group_count > 1
+        if attributes_count > 1
+            || root_config_group_count > 1
             || resource_groups_count > 1
             || string_pool_count > 1
             || data_pool_count > 1
+            || self
+                .sections
+                .iter()
+                .filter(|section| section.section_type == SectionType::ExternalHeader)
+                .count()
+                > 1
+            || self
+                .sections
+                .iter()
+                .filter(|section| section.section_type == SectionType::ExternalTail)
+                .count()
+                > 1
         {
             return Err(Error::InvalidSectionLayout(
-                "Janex files may contain at most one root config group, resource groups, string pool, and data pool section".to_string(),
+                "Janex files may contain at most one external header, external tail, attributes, root config group, resource groups, string pool, and data pool section".to_string(),
+            ));
+        }
+
+        if let Some(position) = external_header_position
+            && position != 0
+        {
+            return Err(Error::InvalidSectionLayout(
+                "the external header section must be the first section-table entry".to_string(),
+            ));
+        }
+
+        if let Some(position) = external_tail_position
+            && position + 1 != sections_len
+        {
+            return Err(Error::InvalidSectionLayout(
+                "the external tail section must be the last section-table entry".to_string(),
             ));
         }
 
@@ -779,17 +983,42 @@ impl<R: Read + Seek> JanexArchive<R> {
         Self::open_with_verifier(reader, &RejectingDetachedSignatureVerifier)
     }
 
+    /// Opens a Janex file whose logical end is known to be before the physical EOF.
+    pub fn open_at_end(reader: R, janex_end_offset: u64) -> Result<Self, Error> {
+        Self::open_at_end_with_verifier(
+            reader,
+            janex_end_offset,
+            &RejectingDetachedSignatureVerifier,
+        )
+    }
+
     /// Opens a Janex file using a detached-signature verifier when needed.
     pub fn open_with_verifier<V: DetachedSignatureVerifier + ?Sized>(
+        reader: R,
+        verifier: &V,
+    ) -> Result<Self, Error> {
+        let mut reader = reader;
+        let file_size = reader.seek(SeekFrom::End(0))?;
+        Self::open_at_end_with_verifier(reader, file_size, verifier)
+    }
+
+    /// Opens a Janex file using a detached-signature verifier when its logical end is known.
+    pub fn open_at_end_with_verifier<V: DetachedSignatureVerifier + ?Sized>(
         mut reader: R,
+        janex_end_offset: u64,
         verifier: &V,
     ) -> Result<Self, Error> {
         let file_size = reader.seek(SeekFrom::End(0))?;
-        if file_size < 24 {
+        if janex_end_offset > file_size {
+            return Err(Error::InvalidSectionLayout(
+                "janex_end_offset is larger than the input size".to_string(),
+            ));
+        }
+        if janex_end_offset < 24 {
             return Err(Error::UnexpectedEndOfFile);
         }
 
-        let footer_bytes = read_exact_at(&mut reader, file_size - 24, 24)?;
+        let footer_bytes = read_exact_at(&mut reader, janex_end_offset - 24, 24)?;
         let mut footer_reader = ArrayDataReader::new(&footer_bytes);
         let end_mark = DataReader::read_u64_le(&mut footer_reader)?;
         if end_mark != JanexFile::END_MARK {
@@ -807,7 +1036,9 @@ impl<R: Read + Seek> JanexArchive<R> {
             ));
         }
 
-        let file_start = file_size - file_length;
+        let file_start = janex_end_offset
+            .checked_sub(file_length)
+            .ok_or_else(|| Error::InvalidSectionLayout("file_length underflow".to_string()))?;
         let file_end = file_start + file_length;
         let metadata_start = file_end
             .checked_sub(metadata_length as u64)
@@ -850,20 +1081,38 @@ impl<R: Read + Seek> JanexArchive<R> {
         let mut next_section_offset = file_start + 8;
         let mut sections = Vec::with_capacity(parsed_metadata.section_table.len());
         for record in &parsed_metadata.section_table {
+            let offset = match record.section_type {
+                SectionType::ExternalHeader => file_start.checked_sub(record.length).ok_or_else(
+                    || Error::InvalidSectionLayout("external header underflow".to_string()),
+                )?,
+                SectionType::ExternalTail => janex_end_offset,
+                _ => {
+                    let offset = next_section_offset;
+                    next_section_offset =
+                        next_section_offset
+                            .checked_add(record.length)
+                            .ok_or_else(|| {
+                                Error::InvalidSectionLayout("section offset overflow".to_string())
+                            })?;
+                    offset
+                }
+            };
+            let end = offset
+                .checked_add(record.length)
+                .ok_or_else(|| Error::InvalidSectionLayout("section offset overflow".to_string()))?;
+            if end > file_size {
+                return Err(Error::InvalidSectionLayout(
+                    "section table points outside the input file".to_string(),
+                ));
+            }
             sections.push(SectionMetadata {
                 section_type: record.section_type,
                 id: record.id,
                 options: record.options.clone(),
                 length: record.length,
                 checksum: record.checksum,
-                offset: next_section_offset,
+                offset,
             });
-            next_section_offset =
-                next_section_offset
-                    .checked_add(record.length)
-                    .ok_or_else(|| {
-                        Error::InvalidSectionLayout("section offset overflow".to_string())
-                    })?;
         }
 
         if next_section_offset != metadata_start {
@@ -965,6 +1214,15 @@ impl<R: Read + Seek> JanexArchive<R> {
         }
     }
 
+    /// Reads the first `Attributes` section, if present.
+    pub fn read_attributes(&mut self) -> Result<Option<AttributesSection>, Error> {
+        match self.read_first_section_of_type(SectionType::Attributes)? {
+            Some(SectionContent::Attributes(section)) => Ok(Some(section)),
+            None => Ok(None),
+            Some(_) => unreachable!(),
+        }
+    }
+
     /// Reads the first `StringPool` section, if present.
     pub fn read_string_pool(&mut self) -> Result<Option<StringPoolSection>, Error> {
         match self.read_first_section_of_type(SectionType::StringPool)? {
@@ -981,6 +1239,45 @@ impl<R: Read + Seek> JanexArchive<R> {
             None => Ok(None),
             Some(_) => unreachable!(),
         }
+    }
+
+    /// Reads the first `ExternalHeader` section, if present.
+    pub fn read_external_header(&mut self) -> Result<Option<Box<[u8]>>, Error> {
+        match self.read_first_section_of_type(SectionType::ExternalHeader)? {
+            Some(SectionContent::ExternalHeader(section)) => Ok(Some(section)),
+            None => Ok(None),
+            Some(_) => unreachable!(),
+        }
+    }
+
+    /// Reads the first `ExternalTail` section, if present.
+    pub fn read_external_tail(&mut self) -> Result<Option<Box<[u8]>>, Error> {
+        match self.read_first_section_of_type(SectionType::ExternalTail)? {
+            Some(SectionContent::ExternalTail(section)) => Ok(Some(section)),
+            None => Ok(None),
+            Some(_) => unreachable!(),
+        }
+    }
+
+    /// Reads and decodes one file resource by group name and resource path.
+    pub fn read_file_resource_bytes(
+        &mut self,
+        group_name: &str,
+        path: &str,
+    ) -> Result<Option<Box<[u8]>>, Error> {
+        let string_pool = self.read_string_pool()?;
+        let resource_groups = match self.read_resource_groups()? {
+            Some(section) => section,
+            None => return Ok(None),
+        };
+        let data_pool = self.read_data_pool()?;
+        read_file_resource_from_sections(
+            &resource_groups,
+            string_pool.as_ref().map(|section| &section.strings),
+            data_pool.as_ref(),
+            group_name,
+            path,
+        )
     }
 
     fn read_first_section_of_type(
@@ -1008,6 +1305,30 @@ impl<R: Read + Seek> JanexArchive<R> {
         let bytes = self.read_section_bytes(index)?;
         parse_section_content(section_type, &bytes)
     }
+}
+
+/// Encodes resource payload bytes according to a `Resource::File` `CompressInfo`.
+pub fn encode_resource_content(
+    info: &CompressInfo,
+    uncompressed: &[u8],
+    string_pool: &mut StringPool,
+) -> Result<Vec<u8>, Error> {
+    compress_resource_bytes(info, uncompressed, string_pool)
+}
+
+/// Decodes resource payload bytes according to a `Resource::File` `CompressInfo`.
+pub fn decode_resource_content(
+    info: &CompressInfo,
+    compressed: &[u8],
+    string_pool: Option<&StringPool>,
+) -> Result<Vec<u8>, Error> {
+    let data = decompress_resource_bytes(info, compressed, string_pool)?;
+    if data.len() as u64 != info.uncompressed_size {
+        return Err(Error::CompressionError(
+            "uncompressed size does not match the declared size".to_string(),
+        ));
+    }
+    Ok(data)
 }
 
 impl TaggedField<u32> {
@@ -1048,6 +1369,48 @@ impl Default for CompressInfo {
     }
 }
 
+impl SectionType {
+    pub const PADDING_RAW: u64 = 0x0047_4e49_4444_4150;
+    pub const EXTERNAL_HEADER_RAW: u64 = 0x4441_4548_4c54_5845;
+    pub const EXTERNAL_TAIL_RAW: u64 = 0x4c49_4154_4c54_5845;
+    pub const FILE_METADATA_RAW: u64 = 0x4154_4144_4154_454d;
+    pub const ATTRIBUTES_RAW: u64 = 0x2e53_4249_5254_5441;
+    pub const DATA_POOL_RAW: u64 = 0x4c4f_4f50_4154_4144;
+    pub const ROOT_CONFIG_GROUP_RAW: u64 = 0x5055_4f52_4747_4643;
+    pub const RESOURCE_GROUPS_RAW: u64 = 0x0053_5052_4753_4552;
+    pub const STRING_POOL_RAW: u64 = 0x004c_4f4f_5052_5453;
+
+    pub const fn raw(self) -> u64 {
+        match self {
+            SectionType::Padding => Self::PADDING_RAW,
+            SectionType::ExternalHeader => Self::EXTERNAL_HEADER_RAW,
+            SectionType::ExternalTail => Self::EXTERNAL_TAIL_RAW,
+            SectionType::FileMetadata => Self::FILE_METADATA_RAW,
+            SectionType::Attributes => Self::ATTRIBUTES_RAW,
+            SectionType::DataPool => Self::DATA_POOL_RAW,
+            SectionType::RootConfigGroup => Self::ROOT_CONFIG_GROUP_RAW,
+            SectionType::ResourceGroups => Self::RESOURCE_GROUPS_RAW,
+            SectionType::StringPool => Self::STRING_POOL_RAW,
+            SectionType::Unknown(raw) => raw,
+        }
+    }
+
+    pub const fn from_raw(value: u64) -> Self {
+        match value {
+            Self::PADDING_RAW => SectionType::Padding,
+            Self::EXTERNAL_HEADER_RAW => SectionType::ExternalHeader,
+            Self::EXTERNAL_TAIL_RAW => SectionType::ExternalTail,
+            Self::FILE_METADATA_RAW => SectionType::FileMetadata,
+            Self::ATTRIBUTES_RAW => SectionType::Attributes,
+            Self::DATA_POOL_RAW => SectionType::DataPool,
+            Self::ROOT_CONFIG_GROUP_RAW => SectionType::RootConfigGroup,
+            Self::RESOURCE_GROUPS_RAW => SectionType::ResourceGroups,
+            Self::STRING_POOL_RAW => SectionType::StringPool,
+            raw => SectionType::Unknown(raw),
+        }
+    }
+}
+
 impl TryFrom<u8> for CompressMethod {
     type Error = Error;
 
@@ -1069,21 +1432,7 @@ impl TryFrom<u64> for SectionType {
     type Error = Error;
 
     fn try_from(value: u64) -> Result<Self, Self::Error> {
-        match value {
-            0x0047_4e49_4444_4150 => Ok(SectionType::Padding),
-            0x4441_4548_4c54_5845 => Ok(SectionType::ExternalHeader),
-            0x4c49_4154_4c54_5845 => Ok(SectionType::ExternalTail),
-            0x4154_4144_4154_454d => Ok(SectionType::FileMetadata),
-            0x2e53_4249_5254_5441 => Ok(SectionType::Attributes),
-            0x4c4f_4f50_4154_4144 => Ok(SectionType::DataPool),
-            0x5055_4f52_4747_4643 => Ok(SectionType::RootConfigGroup),
-            0x0053_5052_4753_4552 => Ok(SectionType::ResourceGroups),
-            0x004c_4f4f_5052_5453 => Ok(SectionType::StringPool),
-            _ => Err(Error::UnknownEnumValue {
-                name: "section type",
-                value,
-            }),
-        }
+        Ok(SectionType::from_raw(value))
     }
 }
 
@@ -1158,7 +1507,7 @@ fn write_section_info_record(
     writer: &mut VecDataWriter,
     record: &SectionInfoRecord,
 ) -> Result<(), Error> {
-    writer.write_u64_le(record.section_type as u64);
+    writer.write_u64_le(record.section_type.raw());
     writer.write_vuint(record.id);
     write_len_prefixed_slice(writer, &record.options, write_tagged_field_u32)?;
     writer.write_vuint(record.length);
@@ -1237,6 +1586,26 @@ fn compress_bytes(info: &CompressInfo, data: &[u8]) -> Result<Vec<u8>, Error> {
     }
 }
 
+fn compress_resource_bytes(
+    info: &CompressInfo,
+    data: &[u8],
+    string_pool: &mut StringPool,
+) -> Result<Vec<u8>, Error> {
+    match info.method {
+        CompressMethod::None => Ok(data.to_vec()),
+        CompressMethod::Zstd => zstd::stream::encode_all(data, 0).map_err(Error::from),
+        CompressMethod::Composite => {
+            let layers = parse_composite_layers(&info.options)?;
+            let mut current = data.to_vec();
+            for layer in &layers {
+                current = compress_resource_bytes(layer, &current, string_pool)?;
+            }
+            Ok(current)
+        }
+        CompressMethod::Classfile => crate::classfile::compress_with_string_pool(data, string_pool),
+    }
+}
+
 fn decompress_bytes(info: &CompressInfo, data: &[u8]) -> Result<Vec<u8>, Error> {
     match info.method {
         CompressMethod::None => Ok(data.to_vec()),
@@ -1256,11 +1625,103 @@ fn decompress_bytes(info: &CompressInfo, data: &[u8]) -> Result<Vec<u8>, Error> 
     }
 }
 
+fn decompress_resource_bytes(
+    info: &CompressInfo,
+    data: &[u8],
+    string_pool: Option<&StringPool>,
+) -> Result<Vec<u8>, Error> {
+    match info.method {
+        CompressMethod::None => Ok(data.to_vec()),
+        CompressMethod::Zstd => zstd::stream::decode_all(data).map_err(Error::from),
+        CompressMethod::Composite => {
+            let layers = parse_composite_layers(&info.options)?;
+            let mut current = data.to_vec();
+            for layer in layers.iter().rev() {
+                current = decompress_resource_bytes(layer, &current, string_pool)?;
+            }
+            Ok(current)
+        }
+        CompressMethod::Classfile => {
+            let string_pool = string_pool.ok_or_else(|| {
+                Error::InvalidReference(
+                    "classfile compression requires a string pool section".to_string(),
+                )
+            })?;
+            crate::classfile::decompress_with_string_pool(data, string_pool)
+        }
+    }
+}
+
 fn parse_composite_layers(bytes: &[u8]) -> Result<Vec<CompressInfo>, Error> {
     let mut reader = ArrayDataReader::new(bytes);
     let layers = read_len_prefixed_vec(&mut reader, read_compress_info)?;
     ensure_fully_consumed(&reader, "composite compression options")?;
     Ok(layers)
+}
+
+fn read_file_resource_from_sections(
+    resource_groups: &ResourceGroupsSection,
+    string_pool: Option<&StringPool>,
+    data_pool: Option<&DataPoolSection>,
+    group_name: &str,
+    path: &str,
+) -> Result<Option<Box<[u8]>>, Error> {
+    let group = match resource_groups
+        .groups
+        .iter()
+        .find(|group| group.name == group_name)
+    {
+        Some(group) => group,
+        None => return Ok(None),
+    };
+
+    for resource in &group.resources {
+        if resource.path().resolve(string_pool)? != path {
+            continue;
+        }
+
+        if let Resource::File {
+            compress_info,
+            content_offset,
+            fields,
+            ..
+        } = resource
+        {
+            let data_pool = data_pool.ok_or_else(|| {
+                Error::InvalidReference(
+                    "resource groups contain files but no data pool section is present"
+                        .to_string(),
+                )
+            })?;
+            let end = content_offset
+                .checked_add(compress_info.compressed_size)
+                .ok_or_else(|| {
+                    Error::InvalidReference("resource content offset overflow".to_string())
+                })?;
+            if end > data_pool.bytes.len() as u64 {
+                return Err(Error::InvalidReference(format!(
+                    "resource '{}' points outside the data pool",
+                    path
+                )));
+            }
+
+            let compressed = &data_pool.bytes[*content_offset as usize..end as usize];
+            let data = decode_resource_content(compress_info, compressed, string_pool)?;
+            for field in fields {
+                if let ResourceField::Checksum(checksum) = field {
+                    verify_checksum(checksum, &data, "resource")?;
+                }
+            }
+            return Ok(Some(data.into_boxed_slice()));
+        }
+
+        return Err(Error::InvalidReference(format!(
+            "resource '{}' is not a regular file",
+            path
+        )));
+    }
+
+    Ok(None)
 }
 
 pub(crate) fn read_tagged_field_u32<R: DataReader>(
@@ -1429,6 +1890,38 @@ mod tests {
         builder.build()
     }
 
+    fn sample_classfile_bytes() -> Vec<u8> {
+        let mut writer = VecDataWriter::new();
+        writer.write_u32_be(crate::classfile::ClassFile::MAGIC_NUMBER);
+        writer.write_u16_be(0);
+        writer.write_u16_be(52);
+        writer.write_u16_be(5);
+        writer.write_u8(crate::classfile::ConstantPoolInfo::TAG_Utf8);
+        writer.write_u16_be(5);
+        writer.write_all(b"Hello");
+        writer.write_u8(crate::classfile::ConstantPoolInfo::TAG_Class);
+        writer.write_u16_be(1);
+        writer.write_u8(crate::classfile::ConstantPoolInfo::TAG_Utf8);
+        writer.write_u16_be(16);
+        writer.write_all(b"java/lang/Object");
+        writer.write_u8(crate::classfile::ConstantPoolInfo::TAG_Class);
+        writer.write_u16_be(3);
+        writer.write_u16_be(0x0021);
+        writer.write_u16_be(2);
+        writer.write_u16_be(4);
+        writer.write_u16_be(0);
+        writer.write_u16_be(0);
+        writer.write_u16_be(0);
+        writer.write_u16_be(0);
+        writer.into_inner()
+    }
+
+    fn encode_composite_layers(layers: &[CompressInfo]) -> Result<Box<[u8]>, Error> {
+        let mut writer = VecDataWriter::new();
+        write_len_prefixed_slice(&mut writer, layers, write_compress_info)?;
+        Ok(writer.into_inner().into_boxed_slice())
+    }
+
     struct AcceptingDetachedVerifier;
 
     impl DetachedSignatureVerifier for AcceptingDetachedVerifier {
@@ -1549,5 +2042,220 @@ mod tests {
         assert!(crate::section::validate_resource_path("foo//bar").is_err());
         assert!(crate::section::validate_resource_path("../bar").is_err());
         assert!(crate::section::validate_resource_path("/bar").is_err());
+    }
+
+    #[test]
+    fn external_unknown_and_forward_compatible_fields_roundtrip() -> Result<(), Error> {
+        let section_checksum = Sha256Checksum::new([0; 32]).to_any();
+        let mut string_pool = StringPool::with_empty_root();
+        let dir_index = string_pool.push("com/example");
+        let file_index = string_pool.push("Future.txt");
+
+        let mut builder = JanexFile::builder();
+        builder
+            .with_external_header(
+                SectionBuilder::from(b"#!/usr/bin/env janex\n".to_vec()).with_checksum(section_checksum),
+            )
+            .with_attributes(
+                SectionBuilder::new(AttributesSection {
+                    attributes: vec![Attribute {
+                        name: "author".to_string(),
+                        value: b"janex".to_vec().into_boxed_slice(),
+                    }],
+                })
+                .with_checksum(section_checksum),
+            )
+            .with_string_pool(
+                SectionBuilder::new(StringPoolSection::new(string_pool)).with_checksum(section_checksum),
+            )
+            .with_root_config_group(
+                SectionBuilder::new(RootConfigGroupSection {
+                    root_group: ConfigGroup {
+                        fields: vec![
+                            ConfigField::MainClass("com.example.Main".to_string()),
+                            ConfigField::Unknown {
+                                field_type: 0xface_cafe,
+                                payload: b"future-config".to_vec().into_boxed_slice(),
+                            },
+                        ],
+                    },
+                })
+                .with_checksum(section_checksum),
+            )
+            .with_resource_groups(
+                SectionBuilder::new(ResourceGroupsSection {
+                    groups: vec![ResourceGroup {
+                        name: "app".to_string(),
+                        fields: Vec::new(),
+                        resources_compression: CompressInfo::none(),
+                        resources: vec![Resource::File {
+                            path: ResourcePath::Ref {
+                                directory_index: dir_index,
+                                file_name_index: file_index,
+                            },
+                            compress_info: CompressInfo {
+                                method: CompressMethod::None,
+                                uncompressed_size: 6,
+                                compressed_size: 6,
+                                options: Box::new([]),
+                            },
+                            content_offset: 0,
+                            fields: vec![ResourceField::Unknown {
+                                id: 0x77,
+                                payload: b"future-resource".to_vec().into_boxed_slice(),
+                            }],
+                        }],
+                    }],
+                })
+                .with_checksum(section_checksum),
+            )
+            .with_data_pool(
+                SectionBuilder::new(DataPoolSection {
+                    bytes: b"future".to_vec().into_boxed_slice(),
+                })
+                .with_checksum(section_checksum),
+            )
+            .push_unknown_section(
+                SectionBuilder::new(UnknownSection::new(0x1122_3344_5566_7788, b"future-section".to_vec()))
+                    .with_id(3)
+                    .with_checksum(section_checksum),
+            )
+            .with_external_tail(
+                SectionBuilder::from(b"launcher-jar".to_vec()).with_checksum(section_checksum),
+            );
+
+        let file = builder.build()?;
+        let encoded = file.write()?;
+
+        assert!(JanexArchive::open(Cursor::new(encoded.clone())).is_err());
+
+        let janex_end_offset = encoded.len() as u64 - b"launcher-jar".len() as u64;
+        let mut archive = JanexArchive::open_at_end(Cursor::new(encoded.clone()), janex_end_offset)?;
+        assert_eq!(
+            archive.read_external_header()?.unwrap().as_ref(),
+            b"#!/usr/bin/env janex\n"
+        );
+        assert_eq!(archive.read_external_tail()?.unwrap().as_ref(), b"launcher-jar");
+        assert_eq!(
+            archive.read_attributes()?.unwrap().attributes[0].name,
+            "author"
+        );
+        assert!(matches!(
+            archive
+                .sections()
+                .iter()
+                .find(|section| matches!(section.section_type, SectionType::Unknown(_)))
+                .map(|section| section.section_type),
+            Some(SectionType::Unknown(0x1122_3344_5566_7788))
+        ));
+
+        let decoded = archive.decode_all()?;
+        assert_eq!(decoded.write()?, encoded);
+        Ok(())
+    }
+
+    #[test]
+    fn classfile_resource_content_roundtrip() -> Result<(), Error> {
+        let class_bytes = sample_classfile_bytes();
+        let layers = [
+            CompressInfo {
+                method: CompressMethod::Classfile,
+                uncompressed_size: 0,
+                compressed_size: 0,
+                options: Box::new([]),
+            },
+            CompressInfo {
+                method: CompressMethod::Zstd,
+                uncompressed_size: 0,
+                compressed_size: 0,
+                options: Box::new([]),
+            },
+        ];
+        let compress_info = CompressInfo {
+            method: CompressMethod::Composite,
+            uncompressed_size: class_bytes.len() as u64,
+            compressed_size: 0,
+            options: encode_composite_layers(&layers)?,
+        };
+
+        let mut string_pool = StringPool::with_empty_root();
+        let data = encode_resource_content(&compress_info, &class_bytes, &mut string_pool)?;
+        let dir_index = string_pool.push("com/example");
+        let file_index = string_pool.push("App.class");
+
+        let section_checksum = Sha256Checksum::new([0; 32]).to_any();
+        let mut builder = JanexFile::builder();
+        builder
+            .with_string_pool(
+                SectionBuilder::new(StringPoolSection::new(string_pool.clone()))
+                    .with_checksum(section_checksum),
+            )
+            .with_resource_groups(
+                SectionBuilder::new(ResourceGroupsSection {
+                    groups: vec![ResourceGroup {
+                        name: "app".to_string(),
+                        fields: Vec::new(),
+                        resources_compression: CompressInfo::none(),
+                        resources: vec![Resource::File {
+                            path: ResourcePath::Ref {
+                                directory_index: dir_index,
+                                file_name_index: file_index,
+                            },
+                            compress_info: CompressInfo {
+                                method: compress_info.method,
+                                uncompressed_size: class_bytes.len() as u64,
+                                compressed_size: data.len() as u64,
+                                options: compress_info.options.clone(),
+                            },
+                            content_offset: 0,
+                            fields: vec![ResourceField::Checksum(
+                                Sha256Checksum::compute(&class_bytes).to_any(),
+                            )],
+                        }],
+                    }],
+                })
+                .with_checksum(section_checksum),
+            )
+            .with_data_pool(
+                SectionBuilder::new(DataPoolSection {
+                    bytes: data.clone().into_boxed_slice(),
+                })
+                .with_checksum(section_checksum),
+            );
+        let file = builder.build()?;
+
+        assert_eq!(
+            file.read_file_resource_bytes("app", "com/example/App.class")?
+                .unwrap()
+                .as_ref(),
+            class_bytes.as_slice()
+        );
+
+        let encoded = file.write()?;
+        let mut archive = JanexArchive::open(Cursor::new(encoded))?;
+        assert_eq!(
+            archive
+                .read_file_resource_bytes("app", "com/example/App.class")?
+                .unwrap()
+                .as_ref(),
+            class_bytes.as_slice()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn reject_invalid_external_section_order() {
+        let mut builder = JanexFile::builder();
+        builder
+            .push_padding(b"pad".to_vec())
+            .with_external_header(b"header".to_vec());
+        let error = builder.build().unwrap_err();
+
+        match error {
+            Error::InvalidSectionLayout(message) => {
+                assert!(message.contains("external header section must be the first"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
     }
 }

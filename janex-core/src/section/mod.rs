@@ -6,6 +6,7 @@ use crate::error::Error;
 use crate::io::VecDataWriter;
 use crate::janex::{SectionContent, SectionType};
 
+mod attributes;
 mod data_pool;
 mod padding;
 mod resource_groups;
@@ -21,6 +22,9 @@ pub(crate) fn parse_section_content(
 ) -> Result<SectionContent, Error> {
     match section_type {
         SectionType::Padding => Ok(SectionContent::Padding(padding::parse(bytes))),
+        SectionType::Attributes => Ok(SectionContent::Attributes(attributes::parse(bytes)?)),
+        SectionType::ExternalHeader => Ok(SectionContent::ExternalHeader(bytes.into())),
+        SectionType::ExternalTail => Ok(SectionContent::ExternalTail(bytes.into())),
         SectionType::RootConfigGroup => Ok(SectionContent::RootConfigGroup(
             root_config_group::parse(bytes)?,
         )),
@@ -31,10 +35,11 @@ pub(crate) fn parse_section_content(
             bytes,
         )?)),
         SectionType::DataPool => Ok(SectionContent::DataPool(data_pool::parse(bytes)?)),
-        SectionType::ExternalHeader
-        | SectionType::ExternalTail
-        | SectionType::FileMetadata
-        | SectionType::Attributes => Err(unsupported_section_error()),
+        SectionType::FileMetadata => Err(unsupported_section_error()),
+        SectionType::Unknown(_) => Ok(SectionContent::Unknown(crate::janex::UnknownSection {
+            section_type,
+            bytes: bytes.into(),
+        })),
     }
 }
 
@@ -42,12 +47,17 @@ pub(crate) fn encode_section_content(section: &SectionContent) -> Result<Vec<u8>
     let mut writer = VecDataWriter::new();
     match section {
         SectionContent::Padding(bytes) => padding::encode(&mut writer, bytes),
+        SectionContent::Attributes(section) => attributes::encode(&mut writer, section)?,
+        SectionContent::ExternalHeader(bytes) | SectionContent::ExternalTail(bytes) => {
+            padding::encode(&mut writer, bytes)
+        }
         SectionContent::RootConfigGroup(section) => {
             root_config_group::encode(&mut writer, section)?
         }
         SectionContent::ResourceGroups(section) => resource_groups::encode(&mut writer, section)?,
         SectionContent::StringPool(section) => encode_string_pool_section(&mut writer, section)?,
         SectionContent::DataPool(section) => data_pool::encode(&mut writer, section),
+        SectionContent::Unknown(section) => padding::encode(&mut writer, &section.bytes),
     }
     Ok(writer.into_inner())
 }
@@ -56,16 +66,18 @@ impl SectionContent {
     pub(crate) fn section_type(&self) -> SectionType {
         match self {
             SectionContent::Padding(_) => SectionType::Padding,
+            SectionContent::Attributes(_) => SectionType::Attributes,
+            SectionContent::ExternalHeader(_) => SectionType::ExternalHeader,
+            SectionContent::ExternalTail(_) => SectionType::ExternalTail,
             SectionContent::RootConfigGroup(_) => SectionType::RootConfigGroup,
             SectionContent::ResourceGroups(_) => SectionType::ResourceGroups,
             SectionContent::StringPool(_) => SectionType::StringPool,
             SectionContent::DataPool(_) => SectionType::DataPool,
+            SectionContent::Unknown(section) => section.section_type,
         }
     }
 }
 
 fn unsupported_section_error() -> Error {
-    Error::UnsupportedFeature(
-        "external header/tail, attributes, and nested metadata sections are not implemented",
-    )
+    Error::UnsupportedFeature("nested metadata sections are not implemented")
 }

@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::error::Error;
-use crate::io::{ArrayDataReader, DataReader};
+use crate::io::{ArrayDataReader, DataReader, DataWriter, VecDataWriter};
+use crate::string_pool::StringPool;
 
 /// A class file in the JVM class file format.
 ///
@@ -25,6 +26,10 @@ pub struct ClassFile {
 impl ClassFile {
     /// The magic number for a class file.
     pub const MAGIC_NUMBER: u32 = 0xCAFEBABE;
+    /// The magic number for a Janex-transformed class file.
+    pub const TRANSFORMED_MAGIC_NUMBER: u32 = 0x70CAFECA;
+    pub const TAG_EXTERNAL_UTF8: u8 = 0xFF;
+    pub const TAG_EXTERNAL_UTF8_CLASS: u8 = 0xFE;
 
     /// Parses a class file from the given bytes.
     pub fn parse(reader: &mut impl DataReader) -> Result<ClassFile, Error> {
@@ -455,4 +460,257 @@ pub struct AttributeInfo {
     pub attribute_name_index: u16,
     pub attribute_length: u32,
     pub info: Box<[u8]>,
+}
+
+pub(crate) fn compress_with_string_pool(
+    bytes: &[u8],
+    string_pool: &mut StringPool,
+) -> Result<Vec<u8>, Error> {
+    let mut reader = ArrayDataReader::new(bytes);
+    let magic = reader.read_u32_be()?;
+    if magic != ClassFile::MAGIC_NUMBER {
+        return Err(Error::InvalidMagicNumber {
+            expected: ClassFile::MAGIC_NUMBER as u64,
+            actual: magic as u64,
+        });
+    }
+
+    let mut writer = VecDataWriter::new();
+    writer.write_u32_be(ClassFile::TRANSFORMED_MAGIC_NUMBER);
+    let minor_version = reader.read_u16_be()?;
+    let major_version = reader.read_u16_be()?;
+    writer.write_u16_be(minor_version);
+    writer.write_u16_be(major_version);
+
+    let constant_pool_count = reader.read_u16_be()?;
+    writer.write_u16_be(constant_pool_count);
+
+    let mut skip_slot = false;
+    for _ in 1..constant_pool_count {
+        if skip_slot {
+            skip_slot = false;
+            continue;
+        }
+
+        let tag = reader.read_u8()?;
+        match tag {
+            ConstantPoolInfo::TAG_Utf8 => {
+                let length = reader.read_u16_be()? as usize;
+                let bytes = reader.read_u8_array(length)?;
+                let value = decode_modified_utf8(bytes.as_ref())?;
+                let string_pool_index = string_pool.push(value);
+                writer.write_u8(ClassFile::TAG_EXTERNAL_UTF8);
+                writer.write_vuint(string_pool_index);
+            }
+            ConstantPoolInfo::TAG_Long | ConstantPoolInfo::TAG_Double => {
+                skip_slot = true;
+                copy_constant(&mut reader, &mut writer, tag)?;
+            }
+            _ => copy_constant(&mut reader, &mut writer, tag)?,
+        }
+    }
+
+    writer.write_all(reader.read_u8_array(reader.remaining())?.as_ref());
+    Ok(writer.into_inner())
+}
+
+pub(crate) fn decompress_with_string_pool(
+    bytes: &[u8],
+    string_pool: &StringPool,
+) -> Result<Vec<u8>, Error> {
+    let mut reader = ArrayDataReader::new(bytes);
+    let magic = reader.read_u32_be()?;
+    if magic != ClassFile::TRANSFORMED_MAGIC_NUMBER {
+        return Err(Error::InvalidMagicNumber {
+            expected: ClassFile::TRANSFORMED_MAGIC_NUMBER as u64,
+            actual: magic as u64,
+        });
+    }
+
+    let mut writer = VecDataWriter::new();
+    writer.write_u32_be(ClassFile::MAGIC_NUMBER);
+    let minor_version = reader.read_u16_be()?;
+    let major_version = reader.read_u16_be()?;
+    writer.write_u16_be(minor_version);
+    writer.write_u16_be(major_version);
+
+    let constant_pool_count = reader.read_u16_be()?;
+    writer.write_u16_be(constant_pool_count);
+
+    let mut skip_slot = false;
+    for _ in 1..constant_pool_count {
+        if skip_slot {
+            skip_slot = false;
+            continue;
+        }
+
+        let tag = reader.read_u8()?;
+        match tag {
+            ClassFile::TAG_EXTERNAL_UTF8 => {
+                let string_pool_index = reader.read_vuint()?;
+                let value = string_pool.get(string_pool_index).ok_or_else(|| {
+                    Error::InvalidReference(format!(
+                        "invalid string pool index {} in classfile data",
+                        string_pool_index
+                    ))
+                })?;
+                let bytes = encode_modified_utf8(value);
+                let length = u16::try_from(bytes.len()).map_err(|_| {
+                    Error::InvalidValue("modified UTF-8 string is too large for a class file")
+                })?;
+                writer.write_u8(ConstantPoolInfo::TAG_Utf8);
+                writer.write_u16_be(length);
+                writer.write_all(&bytes);
+            }
+            ClassFile::TAG_EXTERNAL_UTF8_CLASS => {
+                let package_name_index = reader.read_vuint()?;
+                let class_name_index = reader.read_vuint()?;
+                let package_name = string_pool.get(package_name_index).ok_or_else(|| {
+                    Error::InvalidReference(format!(
+                        "invalid string pool index {} in classfile data",
+                        package_name_index
+                    ))
+                })?;
+                let class_name = string_pool.get(class_name_index).ok_or_else(|| {
+                    Error::InvalidReference(format!(
+                        "invalid string pool index {} in classfile data",
+                        class_name_index
+                    ))
+                })?;
+                let value = if package_name.is_empty() {
+                    class_name.to_string()
+                } else {
+                    format!("{package_name}/{class_name}")
+                };
+                let bytes = encode_modified_utf8(&value);
+                let length = u16::try_from(bytes.len()).map_err(|_| {
+                    Error::InvalidValue("modified UTF-8 string is too large for a class file")
+                })?;
+                writer.write_u8(ConstantPoolInfo::TAG_Utf8);
+                writer.write_u16_be(length);
+                writer.write_all(&bytes);
+            }
+            ConstantPoolInfo::TAG_Long | ConstantPoolInfo::TAG_Double => {
+                skip_slot = true;
+                copy_constant(&mut reader, &mut writer, tag)?;
+            }
+            _ => copy_constant(&mut reader, &mut writer, tag)?,
+        }
+    }
+
+    writer.write_all(reader.read_u8_array(reader.remaining())?.as_ref());
+    Ok(writer.into_inner())
+}
+
+fn copy_constant(
+    reader: &mut impl DataReader,
+    writer: &mut VecDataWriter,
+    tag: u8,
+) -> Result<(), Error> {
+    writer.write_u8(tag);
+    match tag {
+        ConstantPoolInfo::TAG_Integer
+        | ConstantPoolInfo::TAG_Float
+        | ConstantPoolInfo::TAG_Fieldref
+        | ConstantPoolInfo::TAG_Methodref
+        | ConstantPoolInfo::TAG_InterfaceMethodref
+        | ConstantPoolInfo::TAG_NameAndType
+        | ConstantPoolInfo::TAG_Dynamic
+        | ConstantPoolInfo::TAG_InvokeDynamic => {
+            writer.write_all(reader.read_u8_array(4)?.as_ref());
+        }
+        ConstantPoolInfo::TAG_Long | ConstantPoolInfo::TAG_Double => {
+            writer.write_all(reader.read_u8_array(8)?.as_ref());
+        }
+        ConstantPoolInfo::TAG_Class
+        | ConstantPoolInfo::TAG_String
+        | ConstantPoolInfo::TAG_MethodType
+        | ConstantPoolInfo::TAG_Module
+        | ConstantPoolInfo::TAG_Package => {
+            writer.write_all(reader.read_u8_array(2)?.as_ref());
+        }
+        ConstantPoolInfo::TAG_MethodHandle => {
+            writer.write_all(reader.read_u8_array(3)?.as_ref());
+        }
+        _ => return Err(Error::UnknownConstantPoolInfo { tag }),
+    }
+    Ok(())
+}
+
+fn decode_modified_utf8(bytes: &[u8]) -> Result<String, Error> {
+    let mut utf16 = Vec::with_capacity(bytes.len());
+    let mut index = 0usize;
+    while index < bytes.len() {
+        let first = bytes[index];
+        if first & 0x80 == 0 {
+            if first == 0 {
+                return Err(Error::InvalidValue(
+                    "modified UTF-8 must not contain embedded zero bytes",
+                ));
+            }
+            utf16.push(first as u16);
+            index += 1;
+            continue;
+        }
+
+        if first & 0xE0 == 0xC0 {
+            if index + 1 >= bytes.len() {
+                return Err(Error::InvalidValue("invalid modified UTF-8 string"));
+            }
+            let second = bytes[index + 1];
+            if second & 0xC0 != 0x80 {
+                return Err(Error::InvalidValue("invalid modified UTF-8 string"));
+            }
+            let value = (((first & 0x1F) as u16) << 6) | ((second & 0x3F) as u16);
+            if value < 0x80 && !(first == 0xC0 && second == 0x80) {
+                return Err(Error::InvalidValue("invalid modified UTF-8 string"));
+            }
+            utf16.push(value);
+            index += 2;
+            continue;
+        }
+
+        if first & 0xF0 == 0xE0 {
+            if index + 2 >= bytes.len() {
+                return Err(Error::InvalidValue("invalid modified UTF-8 string"));
+            }
+            let second = bytes[index + 1];
+            let third = bytes[index + 2];
+            if second & 0xC0 != 0x80 || third & 0xC0 != 0x80 {
+                return Err(Error::InvalidValue("invalid modified UTF-8 string"));
+            }
+            let value = (((first & 0x0F) as u16) << 12)
+                | (((second & 0x3F) as u16) << 6)
+                | ((third & 0x3F) as u16);
+            if value < 0x0800 {
+                return Err(Error::InvalidValue("invalid modified UTF-8 string"));
+            }
+            utf16.push(value);
+            index += 3;
+            continue;
+        }
+
+        return Err(Error::InvalidValue("invalid modified UTF-8 string"));
+    }
+
+    String::from_utf16(&utf16).map_err(|_| Error::InvalidValue("invalid modified UTF-8 string"))
+}
+
+fn encode_modified_utf8(value: &str) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for code_unit in value.encode_utf16() {
+        match code_unit {
+            0x0001..=0x007F => bytes.push(code_unit as u8),
+            0x0000 | 0x0080..=0x07FF => {
+                bytes.push(0xC0 | (((code_unit >> 6) & 0x1F) as u8));
+                bytes.push(0x80 | ((code_unit & 0x3F) as u8));
+            }
+            _ => {
+                bytes.push(0xE0 | ((code_unit >> 12) as u8));
+                bytes.push(0x80 | (((code_unit >> 6) & 0x3F) as u8));
+                bytes.push(0x80 | ((code_unit & 0x3F) as u8));
+            }
+        }
+    }
+    bytes
 }

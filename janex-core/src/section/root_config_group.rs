@@ -73,6 +73,7 @@ impl ConfigGroup {
                         group.validate(local_group_names)?;
                     }
                 }
+                ConfigField::Unknown { .. } => {}
             }
         }
         Ok(())
@@ -169,12 +170,10 @@ fn read_config_field<R: DataReader>(reader: &mut R) -> Result<ConfigField, Error
             ensure_fully_consumed(&payload_reader, "subgroup config field")?;
             ConfigField::SubGroups(groups)
         }
-        _ => {
-            return Err(Error::UnknownEnumValue {
-                name: "config field",
-                value: field_type as u64,
-            });
-        }
+        _ => ConfigField::Unknown {
+            field_type,
+            payload: reader.read_bytes()?,
+        },
     })
 }
 
@@ -224,6 +223,13 @@ fn write_config_field(writer: &mut VecDataWriter, field: &ConfigField) -> Result
             write_payload(writer, |payload| {
                 write_len_prefixed_slice(payload, groups, write_config_group)
             })?;
+        }
+        ConfigField::Unknown {
+            field_type,
+            payload,
+        } => {
+            writer.write_u32_le(*field_type);
+            writer.write_bytes(payload);
         }
     }
     Ok(())

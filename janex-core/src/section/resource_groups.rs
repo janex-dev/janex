@@ -92,7 +92,7 @@ impl Resource {
     const TAG_DIRECTORY: u32 = 0x0052_4944;
     const TAG_SYMBOLIC_LINK: u32 = 0x4c4d_5953;
 
-    fn path(&self) -> &ResourcePath {
+    pub(crate) fn path(&self) -> &ResourcePath {
         match self {
             Resource::File { path, .. }
             | Resource::Directory { path, .. }
@@ -102,7 +102,7 @@ impl Resource {
 }
 
 impl ResourcePath {
-    fn resolve(&self, string_pool: Option<&StringPool>) -> Result<String, Error> {
+    pub(crate) fn resolve(&self, string_pool: Option<&StringPool>) -> Result<String, Error> {
         match self {
             ResourcePath::String(path) => {
                 validate_resource_path(path)?;
@@ -326,9 +326,9 @@ fn read_resource_field<R: DataReader>(reader: &mut R) -> Result<ResourceField, E
             ensure_fully_consumed(&payload_reader, "custom resource field")?;
             Ok(ResourceField::Custom { name, content })
         }
-        _ => Err(Error::UnknownEnumValue {
-            name: "resource field",
-            value: tag as u64,
+        _ => Ok(ResourceField::Unknown {
+            id: tag,
+            payload: reader.read_bytes()?,
         }),
     }
 }
@@ -369,6 +369,10 @@ fn write_resource_field(writer: &mut VecDataWriter, field: &ResourceField) -> Re
                 payload.write_bytes(content);
                 Ok(())
             })?;
+        }
+        ResourceField::Unknown { id, payload } => {
+            writer.write_u8(*id);
+            writer.write_bytes(payload);
         }
     }
     Ok(())
