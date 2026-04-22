@@ -1119,8 +1119,9 @@ when building a Janex file.
 A condition expression must evaluate to either `bool` or `int`:
 
 - If it evaluates to `bool`, the associated configuration is applied when the result is `true`.
-- If it evaluates to `int` (only for the root group), the value represents a priority score.
-  The launcher selects the Java installation with the highest score.
+- If it evaluates to `int`:
+  - For a root group, the value represents a priority score. The launcher selects the Java installation with the highest score.
+  - For a subgroup, any value is equivalent to `true`.
 
 ### Environment
 

@@ -22,29 +22,26 @@ pub enum ConditionValue {
     Int(i64),
 }
 
-/// The result of evaluating a root `ConfigGroup` condition.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RootConditionResult {
-    /// The candidate Java runtime is not eligible.
-    Rejected,
-    /// The candidate Java runtime is eligible with the given priority.
-    Accepted {
-        /// The priority score used to rank candidate Java runtimes.
-        priority: i64,
-    },
-}
-
-impl RootConditionResult {
-    /// Returns whether the root condition accepted the current environment.
+impl ConditionValue {
+    /// Returns whether this condition accepts the current environment under root-group semantics.
     pub const fn is_accepted(self) -> bool {
-        matches!(self, Self::Accepted { .. })
+        !matches!(self, Self::Bool(false))
     }
 
-    /// Returns the candidate priority when the root condition accepted the environment.
+    /// Returns the candidate priority under root-group semantics.
     pub const fn priority(self) -> Option<i64> {
         match self {
-            Self::Rejected => None,
-            Self::Accepted { priority } => Some(priority),
+            Self::Bool(false) => None,
+            Self::Bool(true) => Some(0),
+            Self::Int(priority) => Some(priority),
+        }
+    }
+
+    /// Returns whether this condition applies under subgroup semantics.
+    pub const fn applies_to_group(self) -> bool {
+        match self {
+            Self::Bool(value) => value,
+            Self::Int(_) => true,
         }
     }
 }
@@ -70,7 +67,7 @@ impl ConditionEnvironment {
     }
 
     /// Compiles and evaluates a root-group condition once.
-    pub fn evaluate_root_condition(&self, source: &str) -> Result<RootConditionResult, Error> {
+    pub fn evaluate_root_condition(&self, source: &str) -> Result<ConditionValue, Error> {
         ConditionProgram::compile(source)?.evaluate_root(self)
     }
 
@@ -134,23 +131,13 @@ impl ConditionProgram {
     pub fn evaluate_root(
         &self,
         environment: &ConditionEnvironment,
-    ) -> Result<RootConditionResult, Error> {
-        match self.evaluate(environment)? {
-            ConditionValue::Bool(false) => Ok(RootConditionResult::Rejected),
-            ConditionValue::Bool(true) => Ok(RootConditionResult::Accepted { priority: 0 }),
-            ConditionValue::Int(priority) => Ok(RootConditionResult::Accepted { priority }),
-        }
+    ) -> Result<ConditionValue, Error> {
+        self.evaluate(environment)
     }
 
     /// Evaluates the compiled CEL expression using subgroup semantics.
     pub fn evaluate_group(&self, environment: &ConditionEnvironment) -> Result<bool, Error> {
-        match self.evaluate(environment)? {
-            ConditionValue::Bool(value) => Ok(value),
-            ConditionValue::Int(_) => Err(Error::ConditionExecution(format!(
-                "condition '{}' evaluated to int, but non-root config groups require bool",
-                self.source
-            ))),
-        }
+        Ok(self.evaluate(environment)?.applies_to_group())
     }
 }
 
@@ -167,10 +154,10 @@ impl ConfigGroup {
     pub fn evaluate_root_condition(
         &self,
         environment: &ConditionEnvironment,
-    ) -> Result<RootConditionResult, Error> {
+    ) -> Result<ConditionValue, Error> {
         match self.condition() {
             Some(condition) => environment.evaluate_root_condition(condition),
-            None => Ok(RootConditionResult::Accepted { priority: 0 }),
+            None => Ok(ConditionValue::Bool(true)),
         }
     }
 
@@ -233,18 +220,18 @@ mod tests {
     #[test]
     fn root_conditions_accept_integer_priorities() -> Result<(), Error> {
         let program = ConditionProgram::compile("int(java.version.feature) - 20")?;
-        assert_eq!(
-            program.evaluate_root(&sample_environment())?,
-            RootConditionResult::Accepted { priority: 1 }
-        );
+        let value = program.evaluate_root(&sample_environment())?;
+        assert_eq!(value, ConditionValue::Int(1));
+        assert!(value.is_accepted());
+        assert_eq!(value.priority(), Some(1));
         Ok(())
     }
 
     #[test]
-    fn subgroup_conditions_require_boolean_results() {
+    fn subgroup_conditions_treat_integer_results_as_true() -> Result<(), Error> {
         let program = ConditionProgram::compile("int(java.version.feature) - 20").unwrap();
-        let error = program.evaluate_group(&sample_environment()).unwrap_err();
-        assert!(matches!(error, Error::ConditionExecution(_)));
+        assert!(program.evaluate_group(&sample_environment())?);
+        Ok(())
     }
 
     #[test]
