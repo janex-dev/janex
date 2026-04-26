@@ -131,7 +131,7 @@ The exact option set may evolve, but the `run` subcommand is expected to support
 
 ### Examples
 
-Run an installed application:
+Run an installed application: 
 
 ```text
 janex run com.example.app
