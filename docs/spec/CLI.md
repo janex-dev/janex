@@ -10,8 +10,13 @@ The CLI should separate software acquisition from software execution:
 
 - `janex install`: acquire a Janex application, validate it, present trust and policy decisions, and record a local installed copy.
 - `janex run`: start an installed application or a local Janex file without implicitly treating remote content as trusted software.
+- `janex java`: discover, install, select, and remove Java installations used by Janex.
 
-This split keeps the trust decision at install time and keeps the run path simpler and safer.
+This split keeps trust decisions at acquisition time and keeps the run path simpler and safer.
+
+`janex run` may use a managed Java installation installed by `janex java`, but it must not download or install a Java runtime implicitly.
+If no suitable runtime is available, `janex run` should report the missing requirement and point the user to the appropriate
+`janex java` command.
 
 ## `janex install`
 
@@ -140,13 +145,13 @@ janex run com.example.app
 Run a local Janex file:
 
 ```text
-janex run app.janex
+janex run ./app.janex
 ```
 
 Pass application arguments:
 
 ```text
-janex run app.janex --server.port=8080 --profile=prod
+janex run ./app.janex --server.port=8080 --profile=prod
 ```
 
 Run a Janex file with additional diagnostics:
@@ -165,3 +170,339 @@ janex run app.janex --enable-feature --config=config.toml
 
 - `0`: the Janex application exited successfully.
 - Non-zero: the launch failed, or the launched application exited with a non-zero status.
+
+## `janex java`
+
+`janex java` manages Java installations available to Janex.
+
+The command group is similar in purpose to SDKMAN-style Java management, but it is scoped to Janex runtime selection:
+
+- It discovers locally installed Java installations.
+- It lists installable Java distributions, versions, and runtime kinds from configured indexes.
+- It installs, verifies, and removes managed JDK and JRE distributions.
+- It records per-shell and default runtime choices.
+- It provides runtime selection data for `janex run`.
+
+Managed Java installations are stored in a Janex-controlled directory. The exact default location is platform-specific, but
+implementations should allow it to be overridden by configuration or environment.
+
+### Java Installation Identity
+
+A Java installation should be identified by a stable runtime spec plus a runtime kind.
+
+```text
+<distribution>@<version>
+```
+
+The runtime kind is either `jdk` or `jre`.
+
+Examples:
+
+```text
+temurin@21
+zulu@17.0.12
+graalvm-ce@21.0.2
+```
+
+When the distribution is omitted, the CLI should use the configured default distribution.
+
+When the version is incomplete, the CLI may resolve it to the latest matching patch release according to the configured
+Java index and local policy.
+
+When a command accepts a runtime kind and the kind is omitted, the CLI should use the configured default kind.
+If more than one installed runtime matches the same distribution and version, the command should reject the ambiguous
+selection and ask the user to pass `--kind <jdk|jre>`.
+
+### `janex java list`
+
+Lists Java installations known to Janex.
+
+#### Synopsis
+
+```text
+janex java list [OPTIONS]
+```
+
+#### Description
+
+The command should show both managed Java installations installed by Janex and external runtimes discovered from the host system.
+
+The output should indicate:
+
+- Runtime spec.
+- Runtime kind (`jdk` or `jre`).
+- Java home.
+- Distribution and version.
+- Operating system and architecture.
+- Whether the runtime is managed or external.
+- Whether the runtime is the active default.
+
+#### Options
+
+- `--managed`: show only Janex-managed runtimes.
+- `--external`: show only externally discovered runtimes.
+- `--json`: print machine-readable JSON.
+
+#### Examples
+
+```text
+janex java list
+janex java list --managed
+```
+
+### `janex java available`
+
+Lists Java versions available for installation.
+
+#### Synopsis
+
+```text
+janex java available [OPTIONS] [VERSION]
+```
+
+#### Description
+
+The command queries configured Java indexes and prints matching runtimes that can be installed for the current platform
+unless overridden by options.
+
+#### Arguments
+
+##### `[VERSION]`
+
+Optional Java feature version or full version filter, such as `17`, `21`, or `21.0.2`.
+
+#### Options
+
+- `--distribution <NAME>`: filter by distribution.
+- `--kind <jdk|jre>`: filter by runtime kind.
+- `--os <OS>`: filter by target operating system.
+- `--arch <ARCH>`: filter by target CPU architecture.
+- `--json`: print machine-readable JSON.
+
+#### Examples
+
+```text
+janex java available
+janex java available 21 --distribution temurin --kind jre
+```
+
+### `janex java install`
+
+Installs a managed Java runtime.
+
+#### Synopsis
+
+```text
+janex java install [OPTIONS] <JAVA>
+```
+
+#### Description
+
+The command resolves a Java runtime spec, downloads the selected archive, verifies integrity metadata, unpacks it into the
+managed runtime directory, and records the installed runtime.
+
+Java runtime installation is a software acquisition operation. It should require explicit user consent when trust-sensitive
+metadata is missing, when checksums cannot be verified, or when policy would otherwise reject the selected runtime.
+
+#### Arguments
+
+##### `<JAVA>`
+
+The Java runtime spec to install, such as `temurin@21`, `zulu@17.0.12`, or `21`.
+
+#### Options
+
+- `--kind <jdk|jre>`: install a JDK or JRE runtime.
+- `--set-default`: set the installed runtime as the default runtime after installation.
+- `--force`: reinstall even if a matching runtime is already installed.
+- `--name <ALIAS>`: assign a local alias to the installed runtime.
+- `--json`: print machine-readable JSON.
+
+#### Examples
+
+```text
+janex java install temurin@21 --kind jdk
+janex java install 17 --kind jre --set-default
+```
+
+### `janex java uninstall`
+
+Removes a managed Java runtime.
+
+#### Synopsis
+
+```text
+janex java uninstall [OPTIONS] <JAVA>
+```
+
+#### Description
+
+The command removes a Janex-managed Java runtime. It must not remove external runtimes discovered from the host system.
+
+#### Arguments
+
+##### `<JAVA>`
+
+The managed Java runtime spec or alias to remove.
+
+#### Options
+
+- `--kind <jdk|jre>`: select the runtime kind when the spec is ambiguous.
+- `--yes`: skip interactive confirmation.
+
+#### Examples
+
+```text
+janex java uninstall temurin@17.0.12 --kind jre
+```
+
+### `janex java use`
+
+Selects a Java runtime for the current shell or command context.
+
+#### Synopsis
+
+```text
+janex java use [OPTIONS] <JAVA>
+```
+
+#### Description
+
+The command prints shell commands that activate the selected runtime by setting `JAVA_HOME` and updating `PATH`.
+
+Because a child process cannot directly mutate its parent shell environment, users should evaluate the printed script
+using their shell-specific mechanism.
+
+#### Arguments
+
+##### `<JAVA>`
+
+The installed Java runtime spec, external runtime identifier, or alias to activate.
+
+#### Options
+
+- `--kind <jdk|jre>`: select the runtime kind when the spec is ambiguous.
+- `--shell <SHELL>`: output activation commands for a specific shell.
+
+#### Examples
+
+```text
+janex java use temurin@21
+janex java use --kind jre --shell powershell temurin@21
+```
+
+### `janex java default`
+
+Gets or sets the default Java runtime used by Janex.
+
+#### Synopsis
+
+```text
+janex java default [OPTIONS] [JAVA]
+```
+
+#### Description
+
+Without an argument, the command prints the currently configured default runtime.
+With an argument, it sets the default runtime used by Janex commands when no more specific runtime is selected.
+
+#### Options
+
+- `--kind <jdk|jre>`: select the runtime kind when the spec is ambiguous.
+
+#### Examples
+
+```text
+janex java default
+janex java default temurin@21 --kind jre
+```
+
+### `janex java current`
+
+Prints the runtime that Janex would currently use.
+
+#### Synopsis
+
+```text
+janex java current [OPTIONS]
+```
+
+#### Description
+
+The command resolves the active Java runtime using the same precedence rules as `janex run`, without launching an
+application.
+
+#### Options
+
+- `--json`: print machine-readable JSON.
+
+#### Examples
+
+```text
+janex java current
+```
+
+### `janex java home`
+
+Prints the Java home path for a selected runtime.
+
+#### Synopsis
+
+```text
+janex java home [OPTIONS] <JAVA>
+```
+
+#### Options
+
+- `--kind <jdk|jre>`: select the runtime kind when the spec is ambiguous.
+
+#### Examples
+
+```text
+janex java home temurin@21 --kind jdk
+```
+
+### `janex java refresh`
+
+Refreshes local Java indexes.
+
+#### Synopsis
+
+```text
+janex java refresh [OPTIONS]
+```
+
+#### Description
+
+The command updates local metadata used by `janex java available` and `janex java install`.
+
+#### Options
+
+- `--force`: ignore cache freshness and refresh all configured indexes.
+
+#### Examples
+
+```text
+janex java refresh
+```
+
+### Runtime Selection Precedence
+
+When a command needs a Java runtime, Janex should resolve it in the following order:
+
+1. Explicit command-line override, such as `janex run --java-home <PATH>` or `--java <PATH>`.
+2. Runtime selected by the current shell environment, such as `JAVA_HOME`.
+3. Janex default runtime configured by `janex java default`.
+4. Compatible managed runtime installed by `janex java install`.
+5. Compatible external runtime discovered from the host system.
+
+`janex run` must still evaluate the root configuration condition from the Janex file. If the selected runtime is
+incompatible, it should continue searching lower-precedence candidates unless the user provided an explicit override.
+
+### Java Indexes
+
+The CLI may support one or more Java indexes. An index describes installable distributions, versions, runtime kinds,
+download URLs, platform support, checksums, and optional signatures.
+
+The index format is outside the scope of this draft, but `janex java install` must not treat an unverifiable download as
+trusted without policy approval.
