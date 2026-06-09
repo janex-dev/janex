@@ -12,9 +12,9 @@ Its key features include:
   which provides faster decompression and smaller file sizes compared to the deflate compression used by JAR.
   Additionally, Janex shares strings from the constant pool of Java class files across resource groups,
   further reducing the overall file size.
-- **Remote dependencies**: Janex files can declare dependencies on JARs from external sources (such as Maven
-  repositories). These dependencies are not bundled in the Janex file but are resolved and downloaded on demand
-  before the program starts.
+- **Remote dependencies**: Janex files can declare dependencies on packages from external sources (such as Maven
+  repositories) using Package URLs (PURLs). These dependencies are not bundled in the Janex file but are resolved
+  and downloaded on demand before the program starts.
 - **Automatic Java runtime selection**: Users can specify conditions (such as a minimum Java version, operating system,
   or CPU architecture), and the Janex Launcher will find a suitable installed Java runtime to run the program.
 - **Embedded JVM options**: Janex files can contain JVM options (such as `--add-exports`, `--enable-native-access`,
@@ -381,6 +381,8 @@ struct FileMetadataSection {
     /// The only exception is when `major_version` is `0` (indicating an early development stage),
     /// where we will update the `minor_version` for every breaking change,
     /// and Janex tools should reject files with mismatched `minor_version`.
+    ///
+    /// The current minor version is `1`.
     minor_version: u32,
 
     /// File-level flags. Currently unused and must be `0`.
@@ -734,7 +736,7 @@ A `ResourceGroupReference` identifies a resource group to be placed on the class
 or agent list.
 
 It is either a reference to a resource group embedded in the Janex file itself or a reference
-to an external Maven artifact that is resolved and downloaded at launch time.
+to an external package that is resolved and downloaded at launch time.
 
 ```rust
 enum ResourceGroupReference {
@@ -748,28 +750,35 @@ enum ResourceGroupReference {
         group_name: String,
     },
 
-    /// A reference to a Maven artifact hosted in a remote repository.
+    /// A reference to a package hosted in a remote repository.
     ///
-    /// The artifact is not embedded in the Janex file. The Janex Launcher resolves and downloads
+    /// The package is not embedded in the Janex file. The Janex Launcher resolves and downloads
     /// it at launch time (if not already present in a local cache) before starting the JVM.
     ///
-    /// At runtime, only the specified artifact is downloaded, and dependencies are not resolved. 
-    /// If this artifact depends on other artifacts, those dependencies should also be recorded.
-    Maven {
+    /// At runtime, only the specified package is downloaded, and dependencies are not resolved.
+    /// If this package depends on other packages, those dependencies should also be recorded.
+    Purl {
         /// The reference type tag for this variant.
-        ref_type: u32, // 0x00564147 ("GAV\0")
+        ref_type: u32, // 0x4c525550 ("PURL")
 
-        /// The Maven coordinates of the artifact in `groupId:artifactId:version` format
-        /// (e.g., `"org.slf4j:slf4j-api:2.0.9"`).
-        gav: String,
+        /// The canonical Package URL of the remote package.
+        ///
+        /// Maven artifacts should use the `pkg:maven` type. A runtime dependency must identify
+        /// a single package version, so the PURL must include a concrete version and must not use
+        /// a `vers` qualifier. For non-default Maven repositories, use the `repository_url`
+        /// qualifier in the PURL.
+        ///
+        /// Examples:
+        ///
+        /// - `pkg:maven/org.slf4j/slf4j-api@2.0.9`
+        /// - `pkg:maven/org.apache.xmlgraphics/batik-anim@1.9.1?type=pom`
+        /// - `pkg:maven/net.sf.jacob-projec/jacob@1.14.3?classifier=x64&type=dll`
+        purl: String,
 
-        /// The base URL of the Maven repository from which to download the artifact
-        /// (e.g., `"https://repo1.maven.org/maven2"`).
-        /// 
-        /// Defaults to `https://repo1.maven.org/maven2`.
-        repository: String,
-
-        /// The expected checksum of the artifact JAR, used to verify the integrity of the download.
+        /// The expected checksum of the downloaded package, used to verify the integrity of the download.
+        ///
+        /// This checksum is part of Janex's trust policy and should not be replaced by a PURL
+        /// `checksum` qualifier.
         checksum: Checksum,
     }
 }

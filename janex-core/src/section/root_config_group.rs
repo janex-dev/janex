@@ -10,8 +10,6 @@ use crate::janex::{
 };
 use std::collections::HashSet;
 
-const DEFAULT_MAVEN_REPOSITORY: &str = "https://repo1.maven.org/maven2";
-
 /// Parses a `RootConfigGroup` section from its encoded bytes.
 pub(crate) fn parse(bytes: &[u8]) -> Result<RootConfigGroupSection, Error> {
     let mut reader = ArrayDataReader::new(bytes);
@@ -97,8 +95,8 @@ impl ConfigGroup {
 impl ResourceGroupReference {
     /// Type tag for `ResourceGroupReference::Local`.
     const TAG_LOCAL: u32 = 0x0043_4f4c;
-    /// Type tag for `ResourceGroupReference::Maven`.
-    const TAG_MAVEN: u32 = 0x0056_4147;
+    /// Type tag for `ResourceGroupReference::Purl`.
+    const TAG_PURL: u32 = 0x4c52_5550;
 
     /// Validates that the reference is structurally valid and points to a known local group when applicable.
     fn validate(&self, local_group_names: &HashSet<String>) -> Result<(), Error> {
@@ -111,14 +109,8 @@ impl ResourceGroupReference {
                     )));
                 }
             }
-            ResourceGroupReference::Maven {
-                gav,
-                repository,
-                checksum: _,
-            } => {
-                if gav.is_empty() || repository.is_empty() {
-                    return Err(Error::InvalidValue("Maven references must not be empty"));
-                }
+            ResourceGroupReference::Purl { purl, checksum: _ } => {
+                validate_package_url(purl)?;
             }
         }
         Ok(())
@@ -266,17 +258,10 @@ fn read_resource_group_reference<R: DataReader>(
         ResourceGroupReference::TAG_LOCAL => Ok(ResourceGroupReference::Local {
             group_name: reader.read_string()?,
         }),
-        ResourceGroupReference::TAG_MAVEN => {
-            let gav = reader.read_string()?;
-            let repository = reader.read_string()?;
-            Ok(ResourceGroupReference::Maven {
-                gav,
-                // The binary form allows an empty repository to mean the Maven Central default.
-                repository: if repository.is_empty() {
-                    DEFAULT_MAVEN_REPOSITORY.to_string()
-                } else {
-                    repository
-                },
+        ResourceGroupReference::TAG_PURL => {
+            let purl = reader.read_string()?;
+            Ok(ResourceGroupReference::Purl {
+                purl,
                 checksum: read_checksum(reader)?,
             })
         }
@@ -297,14 +282,9 @@ fn write_resource_group_reference(
             writer.write_u32_le(ResourceGroupReference::TAG_LOCAL);
             writer.write_string(group_name);
         }
-        ResourceGroupReference::Maven {
-            gav,
-            repository,
-            checksum,
-        } => {
-            writer.write_u32_le(ResourceGroupReference::TAG_MAVEN);
-            writer.write_string(gav);
-            writer.write_string(repository);
+        ResourceGroupReference::Purl { purl, checksum } => {
+            writer.write_u32_le(ResourceGroupReference::TAG_PURL);
+            writer.write_string(purl);
             write_checksum(writer, checksum)?;
         }
     }
@@ -323,5 +303,34 @@ fn read_java_agent<R: DataReader>(reader: &mut R) -> Result<JavaAgent, Error> {
 fn write_java_agent(writer: &mut VecDataWriter, agent: &JavaAgent) -> Result<(), Error> {
     write_resource_group_reference(writer, &agent.reference)?;
     writer.write_string(&agent.option);
+    Ok(())
+}
+
+fn validate_package_url(purl: &str) -> Result<(), Error> {
+    if purl.is_empty() {
+        return Err(Error::InvalidValue("PURL references must not be empty"));
+    }
+    if !purl.starts_with("pkg:") || purl.starts_with("pkg://") {
+        return Err(Error::InvalidValue(
+            "PURL references must use canonical pkg: URLs without an authority",
+        ));
+    }
+    let version_search_end = purl.find(['?', '#']).unwrap_or(purl.len());
+    if !purl[..version_search_end].contains('@') {
+        return Err(Error::InvalidValue(
+            "PURL references must identify a concrete package version",
+        ));
+    }
+    if let Some(query_start) = purl.find('?') {
+        let query = match purl[query_start + 1..].find('#') {
+            Some(fragment_start) => &purl[query_start + 1..query_start + 1 + fragment_start],
+            None => &purl[query_start + 1..],
+        };
+        if query.split('&').any(|pair| pair.starts_with("vers=")) {
+            return Err(Error::InvalidValue(
+                "PURL references must not use version ranges",
+            ));
+        }
+    }
     Ok(())
 }

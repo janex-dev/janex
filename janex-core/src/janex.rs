@@ -17,7 +17,7 @@ use std::collections::HashSet;
 use std::io::{Read, Seek, SeekFrom};
 
 const CURRENT_MAJOR_VERSION: u32 = 0;
-const CURRENT_MINOR_VERSION: u32 = 0;
+const CURRENT_MINOR_VERSION: u32 = 1;
 
 /// An in-memory representation of a Janex file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -196,7 +196,7 @@ pub enum ConfigField {
     },
 }
 
-/// A reference to either an embedded resource group or a remote Maven artifact.
+/// A reference to either an embedded resource group or a remote package.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResourceGroupReference {
     /// A reference to a local `ResourceGroup`.
@@ -204,13 +204,11 @@ pub enum ResourceGroupReference {
         /// The unique `ResourceGroup.name` referenced by this entry.
         group_name: String,
     },
-    /// A reference to a Maven artifact downloaded at launch time.
-    Maven {
-        /// The Maven coordinates in `groupId:artifactId:version` form.
-        gav: String,
-        /// The Maven repository base URL used to download the artifact.
-        repository: String,
-        /// The expected checksum of the downloaded artifact.
+    /// A reference to a Package URL downloaded at launch time.
+    Purl {
+        /// The canonical Package URL identifying the remote package.
+        purl: String,
+        /// The expected checksum of the downloaded package.
         checksum: AnyChecksum,
     },
 }
@@ -218,7 +216,7 @@ pub enum ResourceGroupReference {
 /// A Java agent entry with its optional agent argument.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JavaAgent {
-    /// The resource group or Maven artifact containing the agent JAR.
+    /// The resource group or remote package containing the agent JAR.
     pub reference: ResourceGroupReference,
     /// The option string appended to `-javaagent:...=`.
     pub option: String,
@@ -2076,9 +2074,15 @@ mod tests {
                     root_group: ConfigGroup {
                         fields: vec![
                             ConfigField::MainClass("com.example.Main".to_string()),
-                            ConfigField::ClassPath(vec![ResourceGroupReference::Local {
-                                group_name: "app".to_string(),
-                            }]),
+                            ConfigField::ClassPath(vec![
+                                ResourceGroupReference::Local {
+                                    group_name: "app".to_string(),
+                                },
+                                ResourceGroupReference::Purl {
+                                    purl: "pkg:maven/org.slf4j/slf4j-api@2.0.9".to_string(),
+                                    checksum: Sha256Checksum::new([1; 32]).to_any(),
+                                },
+                            ]),
                             ConfigField::JvmOptions(vec!["-Xmx512m".to_string()]),
                         ],
                     },
@@ -2241,6 +2245,19 @@ mod tests {
 
         let root_group = archive.read_root_config_group()?.unwrap();
         assert_eq!(root_group.root_group.fields.len(), 3);
+        match &root_group.root_group.fields[1] {
+            ConfigField::ClassPath(items) => {
+                assert_eq!(items.len(), 2);
+                assert_eq!(
+                    items[1],
+                    ResourceGroupReference::Purl {
+                        purl: "pkg:maven/org.slf4j/slf4j-api@2.0.9".to_string(),
+                        checksum: Sha256Checksum::new([1; 32]).to_any(),
+                    }
+                );
+            }
+            other => panic!("unexpected config field: {other:?}"),
+        }
 
         let string_pool = archive.read_string_pool()?.unwrap();
         assert_eq!(string_pool.strings.get(2), Some("App.class"));
@@ -2301,6 +2318,29 @@ mod tests {
         assert!(crate::section::validate_resource_path("foo//bar").is_err());
         assert!(crate::section::validate_resource_path("../bar").is_err());
         assert!(crate::section::validate_resource_path("/bar").is_err());
+    }
+
+    #[test]
+    fn reject_invalid_purl_reference() {
+        for purl in [
+            "",
+            "org.slf4j:slf4j-api:2.0.9",
+            "pkg://maven/org.slf4j/slf4j-api@2.0.9",
+            "pkg:maven/org.slf4j/slf4j-api",
+            "pkg:maven/org.slf4j/slf4j-api?download_url=https://example.com/a@b.jar",
+            "pkg:maven/org.slf4j/slf4j-api?vers=vers:maven/%3E%3D2.0.0",
+        ] {
+            let mut builder = JanexFile::builder();
+            builder.with_root_config_group(RootConfigGroupSection {
+                root_group: ConfigGroup {
+                    fields: vec![ConfigField::ClassPath(vec![ResourceGroupReference::Purl {
+                        purl: purl.to_string(),
+                        checksum: Sha256Checksum::new([1; 32]).to_any(),
+                    }])],
+                },
+            });
+            assert!(builder.build().is_err(), "accepted invalid PURL: {purl}");
+        }
     }
 
     #[test]
