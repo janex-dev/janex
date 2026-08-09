@@ -64,19 +64,26 @@ Here, `length` is a 32-bit unsigned integer, and `data` is a byte array of lengt
 
 ### Variable-length integers
 
-Janex uses `vuint` to efficiently encode unsigned integers in some structures.
+Janex uses unsigned Little Endian Base 128 (ULEB128) to efficiently encode unsigned integers in some structures.
+This document calls the resulting 64-bit value type `vuint`:
 
 ```rust
 type vuint = u64;
 ```
 
-A `vuint` is stored in the file as one or more bytes. The lower seven bits of each byte carry integer
-data, and the most significant bit (MSB) of each byte serves as the continuation flag:
+A `vuint` uses the standard ULEB128 byte layout. It is stored as one to ten bytes, with the least-significant
+seven-bit group first. The lower seven bits of each byte carry integer data, and the most significant bit (MSB)
+serves as the continuation flag:
 
 - If the MSB is `0`, the current byte is the last byte of the integer.
 - If the MSB is `1`, more bytes follow; the next byte continues the encoding.
 
-Reading `vuint` should follow the following algorithm:
+Because `vuint` has a width of 64 bits, its encoding must not exceed ten bytes, and the tenth byte can contain
+at most one non-zero payload bit. Janex writers emit the shortest ULEB128 representation. Readers also accept
+zero-padded ULEB128 representations within the ten-byte width limit. Janex does not currently use signed
+LEB128 (SLEB128).
+
+Reading `vuint` follows this algorithm:
 
 ```rust
 fn read_vuint(read: &mut impl Read) -> Result<vuint, Error> {
