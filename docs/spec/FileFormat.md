@@ -198,12 +198,7 @@ struct Checksum {
     /// The checksum algorithm.
     algorithm: ChecksumAlgorithm,
 
-    /// Reserved for future use.
-    /// 
-    /// Currently must be `0`.
-    reserved: u8,
-    
-    /// The checksum value.
+    /// The length-prefixed checksum value.
     checksum: Vec<u8>,
 }
 ```
@@ -240,6 +235,11 @@ enum ChecksumAlgorithm {
 }
 ```
 
+For a known algorithm, the length of `checksum` must match the length specified by
+`ChecksumAlgorithm`. The length prefix permits readers to skip the value of an unknown algorithm and
+continue parsing subsequent metadata. If a checksum is required for validation, a reader must reject
+an unsupported algorithm because it cannot perform that validation.
+
 ## Janex File Structure
 
 The Janex file is the binary format produced by the Janex build tool for packaging and distributing
@@ -273,14 +273,16 @@ struct FileMetadataSection {
 
     /// The minor version number of the Janex file format.
     ///
-    /// Readers should accept files with a higher minor version within the same major version,
-    /// ignoring any unknown fields or entries.
+    /// For a nonzero major version, readers should accept files with a higher minor version within
+    /// the same major version, ignoring unknown fields or entries where their enclosing structures
+    /// permit this.
     ///
-    /// The only exception is when `major_version` is `0` (indicating an early development stage),
-    /// where we will update the `minor_version` for every breaking change,
-    /// and Janex tools should reject files with mismatched `minor_version`.
+    /// While `major_version` is `0`, readers must reject files whose minor version they do not
+    /// explicitly support. During active format design, edits to this specification, including
+    /// changes to the described binary layout, do not automatically change the minor version; a new
+    /// value is assigned only when establishing a distinct supported format revision.
     ///
-    /// The current minor version is `5`.
+    /// The current minor version is `1`.
     minor_version: u32,
 
     /// File-level flags. Currently unused and must be `0`.
