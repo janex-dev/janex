@@ -257,6 +257,15 @@ struct JanexFile {
 }
 ```
 
+The complete physical file may contain data outside `JanexFile`:
+
+```text
+[external header] [JanexFile] [external tail]
+```
+
+External regions are described by `FileMetadataSection.external_regions`; they are not Janex
+sections and do not appear in `section_table`.
+
 ### `FileMetadata` Section
 
 ```rust
@@ -288,8 +297,11 @@ struct FileMetadataSection {
     /// File-level flags. Currently unused and must be `0`.
     flags: u64,
 
-    /// Records the length and other information of each section.
+    /// Records the length and other information of each section in `JanexFile.sections`.
     section_table: Vec<SectionInfo>,
+
+    /// Describes data located before or after the `JanexFile` structure.
+    external_regions: Vec<ExternalRegionInfo>,
 
     /// Currently, all fields will be skipped. Reserved for future use.
     fields: Vec<TaggedPayload<u32>>,
@@ -299,9 +311,9 @@ struct FileMetadataSection {
     
     /// The end mark of the file.
     ///
-    /// When reading a Janex file, the tool first locates the `end_mark`, 
-    /// and then uses `metadata_length` to reverse-lookup the offset of `FileMetadata`,
-    /// and uses `file_length` to reverse-lookup the starting offset of the `JanexFile` structure.
+    /// A reader first determines the end offset of `JanexFile`, reads this footer, uses
+    /// `metadata_length` to locate `FileMetadata`, and uses `file_length` to locate the start of
+    /// `JanexFile`.
     end_mark: u64,  // 0x444e_4558_454e_414a ("JANEXEND")
     
     /// The length in bytes of the metadata section.
@@ -309,8 +321,8 @@ struct FileMetadataSection {
 
     /// The total length in bytes of the `JanexFile` structure.
     ///
-    /// The reader uses this value together with the actual file size to determine
-    /// the byte offset at which the Janex content begins.
+    /// The reader subtracts an externally supplied tail length from the physical file size to obtain
+    /// the end offset of `JanexFile`, then uses this value to locate its start.
     file_length: u64,
 }
 ```
@@ -352,20 +364,6 @@ enum SectionType {
     /// Padding sections do not require a `magic_number`.
     Padding = 0x0047_4e49_4444_4150, // "PADDING\0"
 
-    /// A special section whose content is not within `sections`, but before the `JanexFile` structure.
-    ///
-    /// This is an optional section. If present, the `SectionInfo` must be the first element in `section_table`.
-    ExternalHeader = 0x4441_4548_4c54_5845, // "EXTLHEAD"
-
-    /// A special section whose content is not within `sections`, but after the `JanexFile` structure.
-    ///
-    /// This section allows users to attach a Janex Launcher packaged as a JAR to the end of the Janex file,
-    /// enabling program startup using `java -jar xxx.janex`.
-    /// The JAR-formatted Janex Launcher should be able to read the size of the JAR portion and locate the end of the `JanexFile` structure.
-    /// 
-    /// This is an optional section. If present, the `SectionInfo` must be the last element in `section_table`.
-    ExternalTail = 0x4c49_4154_4c54_5845, // "EXTLTAIL"
-    
     /// The `FileMetadata` section. Used to store file metadata.
     /// 
     /// This section is always the last section in `sections`.
@@ -393,10 +391,63 @@ enum SectionType {
 }
 ```
 
-Except for the `ExternalHeader` and `ExternalTail` sections, all other sections are arranged consecutively within the `sections` of `JanexFile`.
-If additional data or padding needs to be inserted within them, the `Padding` section can be used.
+All entries in `section_table` describe sections arranged consecutively within `JanexFile.sections`.
+If additional data or padding needs to be inserted between them, the `Padding` section can be used.
 
 Unknown sections will be ignored.
+
+#### `ExternalRegionInfo` Structure
+
+`ExternalRegionInfo` describes bytes outside the `JanexFile` structure. External regions do not have
+Janex section magic numbers and are not addressed by `SectionInfo`.
+
+```rust
+struct ExternalRegionInfo {
+    /// Identifies whether the region precedes or follows `JanexFile`.
+    position: ExternalRegionPosition,
+
+    /// The exact number of bytes in the external region.
+    length: u64,
+
+    /// The checksum of the complete external region.
+    checksum: Checksum,
+
+    /// Optional metadata associated with the external region.
+    fields: Vec<TaggedPayload<u32>>,
+}
+
+#[repr(u8)]
+enum ExternalRegionPosition {
+    /// Bytes before the first byte of `JanexFile`.
+    Header = 0,
+
+    /// Bytes after the last byte of `JanexFile`.
+    Tail = 1,
+}
+```
+
+`external_regions` may contain at most one `Header` entry and at most one `Tail` entry. Entries with a
+zero `length` are not permitted; an absent region is represented by the absence of its entry. If both
+entries are present, `Header` must precede `Tail` in the vector.
+
+For a physical file of `physical_file_size` bytes, a reader receives `external_tail_length` from its
+caller and calculates:
+
+```text
+janex_end   = physical_file_size - external_tail_length
+janex_start = janex_end - file_length
+```
+
+Both subtractions must use checked arithmetic. The reader locates the fixed footer immediately before
+`janex_end`. After decoding `FileMetadata`, it must verify that a `Tail` entry is present exactly when
+`external_tail_length` is nonzero and that its `length` equals `external_tail_length`. It must likewise
+verify that a `Header` entry is present exactly when `janex_start` is nonzero and that its `length`
+equals `janex_start`.
+
+The standalone Janex layout uses `external_tail_length = 0`. A containing format may define how its
+caller obtains a nonzero value. For example, a JAR-formatted launcher appended as an external tail may
+determine the length of its own JAR region before locating the preceding `JanexFile`. Janex itself does
+not scan external bytes for `end_mark` and does not infer the tail length from its contents.
 
 #### `VerificationInfo` Structure
 
@@ -439,8 +490,9 @@ enum VerificationType {
 
 ```
 
-If you want to sign or verify the integrity of the entire file, you should ensure that each element
-in the `section_table` contains a valid and secure `checksum`.
+To sign or verify the integrity of the complete physical file, each entry in `section_table` and
+`external_regions` must contain a secure checksum. The signed `FileMetadata` representation then binds
+those checksums to the file metadata.
 
 ### `Attributes` Section
 
