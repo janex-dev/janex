@@ -243,18 +243,18 @@ enum CompressMethod {
 }
 ```
 
-`BlobRef<T>` identifies one complete blob in a `DataPool` section. A blob is an independently decoded
+`BlobRef<T>` identifies one complete blob in a `BlobPool` section. A blob is an independently decoded
 physical storage unit. The type parameter `T` describes the logical type of the complete decoded blob
 and has no separate binary representation in `BlobRef`:
 
 ```rust
 struct BlobRef<T> {
-    /// The ID of the referenced `DataPool` section.
+    /// The ID of the referenced `BlobPool` section.
     ///
-    /// This value must match the `SectionInfo.id` of exactly one `DataPool` section.
-    data_pool_id: vuint,
+    /// This value must match the `SectionInfo.id` of exactly one `BlobPool` section.
+    blob_pool_id: vuint,
 
-    /// The zero-based index of the blob in the referenced data pool's `BlobTable`.
+    /// The zero-based index of the blob in the referenced blob pool's `BlobTable`.
     blob_index: vuint,
 }
 ```
@@ -451,7 +451,7 @@ struct FileMetadataSection {
     /// where we will update the `minor_version` for every breaking change,
     /// and Janex tools should reject files with mismatched `minor_version`.
     ///
-    /// The current minor version is `3`.
+    /// The current minor version is `4`.
     minor_version: u32,
 
     /// File-level flags. Currently unused and must be `0`.
@@ -547,8 +547,8 @@ enum SectionType {
     /// The `Attributes` section.
     Attributes = 0x2e53_4249_5254_5441, // "ATTRIBS."
     
-    /// Stores opaque pooled data, including structural metadata and file contents.
-    DataPool = 0x4c4f_4f50_4154_4144, // "DATAPOOL"
+    /// Stores indexed blobs, including structural metadata and file contents.
+    BlobPool = 0x4c4f_4f50_424f_4c42, // "BLOBPOOL"
     
     /// The `RootConfigGroup` section.
     RootConfigGroup = 0x5055_4f52_4747_4643, // "CFGGROUP"
@@ -911,7 +911,7 @@ struct ResourceGroup {
 
     /// A reference to the compressed array of resource metadata entries for this group.
     ///
-    /// Writers normally place this structural data in a data pool separate from file contents.
+    /// Writers normally place this structural data in a blob pool separate from file contents.
     resources: BlobRef<[Resource; resources_count]>
 }
 ```
@@ -922,7 +922,7 @@ A `Resource` represents a single entry (regular file, directory, or symbolic lin
 group.
 
 Resource entries normally contain only metadata. Small regular-file contents may be stored inline;
-other contents are stored in one or more blobs in `DataPool` sections.
+other contents are stored in one or more blobs in `BlobPool` sections.
 
 ```rust
 enum Resource {
@@ -1162,41 +1162,41 @@ When used to decompress class files, they need to be converted back to Modified 
 The compression pipeline of the blob referenced by `StringPoolSection.data` must not use `CLASSFILE`,
 either directly or within `COMPOSITE`, because decoding `CLASSFILE` data depends on this string pool.
 
-### `DataPool` Section
+### `BlobPool` Section
 
-A `DataPool` stores independently decoded blobs. Stored blobs may contain resource metadata arrays,
+A `BlobPool` stores independently decoded blobs. Stored blobs may contain resource metadata arrays,
 string-pool data, file contents, or extension-defined data. Object semantics are assigned by typed
-references and are not part of the data-pool layout.
+references and are not part of the blob-pool layout.
 
-A Janex file may contain any number of `DataPool` sections, including none when the file contains no
-`BlobRef`. Each data pool is identified by the `id` of its corresponding `SectionInfo`. Data-pool IDs
-must be unique within the `DataPool` section type, as required for all section IDs, and carry no
+A Janex file may contain any number of `BlobPool` sections, including none when the file contains no
+`BlobRef`. Each blob pool is identified by the `id` of its corresponding `SectionInfo`. Blob-pool IDs
+must be unique within the `BlobPool` section type, as required for all section IDs, and carry no
 semantic meaning. Readers must not assume that a particular ID, physical position, or creation order
 identifies a particular kind of data.
 
 ```rust
-struct DataPoolSection {
-    magic_number: u64, // 0x4c4f_4f50_4154_4144 ("DATAPOOL")
+struct BlobPoolSection {
+    magic_number: u64, // 0x4c4f_4f50_424f_4c42 ("BLOBPOOL")
 
     /// Blob representations and the blob table in the layout selected by the writer.
     bytes: [u8; ...],
 }
 ```
 
-The length of `bytes` is `SectionInfo.length - 8`; therefore, a `DataPool` section must have a length
+The length of `bytes` is `SectionInfo.length - 8`; therefore, a `BlobPool` section must have a length
 of at least 8 bytes. The corresponding `SectionInfo.options` must contain exactly one
-`DataPoolBlobTable` option:
+`BlobPoolIndex` option:
 
 ```rust
 #[repr(TaggedPayload<u32>)]
-struct DataPoolBlobTable {
+struct BlobPoolIndex {
     option_type: u32, // 0x5844_4942 ("BIDX")
 
     /// The number of bytes in this option payload.
     payload_bytes: vuint,
 
     /// The byte offset of the stored blob table relative to the first byte of
-    /// `DataPoolSection.bytes`.
+    /// `BlobPoolSection.bytes`.
     offset: vuint,
 
     /// The compression metadata for the stored blob table.
@@ -1213,7 +1213,7 @@ struct BlobTable {
 
 struct BlobInfo {
     /// The byte offset of the stored blob relative to the first byte of
-    /// `DataPoolSection.bytes`.
+    /// `BlobPoolSection.bytes`.
     offset: vuint,
 
     /// The compression metadata for the stored and decoded blob representations.
@@ -1225,33 +1225,33 @@ struct BlobInfo {
 ```
 
 The stored blob table occupies the half-open range
-`[DataPoolBlobTable.offset, DataPoolBlobTable.offset + DataPoolBlobTable.compress_info.compressed_size)`.
-After decoding, it must contain exactly `DataPoolBlobTable.compress_info.uncompressed_size` bytes,
+`[BlobPoolIndex.offset, BlobPoolIndex.offset + BlobPoolIndex.compress_info.compressed_size)`.
+After decoding, it must contain exactly `BlobPoolIndex.compress_info.uncompressed_size` bytes,
 must be a valid `BlobTable`, and, unless the checksum algorithm is `NONE`, must match
-`DataPoolBlobTable.checksum`. Its compression pipeline must not use `CLASSFILE`, directly or within
+`BlobPoolIndex.checksum`. Its compression pipeline must not use `CLASSFILE`, directly or within
 `COMPOSITE`, because the table is bootstrap metadata.
 
 Each stored blob occupies the half-open range
 `[BlobInfo.offset, BlobInfo.offset + BlobInfo.compress_info.compressed_size)`. After decoding, it must
 contain exactly `BlobInfo.compress_info.uncompressed_size` bytes. Readers must validate all stored and
-decoded ranges using checked arithmetic. Stored blob ranges must be within `DataPoolSection.bytes` and
+decoded ranges using checked arithmetic. Stored blob ranges must be within `BlobPoolSection.bytes` and
 must not overlap one another or the stored blob table. The stored blob-table range must also be within
-`DataPoolSection.bytes`. A writer may place the table anywhere in the section; placing it after the
+`BlobPoolSection.bytes`. A writer may place the table anywhere in the section; placing it after the
 blob representations permits forward-only construction of the section payload.
 
-Each `BlobRef` is resolved independently and may reference any data pool. A data pool may contain both
+Each `BlobRef` is resolved independently and may reference any blob pool. A blob pool may contain both
 structural metadata and file contents, and references from different roots may share a blob. Blob
-indices are local to one data pool and do not provide stable identity across files or revisions.
+indices are local to one blob pool and do not provide stable identity across files or revisions.
 
-Writers should normally use separate data pools for structural data and file contents when both are
+Writers should normally use separate blob pools for structural data and file contents when both are
 substantial. In the typical layout, resource metadata arrays and string-pool data are placed in one
-structural data pool, while file contents are placed in another. Writers may combine them into one pool
+structural blob pool, while file contents are placed in another. Writers may combine them into one pool
 for small files, and may use additional pools when this improves access locality, integrity isolation,
-incremental updates, or independent distribution. Writers should not create one data pool per resource
+incremental updates, or independent distribution. Writers should not create one blob pool per resource
 group without a concrete storage-policy reason.
 
 This separation is a writer layout policy only. Readers must support any valid distribution of blobs
-across data pools. The ordinary sections located through `FileMetadata` must provide the initial
+across blob pools. The ordinary sections located through `FileMetadata` must provide the initial
 `BlobRef` values needed to begin decoding pooled data. A pooled value may contain references to other
 pooled values, but the resulting reference graph must be finite and acyclic; no value may directly or
 indirectly depend on itself.
