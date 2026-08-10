@@ -510,7 +510,7 @@ enum VerificationInfo {
         /// The exact number of bytes in `signature`.
         payload_bytes: vuint,
 
-        /// One binary OpenPGP detached signature over `verification_input`.
+        /// One binary OpenPGP Signature packet conforming to the Janex OpenPGP profile.
         signature: [u8; payload_bytes],
     },
 
@@ -521,7 +521,7 @@ enum VerificationInfo {
         /// The exact number of bytes in `signature`.
         payload_bytes: vuint,
 
-        /// One DER-encoded CMS detached signature over `verification_input`.
+        /// One DER-encoded CMS ContentInfo value conforming to the Janex CMS profile.
         signature: [u8; payload_bytes],
     },
 }
@@ -545,6 +545,8 @@ For every known variant, the decoded payload must consume exactly `payload_bytes
 unconsumed bytes are invalid. An empty OpenPGP or CMS payload is invalid. A reader must reject an
 unknown `verification_type`, because it cannot determine whether or how the metadata was verified.
 
+##### Verification Policy
+
 `None` and `Checksum` do not authenticate the file against an active attacker. A reader must report
 them as unauthenticated and must reject them whenever its caller requires authenticated input.
 Preventing removal of an entire signature requires such an external verification policy: a file
@@ -553,14 +555,102 @@ whose signature was replaced with `None` is indistinguishable from a file origin
 OpenPGP and CMS verification must therefore use caller-provided trust and algorithm policies; a
 cryptographically valid signature from an untrusted signer is not sufficient.
 
-To authenticate the integrity of the complete physical file, each entry in `section_table` must use a
-cryptographically secure checksum, both external regions must be `Described`, and each described
+An OpenPGP- or CMS-tagged file with a malformed or cryptographically invalid signature is invalid. A
+reader must not retry it as another verification type, treat it as `None` or `Checksum`, or continue
+using content obtained from it. An implementation that only inspects the file without authenticating
+it must explicitly report that no authentication was performed and must not expose the result as
+authenticated.
+
+The caller's verification policy must define at least:
+
+- whether authenticated input is required;
+- which verification types, signature algorithms, digest algorithms, keys, and certificates are
+  accepted;
+- which signer or signers must succeed when a signature container identifies more than one signer;
+- the validation time and any required expiration or revocation checks.
+
+Algorithm support does not imply algorithm acceptance. An implementation may decode an algorithm that
+the caller's current policy rejects. Implementations supporting OpenPGP or CMS verification must
+support SHA-256 as a content-digest algorithm for that signature format. Writers must not create, and
+readers must not accept, Janex signatures that depend on MD5, SHA-1, or RIPEMD-160. Other algorithms
+are accepted only when permitted by the caller's policy.
+
+##### OpenPGP Profile
+
+The OpenPGP payload uses the binary packet format defined by
+[RFC 9580](https://www.rfc-editor.org/rfc/rfc9580.html). It must contain exactly one Signature packet
+and no Marker, Padding, Literal Data, One-Pass Signature, compressed, encrypted, or ASCII-armored
+representation. The Signature packet must:
+
+- use packet version 4 or 6;
+- use signature type `0x00` (Binary Signature of a Document), with `verification_input` as the exact
+  document bytes;
+- contain the Signature Creation Time subpacket in its hashed subpacket area;
+- contain exactly one Issuer Fingerprint subpacket in its hashed subpacket area, matching the key that
+  verifies the signature; and
+- satisfy the caller's algorithm, key-strength, key-usage, expiration, and revocation policies.
+
+Issuer information in the unhashed subpacket area is advisory and must not establish signer identity
+or trust. A reader must reject an unsupported critical subpacket. The signing key and its trust data
+are supplied by the caller or an external key store; they are not carried by `VerificationInfo`.
+
+##### CMS Profile
+
+The CMS payload uses the syntax defined by
+[RFC 5652](https://www.rfc-editor.org/rfc/rfc5652.html), with the algorithm-protection updates in
+[RFC 8933](https://www.rfc-editor.org/rfc/rfc8933.html). It must be exactly one DER-encoded
+`ContentInfo` value satisfying all of the following requirements:
+
+- `ContentInfo.contentType` is `id-signedData` and its content is one `SignedData` value;
+- `SignedData.encapContentInfo.eContentType` is `id-data` and `eContent` is absent, making the
+  signature detached;
+- `signerInfos` is non-empty;
+- every `SignerInfo` considered by the caller's policy contains signed attributes;
+- those signed attributes contain exactly one `content-type` attribute whose value is `id-data`,
+  exactly one `message-digest` attribute equal to the digest of `verification_input`, and exactly one
+  `CMSAlgorithmProtection` attribute matching that `SignerInfo`'s digest and signature algorithms;
+  and
+- the same digest algorithm is used for the content digest and the signed attributes, as required by
+  RFC 8933.
+
+For each signer required by policy, the reader must independently recompute the digest of
+`verification_input`, validate the signed attributes and signature, identify the signing certificate
+or externally supplied key, and apply the caller's trust, key-usage, validity, and revocation rules.
+Certificates or revocation information embedded in `SignedData` are inputs to that process and are
+not trusted merely because they are embedded. Unsigned attributes must not affect acceptance of the
+primary signature. If multiple `SignerInfo` values are present, the caller's policy determines whether
+one, a specified subset, or all of them must succeed.
+
+##### Authenticated Content Scope
+
+To authenticate every Janex section and both external data regions, each entry in `section_table` must
+use a cryptographically secure checksum, both external regions must be `Described`, and each described
 non-empty external region must use a cryptographically secure checksum. The signed
 `verification_input` then binds those checksums and any explicit zero-size requirements to the file
 metadata. `SHA256`, `SHA512`, and `SM3` are cryptographically secure checksum algorithms for this
-purpose; `NONE` and `XXH64` are not. A reader claiming complete-file authentication must verify every
+purpose; `NONE` and `XXH64` are not. A reader claiming this scope of authentication must verify every
 required checksum before trusting the corresponding bytes. An external region marked
 `NotDescribed` is outside the integrity guarantees provided by Janex metadata.
+
+The verification payload itself is not part of `verification_input`, and the footer is enforced by
+the structural boundary checks rather than by the detached signature. Authentication therefore binds
+the file's metadata and all content represented by authenticated checksums; it is not a canonical
+byte-for-byte signature of the complete physical representation.
+
+Readers must verify a byte source that remains stable for the duration of verification and use. If an
+attacker may modify the source concurrently, the reader must use an immutable snapshot or another
+mechanism that prevents verified bytes from being replaced before they are consumed.
+
+##### Rollback and Replacement
+
+A valid signature proves integrity and signer authorization under the caller's policy; it does not
+prove that the file is the newest authorized release. An attacker may replace a Janex file with an
+older file or a different file signed by the same trusted signer. Applications requiring rollback or
+object-substitution protection must compare an expected file identity, release identifier, monotonic
+version, or digest obtained from trusted state outside the file. `major_version` and `minor_version`
+identify the Janex format revision and must not be used as application release counters. OpenPGP
+Signature Creation Time and CMS signing-time attributes are signer assertions and do not by themselves
+provide trusted freshness.
 
 ### `Attributes` Section
 
