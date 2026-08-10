@@ -316,6 +316,8 @@ struct FileMetadataSection {
     
     /// The end mark of the file.
     ///
+    /// Always `0x444e_4558_454e_414a` ("JANEXEND").
+    ///
     /// A reader first determines the end offset of `JanexFile`, reads this footer, uses
     /// `metadata_length` to locate `FileMetadata`, and uses `file_length` to locate the start of
     /// `JanexFile`.
@@ -456,6 +458,17 @@ reader must compare an external region's actual size with its declared `size` an
 only when the corresponding `ExternalRegion` is `Described`. When it is `NotDescribed`, the reader
 imposes no metadata-derived size or checksum requirement on that region.
 
+The reader must reject the file unless `end_mark` has its required value, `metadata_length` equals the
+exact encoded length of `FileMetadataSection`, and the following equation holds using checked
+arithmetic:
+
+```text
+file_length = 8 + sum(section_table[*].length) + metadata_length
+```
+
+These requirements ensure that the located `JanexFile`, its consecutively stored sections, and its
+final metadata section have one consistent set of boundaries.
+
 The standalone Janex layout uses `external_tail_length = 0`. A containing format may define how its
 caller obtains a nonzero value. For example, a JAR-formatted launcher appended as an external tail may
 determine the length of its own JAR region before locating the preceding `JanexFile`. Janex itself does
@@ -463,50 +476,90 @@ not scan external bytes for `end_mark` and does not infer the tail length from i
 
 #### `VerificationInfo` Structure
 
-The structure of the `VerificationInfo` is as follows:
+`VerificationInfo` is a tagged payload. Its `verification_type` is part of the authenticated input;
+the payload containing the resulting checksum or signature is not.
 
 ```rust
-struct VerificationInfo {
-    verification_type: VerificationType,
-    data: Vec<u8>,
-}
-```
-
-#### `VerificationType` Structure
-
-The supported verification types are:
-
-```rust
-#[repr(u8)]
-enum VerificationType {
+#[repr(TaggedPayload<u8>)]
+enum VerificationInfo {
     /// No verification.
-    /// 
-    /// The data field is empty.
-    None = 0,
-    
-    /// Checksum verification.
-    /// 
-    /// The data field contains a `Checksum` for the `FileMetadataSection` structure (ignoring the `verification_info`, `end_mark`, `metadata_length`, and `file_length` fields).
-    Checksum = 1,
-    
-    /// OpenPGP signature verification.
-    /// 
-    /// The data field contains an OpenPGP signature for the `FileMetadata` section (ignoring the `verification_info`, `end_mark`, `metadata_length`, and `file_length` fields).
-    OpenPGP = 2,
-    
-    /// CMS signature verification.
-    /// 
-    /// The data field contains a CMS signature for the `FileMetadata` section (ignoring the `verification_info`, `end_mark`, `metadata_length`, and `file_length` fields).
-    CMS = 3,
-}
+    None {
+        verification_type: u8, // 0
 
+        /// Always `0`.
+        payload_bytes: vuint,
+    },
+
+    /// Detects accidental corruption of the metadata.
+    Checksum {
+        verification_type: u8, // 1
+
+        /// The exact encoded size of `checksum`.
+        payload_bytes: vuint,
+
+        /// The checksum of `verification_input`.
+        ///
+        /// The algorithm must not be `NONE`.
+        checksum: Checksum,
+    },
+
+    /// Authenticates the metadata using a detached OpenPGP signature.
+    OpenPGP {
+        verification_type: u8, // 2
+
+        /// The exact number of bytes in `signature`.
+        payload_bytes: vuint,
+
+        /// One binary OpenPGP detached signature over `verification_input`.
+        signature: [u8; payload_bytes],
+    },
+
+    /// Authenticates the metadata using a detached CMS signature.
+    CMS {
+        verification_type: u8, // 3
+
+        /// The exact number of bytes in `signature`.
+        payload_bytes: vuint,
+
+        /// One DER-encoded CMS detached signature over `verification_input`.
+        signature: [u8; payload_bytes],
+    },
+}
 ```
 
-To sign or verify the integrity of the complete physical file, each entry in `section_table` must
-contain a secure checksum, both external regions must be `Described`, and each described
-non-empty external region must contain a secure checksum. The signed `FileMetadata` representation
-then binds those checksums and any explicit zero-size requirements to the file metadata. An external
-region marked `NotDescribed` is outside the integrity guarantees provided by Janex metadata.
+`verification_input` is the following byte string:
+
+```text
+ASCII("JANEX-METADATA\0") || metadata_prefix || verification_type
+```
+
+`metadata_prefix` is the exact encoded byte sequence starting with
+`FileMetadataSection.magic_number` and ending immediately before `verification_info`. The original
+on-disk bytes must be used without parsing and re-encoding them. `verification_type` is the single tag
+byte that immediately follows this prefix. Consequently, changing the verification type invalidates
+an existing checksum or signature instead of allowing the same verification payload to be interpreted
+under another type.
+
+For every known variant, the decoded payload must consume exactly `payload_bytes`; trailing or
+unconsumed bytes are invalid. An empty OpenPGP or CMS payload is invalid. A reader must reject an
+unknown `verification_type`, because it cannot determine whether or how the metadata was verified.
+
+`None` and `Checksum` do not authenticate the file against an active attacker. A reader must report
+them as unauthenticated and must reject them whenever its caller requires authenticated input.
+Preventing removal of an entire signature requires such an external verification policy: a file
+whose signature was replaced with `None` is indistinguishable from a file originally written with
+`None` until the caller requires a particular authenticated verification type and trusted signer.
+OpenPGP and CMS verification must therefore use caller-provided trust and algorithm policies; a
+cryptographically valid signature from an untrusted signer is not sufficient.
+
+To authenticate the integrity of the complete physical file, each entry in `section_table` must use a
+cryptographically secure checksum, both external regions must be `Described`, and each described
+non-empty external region must use a cryptographically secure checksum. The signed
+`verification_input` then binds those checksums and any explicit zero-size requirements to the file
+metadata. `SHA256`, `SHA512`, and `SM3` are cryptographically secure checksum algorithms for this
+purpose; `NONE` and `XXH64` are not. A reader claiming complete-file authentication must verify every
+required checksum before trusting the corresponding bytes. An external region marked
+`NotDescribed` is outside the integrity guarantees provided by Janex metadata.
 
 ### `Attributes` Section
 
