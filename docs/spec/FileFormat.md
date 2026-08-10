@@ -191,57 +191,60 @@ struct Timestamp {
 }
 ```
 
-### Compression
+### Blob Encoding
 
-Janex uses the following structure to represent compression metadata. It describes how a block of data
-was compressed and provides the information needed to decompress it:
+`BlobEncoding` describes the stored representation of a blob and the filters applied to produce it:
 
 ```rust
-struct CompressInfo {
-    /// The compression method used to compress the data.
-    method: CompressMethod,
+struct BlobEncoding {
+    /// The number of bytes in the stored representation.
+    stored_size: vuint,
 
-    /// The size of the original (uncompressed) data, in bytes.
-    uncompressed_size: vuint,
+    /// The filters in the order in which the encoder applied them.
+    filters: Vec<BlobFilter>,
+}
 
-    /// The size of the compressed data, in bytes.
-    compressed_size: vuint,
+struct BlobFilter {
+    /// The number of bytes supplied to this filter by the encoder.
+    input_size: vuint,
 
-    /// Optional method-specific parameters passed to the decompressor.
-    /// The interpretation of this field depends on the value of `method`.
-    options: Vec<u8>,
+    /// The filter method and its decoder-required properties.
+    method: BlobFilterMethod,
 }
 ```
 
-The supported compression methods are:
+A reader reverses the filters in array order: it processes the last filter first and the first filter
+last. Reversing a filter must produce exactly `input_size` bytes. An empty filter array means that the
+blob is stored without transformation, in which case its decoded size equals `stored_size`. Otherwise,
+the decoded size of the blob is the `input_size` of the first filter.
+
+The stored size and every filter input size are independently authoritative. Readers must enforce
+implementation resource limits before allocating output buffers and must reject a filter that produces
+a different number of bytes. Filter properties contain only information required by a decoder; writer
+settings such as a compression level are not part of the format.
+
+The supported blob filters are:
 
 ```rust
-#[repr(u8)]
-enum CompressMethod {
-    /// No compression. The data is stored as-is.
-    NONE = 0,
-
-    /// Composite compression: combines multiple compression algorithms applied in sequence.
-    ///
-    /// The `options` field contains a `Vec<CompressInfo>` that describes each layer of compression.
-    /// To decompress, the algorithms are applied in reverse order (innermost first).
-    COMPOSITE = 1,
-
-    /// A class-file-aware compression algorithm.
-    ///
-    /// This method extracts frequently occurring strings from Java class file constant pools
-    /// and places them into a shared `StringPool`, enabling cross-file string deduplication.
-    /// 
-    /// The modified class files are typically then compressed further using other compression algorithms,
-    /// such as Zstandard.
-    CLASSFILE = 2,
-
+#[repr(TaggedPayload<u8>)]
+enum BlobFilterMethod {
     /// Zstandard (zstd) compression.
     ///
     /// See https://github.com/facebook/zstd for details.
-    ZSTD = 3,
+    Zstd {
+        filter_type: u8, // 1
+
+        /// Decoder-required Zstandard properties. Currently empty.
+        properties: Vec<u8>,
+    },
 }
 ```
+
+A reader must reject a blob that uses an unsupported filter because it cannot reconstruct the decoded
+representation. The payload length in `BlobFilterMethod` still permits generic inspection tools to
+locate subsequent metadata without interpreting the filter properties.
+
+### Blob and Content References
 
 `BlobRef<T>` identifies one complete blob in a `BlobPool` section. A blob is an independently decoded
 physical storage unit. The type parameter `T` describes the logical type of the complete decoded blob
@@ -259,7 +262,7 @@ struct BlobRef<T> {
 }
 ```
 
-The selected `BlobInfo` supplies the location and compression metadata of the stored representation.
+The selected `BlobInfo` supplies the location and encoding metadata of the stored representation.
 The `blob_index` must be less than the number of entries in the selected `BlobTable`. After decoding,
 the complete result must be a valid encoding of `T`. Multiple references may identify the same blob.
 
@@ -281,7 +284,7 @@ struct BlobSlice {
 The half-open range `[decoded_offset, decoded_offset + decoded_length)` must be contained in the
 decoded blob. Readers must validate the range using checked arithmetic before copying or exposing it.
 
-`ContentRef<T>` stores logical content in one of three forms:
+`ContentRef<T>` stores the encoded representation of a value in one of three forms:
 
 ```rust
 #[repr(u8)]
@@ -306,7 +309,7 @@ enum ContentRef<T> {
 }
 ```
 
-For `Inline`, `bytes` must be a valid encoding of `T`; empty logical content is represented by an
+For `Inline`, `bytes` must be a valid encoding of `T`; an empty representation is encoded by an
 empty `bytes` vector. For `BlobRef`, the complete decoded blob is the encoded representation of `T`.
 For `BlobSlices`, concatenating the selected ranges in array order must produce a valid encoding of
 `T`. Readers must use checked arithmetic when calculating the total concatenated size and must reject
@@ -314,19 +317,65 @@ an unsupported `content_type`.
 
 `BlobSlices.slices` must contain at least one element. A `BlobSlices` value containing exactly one
 slice that covers its complete decoded blob is not permitted; it must use the `BlobRef` variant
-instead. Zero-length slices are not permitted; therefore, empty logical content has the single
+instead. Zero-length slices are not permitted; therefore, an empty representation has the single
 canonical representation `Inline` with an empty byte vector. The size threshold at which a writer
 chooses `Inline` instead of pooled storage is a writer policy and is not part of the format semantics.
 
-#### Class File Compression
+### Content Transforms
+
+`FileContent` describes the encoded bytes associated with a regular-file entry and any logical
+transforms applied before those bytes were placed inline or in blobs:
+
+```rust
+struct FileContent {
+    /// The bytes produced after applying all content transforms.
+    source: ContentRef<[u8]>,
+
+    /// The transforms in the order in which the encoder applied them.
+    transforms: Vec<ContentTransform>,
+}
+
+struct ContentTransform {
+    /// The number of bytes supplied to this transform by the encoder.
+    input_size: vuint,
+
+    /// The transform method and its decoder-required properties.
+    method: ContentTransformMethod,
+}
+
+#[repr(TaggedPayload<u8>)]
+enum ContentTransformMethod {
+    /// A class-file-aware transform using the shared `StringPool`.
+    ClassFile {
+        transform_type: u8, // 1
+
+        /// Decoder-required transform properties. Currently empty.
+        properties: Vec<u8>,
+    },
+}
+```
+
+As with blob filters, transforms are stored in encoding order and reversed by readers. The byte
+sequence obtained from `source` is passed through the transforms from last to first. Reversing each
+transform must produce exactly its `input_size` bytes. An empty transform array means that `source`
+already contains the logical file content. Otherwise, the logical file size is the `input_size` of the
+first transform.
+
+Content transforms operate after blob decoding and slice concatenation. They are properties of a
+logical file entry, not of a physical blob. Consequently, a solid-compressed blob may contain encoded
+ranges belonging to entries with different transforms. A reader must reject a regular-file entry that
+uses an unsupported content transform because it cannot reconstruct the logical content; the tagged
+method payload still permits generic tools to inspect or skip its metadata.
+
+#### Class File Transform
 
 Janex typically extracts frequently occurring strings (such as common package names, type descriptors,
-and method signatures) from class file constant pools into a shared `StringPool`, then independently
-compresses both the modified class files and the string pool using Zstandard. This approach allows
-strings that appear across many class files to be stored only once, significantly reducing the total
-compressed size.
+and method signatures) from class file constant pools into a shared `StringPool`. Writers store the
+transformed class representations as file-content sources and may pack them with other sources into
+blobs before applying Zstandard at the blob layer. This approach allows strings that appear across
+many class files to be stored only once while retaining solid-compression support.
 
-The `CLASSFILE` compression algorithm largely preserves the standard class file format, but introduces
+The `ClassFile` content transform largely preserves the standard class file format, but introduces
 the following modifications:
 
 1. The magic number of the transformed class file is rewritten to `0x70CAFECA`
@@ -361,6 +410,9 @@ the following modifications:
         }
         ```
 
+The input to the `ClassFile` transform must be a valid Java class file. A Janex file containing a
+`ClassFile` transform must contain exactly one `StringPool` section, and reversing the transform uses
+that string pool. The `properties` payload of the transform is currently empty.
 
 ### `Checksum`
 
@@ -451,7 +503,7 @@ struct FileMetadataSection {
     /// where we will update the `minor_version` for every breaking change,
     /// and Janex tools should reject files with mismatched `minor_version`.
     ///
-    /// The current minor version is `4`.
+    /// The current minor version is `5`.
     minor_version: u32,
 
     /// File-level flags. Currently unused and must be `0`.
@@ -556,7 +608,7 @@ enum SectionType {
     /// The `ResourceGroups` section. Contains all embedded resource groups.
     ResourceGroups = 0x0053_5052_4753_4552, // "RESGRPS\0"
 
-    /// The `StringPool` section. A shared string pool used by class file compression
+    /// The `StringPool` section. A shared string pool used by the class file transform
     /// and `RefBody` resource paths.
     StringPool = 0x004c_4f4f_5052_5453, // "STRPOOL\0"
 }
@@ -936,8 +988,8 @@ enum Resource {
         /// The path of this resource within its resource group.
         path: ResourcePath,
 
-        /// The content of this resource.
-        content: ContentRef<[u8]>,
+        /// The content of this resource and its logical transforms.
+        content: FileContent,
 
         /// Optional metadata fields associated with this resource (e.g., timestamps, checksum).
         fields: Vec<ResourceField>,
@@ -1133,7 +1185,7 @@ enum ResourceField {
 
 ### `StringPool` Section
 
-A shared string pool used by the class file compression algorithm and `RefBody` resource paths.
+A shared string pool used by the class file transform and `RefBody` resource paths.
 
 Each Janex file may contain at most one `StringPool` section.
 When present, it must appear before the `ResourceGroups` section.
@@ -1157,10 +1209,9 @@ struct StringPoolData {
 }
 ```
 
-All strings stored in the `StringPool` are encoded in standard UTF-8. 
-When used to decompress class files, they need to be converted back to Modified UTF-8 encoding.
-The compression pipeline of the blob referenced by `StringPoolSection.data` must not use `CLASSFILE`,
-either directly or within `COMPOSITE`, because decoding `CLASSFILE` data depends on this string pool.
+All strings stored in the `StringPool` are encoded in standard UTF-8. When used to reverse a
+`ClassFile` content transform, they need to be converted back to Modified UTF-8 encoding. The string
+pool itself cannot use a content transform because it is bootstrap data required by `ClassFile`.
 
 ### `BlobPool` Section
 
@@ -1199,8 +1250,8 @@ struct BlobPoolIndex {
     /// `BlobPoolSection.bytes`.
     offset: vuint,
 
-    /// The compression metadata for the stored blob table.
-    compress_info: CompressInfo,
+    /// The encoding metadata for the stored blob table.
+    encoding: BlobEncoding,
 
     /// The checksum of the decoded `BlobTable` representation.
     checksum: Checksum,
@@ -1216,8 +1267,8 @@ struct BlobInfo {
     /// `BlobPoolSection.bytes`.
     offset: vuint,
 
-    /// The compression metadata for the stored and decoded blob representations.
-    compress_info: CompressInfo,
+    /// The encoding metadata for the stored and decoded blob representations.
+    encoding: BlobEncoding,
 
     /// Optional metadata associated with this blob.
     fields: Vec<TaggedPayload<u32>>,
@@ -1225,19 +1276,18 @@ struct BlobInfo {
 ```
 
 The stored blob table occupies the half-open range
-`[BlobPoolIndex.offset, BlobPoolIndex.offset + BlobPoolIndex.compress_info.compressed_size)`.
-After decoding, it must contain exactly `BlobPoolIndex.compress_info.uncompressed_size` bytes,
-must be a valid `BlobTable`, and, unless the checksum algorithm is `NONE`, must match
-`BlobPoolIndex.checksum`. Its compression pipeline must not use `CLASSFILE`, directly or within
-`COMPOSITE`, because the table is bootstrap metadata.
+`[BlobPoolIndex.offset, BlobPoolIndex.offset + BlobPoolIndex.encoding.stored_size)`. Reversing its
+filter chain must produce a valid `BlobTable` and, unless the checksum algorithm is `NONE`, the decoded
+representation must match `BlobPoolIndex.checksum`. Blob-table filters must be self-contained and must
+not depend on a `BlobRef` or other external data because the table is bootstrap metadata.
 
 Each stored blob occupies the half-open range
-`[BlobInfo.offset, BlobInfo.offset + BlobInfo.compress_info.compressed_size)`. After decoding, it must
-contain exactly `BlobInfo.compress_info.uncompressed_size` bytes. Readers must validate all stored and
-decoded ranges using checked arithmetic. Stored blob ranges must be within `BlobPoolSection.bytes` and
-must not overlap one another or the stored blob table. The stored blob-table range must also be within
-`BlobPoolSection.bytes`. A writer may place the table anywhere in the section; placing it after the
-blob representations permits forward-only construction of the section payload.
+`[BlobInfo.offset, BlobInfo.offset + BlobInfo.encoding.stored_size)`. Readers must reverse its filters
+as specified by `BlobEncoding` and must validate all stored and decoded ranges using checked
+arithmetic. Stored blob ranges must be within `BlobPoolSection.bytes` and must not overlap one another
+or the stored blob table. The stored blob-table range must also be within `BlobPoolSection.bytes`. A
+writer may place the table anywhere in the section; placing it after the blob representations permits
+forward-only construction of the section payload.
 
 Each `BlobRef` is resolved independently and may reference any blob pool. A blob pool may contain both
 structural metadata and file contents, and references from different roots may share a blob. Blob
