@@ -243,18 +243,33 @@ enum CompressMethod {
 }
 ```
 
-The `CompressedData<T>` structure pairs a `CompressInfo` header with its corresponding compressed byte
-payload. The type parameter `T` describes the logical type of the data after decompression:
+`BlobRef<T>` identifies an independently compressed byte range in a `DataPool` section. The type
+parameter `T` describes the logical type of the data after decompression and has no separate binary
+representation in `BlobRef`:
 
 ```rust
-struct CompressedData<T> {
-    /// The compression metadata describing the method and sizes.
-    info: CompressInfo,
-    
-    /// The compressed bytes. After decompression, the result has type `T`.
-    data: [u8; info.compressed_size],
+struct BlobRef<T> {
+    /// The ID of the referenced `DataPool` section.
+    ///
+    /// This value must match the `SectionInfo.id` of exactly one `DataPool` section.
+    data_pool_id: vuint,
+
+    /// The byte offset of the stored representation relative to the first byte of the referenced
+    /// `DataPoolSection.bytes` field.
+    offset: vuint,
+
+    /// The compression metadata describing the stored and decoded representations.
+    compress_info: CompressInfo,
 }
 ```
+
+The stored representation occupies the half-open range
+`[offset, offset + compress_info.compressed_size)` in the referenced data pool. Readers must validate
+this range using checked arithmetic before reading it. The range is valid only if both its start and
+end are within `DataPoolSection.bytes`; an empty range may start at the end of the field.
+
+After decompression, the result must contain exactly `compress_info.uncompressed_size` bytes and must
+be a valid encoding of `T`. Multiple `BlobRef` values may reference the same stored byte range.
 
 #### Class File Compression
 
@@ -389,7 +404,7 @@ struct FileMetadataSection {
     /// where we will update the `minor_version` for every breaking change,
     /// and Janex tools should reject files with mismatched `minor_version`.
     ///
-    /// The current minor version is `1`.
+    /// The current minor version is `2`.
     minor_version: u32,
 
     /// File-level flags. Currently unused and must be `0`.
@@ -485,7 +500,7 @@ enum SectionType {
     /// The `Attributes` section.
     Attributes = 0x2e53_4249_5254_5441, // "ATTRIBS."
     
-    /// Stores the raw resource data after compression.
+    /// Stores opaque pooled data, including structural metadata and file contents.
     DataPool = 0x4c4f_4f50_4154_4144, // "DATAPOOL"
     
     /// The `RootConfigGroup` section.
@@ -847,8 +862,10 @@ struct ResourceGroup {
     /// The number of `Resource` entries stored in this group.
     resources_count: vuint,
 
-    /// The compressed array of resource metadata entries for this group.
-    compressed_resources: CompressedData<[Resource; resources_count]>
+    /// A reference to the compressed array of resource metadata entries for this group.
+    ///
+    /// Writers normally place this structural data in a data pool separate from file contents.
+    resources: BlobRef<[Resource; resources_count]>
 }
 ```
 
@@ -857,8 +874,8 @@ struct ResourceGroup {
 A `Resource` represents a single entry (regular file, directory, or symbolic link) within a resource
 group.
 
-Resources contain only metadata; the actual file content bytes are stored elsewhere in the
-`JanexFile` and referenced by byte offset via the `content_offset` field.
+Resources contain only metadata; the actual file content bytes are stored in a `DataPool` section and
+referenced through `BlobRef`.
 
 ```rust
 enum Resource {
@@ -872,13 +889,10 @@ enum Resource {
         /// The path of this resource within its resource group.
         path: ResourcePath,
 
-        /// Compression metadata for this resource's content.
+        /// A reference to this resource's content.
         ///
-        /// The `uncompressed_size` field within this structure gives the original file size in bytes.
-        compress_info: CompressInfo,
-
-        /// The byte offset of this resource's (compressed) content within the `bytes` field of the `DataPool` section.
-        content_offset: vuint,
+        /// The `uncompressed_size` field in `content.compress_info` gives the original file size in bytes.
+        content: BlobRef<[u8]>,
 
         /// Optional metadata fields associated with this resource (e.g., timestamps, checksum).
         fields: Vec<ResourceField>,
@@ -1076,8 +1090,6 @@ enum ResourceField {
 
 A shared string pool used by the class file compression algorithm and `RefBody` resource paths.
 
-The size of the `StringPool` is at least 1, and the first string (at index 0) is always an empty string.
-
 Each Janex file may contain at most one `StringPool` section.
 When present, it must appear before the `ResourceGroups` section.
 
@@ -1088,27 +1100,34 @@ struct StringPoolSection {
     /// Always `0x004c_4f4f_5052_5453` ("STRPOOL\0")
     magic_number: u64, // 0x004c_4f4f_5052_5453 ("STRPOOL\0")
 
-    /// The total number of strings stored in this pool.
-    count: vuint,
+    /// A reference to the string-pool data.
+    data: BlobRef<StringPoolData>,
+}
 
-    /// The uncompressed byte length of each string, in pool index order.
-    /// Used to locate individual strings within the decompressed byte buffer.
-    sizes: [vuint; count],
-
-    /// The concatenated UTF-8 bytes of all pool strings, stored as compressed data.
-    /// After decompression, individual strings are extracted sequentially using the `sizes` array.
-    bytes: CompressedData<[u8]>,
+struct StringPoolData {
+    /// The strings in pool-index order.
+    ///
+    /// This vector must contain at least one element, and element `0` must be an empty string.
+    strings: Vec<String>,
 }
 ```
 
 All strings stored in the `StringPool` are encoded in standard UTF-8. 
 When used to decompress class files, they need to be converted back to Modified UTF-8 encoding.
+The compression pipeline of `StringPoolSection.data` must not use `CLASSFILE`, either directly or
+within `COMPOSITE`, because decoding `CLASSFILE` data depends on this string pool.
 
 ### `DataPool` Section
 
-Stores the raw resource data after compression.
+A `DataPool` stores opaque byte ranges referenced by `BlobRef`. Stored values may include resource
+metadata arrays, string-pool data, file contents, and extension-defined data. The pool does not define
+object boundaries or attach semantics to its bytes.
 
-Currently, each file can only have one `DataPool` section.
+A Janex file may contain any number of `DataPool` sections, including none when the file contains no
+`BlobRef`. Each data pool is identified by the `id` of its corresponding `SectionInfo`. Data-pool IDs
+must be unique within the `DataPool` section type, as required for all section IDs, and carry no
+semantic meaning. Readers must not assume that a particular ID, physical position, or creation order
+identifies a particular kind of data.
 
 ```rust
 struct DataPoolSection {
@@ -1116,6 +1135,24 @@ struct DataPoolSection {
     bytes: [u8; ...],
 }
 ```
+
+The length of `bytes` is `SectionInfo.length - 8`; therefore, a `DataPool` section must have a length
+of at least 8 bytes. Each `BlobRef` is resolved independently and may reference any data pool. A data
+pool may contain both structural metadata and file contents, and references from different roots may
+share stored byte ranges.
+
+Writers should normally use separate data pools for structural data and file contents when both are
+substantial. In the typical layout, resource metadata arrays and string-pool data are placed in one
+structural data pool, while file contents are placed in another. Writers may combine them into one pool
+for small files, and may use additional pools when this improves access locality, integrity isolation,
+incremental updates, or independent distribution. Writers should not create one data pool per resource
+group without a concrete storage-policy reason.
+
+This separation is a writer layout policy only. Readers must support any valid distribution of blobs
+across data pools. The ordinary sections located through `FileMetadata` must provide the initial
+`BlobRef` values needed to begin decoding pooled data. A pooled value may contain references to other
+pooled values, but the resulting reference graph must be finite and acyclic; no value may directly or
+indirectly depend on itself.
 
 ## Conditions
 
