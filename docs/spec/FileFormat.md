@@ -860,19 +860,17 @@ struct ContentTransform {
     /// The number of bytes supplied to this transform by the encoder.
     input_size: vuint,
 
-    /// The transform method and its decoder-required properties.
-    method: ContentTransformMethod,
+    /// Identifies the content transform.
+    method: ContentTransformId,
+
+    /// Length-prefixed properties required to reverse the transform.
+    properties: Vec<u8>,
 }
 
-#[repr(TaggedPayload<u8>)]
-enum ContentTransformMethod {
+#[repr(u8)]
+enum ContentTransformId {
     /// A class-file-aware transform using the shared `StringPool`.
-    ClassFile {
-        transform_type: u8, // 1
-
-        /// Decoder-required transform properties. Currently empty.
-        properties: Vec<u8>,
-    },
+    CLASSFILE = 1,
 }
 ```
 
@@ -885,8 +883,9 @@ first transform.
 Content transforms operate after blob decoding and slice concatenation. They are properties of a
 logical file entry, not of a physical blob. Consequently, a solid-compressed blob may contain encoded
 ranges belonging to entries with different transforms. A reader must reject a regular-file entry that
-uses an unsupported content transform because it cannot reconstruct the logical content; the tagged
-method payload still permits generic tools to inspect or skip its metadata.
+uses an unsupported content transform because it cannot reconstruct the logical content. The length
+prefix of `properties` still permits readers to skip the properties and continue parsing subsequent
+metadata.
 
 ##### Class File Transform
 
@@ -933,7 +932,7 @@ the following modifications:
 
 The input to the `ClassFile` transform must be a valid Java class file. A Janex file containing a
 `ClassFile` transform must contain exactly one `StringPool` section, and reversing the transform uses
-that string pool. The `properties` payload of the transform is currently empty.
+that string pool. The `properties` field of `CLASSFILE` is currently empty.
 
 #### `ResourcePath`
 
@@ -1158,8 +1157,11 @@ struct BlobFilter {
     /// The number of bytes supplied to this filter by the encoder.
     input_size: vuint,
 
-    /// The filter method and its decoder-required properties.
-    method: BlobFilterMethod,
+    /// Identifies the filter algorithm.
+    method: BlobFilterId,
+
+    /// Length-prefixed properties required to reverse the filter.
+    properties: Vec<u8>,
 }
 ```
 
@@ -1176,23 +1178,20 @@ settings such as a compression level are not part of the format.
 The supported blob filters are:
 
 ```rust
-#[repr(TaggedPayload<u8>)]
-enum BlobFilterMethod {
+#[repr(u8)]
+enum BlobFilterId {
     /// Zstandard (zstd) compression.
     ///
     /// See https://github.com/facebook/zstd for details.
-    Zstd {
-        filter_type: u8, // 1
-
-        /// Decoder-required Zstandard properties. Currently empty.
-        properties: Vec<u8>,
-    },
+    ZSTD = 1,
 }
 ```
 
 A reader must reject a blob that uses an unsupported filter because it cannot reconstruct the decoded
-representation. The payload length in `BlobFilterMethod` still permits generic inspection tools to
-locate subsequent metadata without interpreting the filter properties.
+representation. The length prefix of `properties` still permits readers to skip an unsupported
+filter's properties and continue parsing subsequent metadata.
+
+The `properties` field of `ZSTD` is currently empty.
 
 #### Blob Table
 
