@@ -243,9 +243,9 @@ enum CompressMethod {
 }
 ```
 
-`BlobRef<T>` identifies an independently compressed byte range in a `DataPool` section. The type
-parameter `T` describes the logical type of the data after decompression and has no separate binary
-representation in `BlobRef`:
+`BlobRef<T>` identifies one complete blob in a `DataPool` section. A blob is an independently decoded
+physical storage unit. The type parameter `T` describes the logical type of the complete decoded blob
+and has no separate binary representation in `BlobRef`:
 
 ```rust
 struct BlobRef<T> {
@@ -254,22 +254,69 @@ struct BlobRef<T> {
     /// This value must match the `SectionInfo.id` of exactly one `DataPool` section.
     data_pool_id: vuint,
 
-    /// The byte offset of the stored representation relative to the first byte of the referenced
-    /// `DataPoolSection.bytes` field.
-    offset: vuint,
-
-    /// The compression metadata describing the stored and decoded representations.
-    compress_info: CompressInfo,
+    /// The zero-based index of the blob in the referenced data pool's `BlobTable`.
+    blob_index: vuint,
 }
 ```
 
-The stored representation occupies the half-open range
-`[offset, offset + compress_info.compressed_size)` in the referenced data pool. Readers must validate
-this range using checked arithmetic before reading it. The range is valid only if both its start and
-end are within `DataPoolSection.bytes`; an empty range may start at the end of the field.
+The selected `BlobInfo` supplies the location and compression metadata of the stored representation.
+The `blob_index` must be less than the number of entries in the selected `BlobTable`. After decoding,
+the complete result must be a valid encoding of `T`. Multiple references may identify the same blob.
 
-After decompression, the result must contain exactly `compress_info.uncompressed_size` bytes and must
-be a valid encoding of `T`. Multiple `BlobRef` values may reference the same stored byte range.
+`BlobSlice` identifies a non-empty range in the decoded representation of one blob:
+
+```rust
+struct BlobSlice {
+    /// The blob containing the decoded byte range.
+    blob: BlobRef<[u8]>,
+
+    /// The byte offset of the range in the decoded blob.
+    decoded_offset: vuint,
+
+    /// The number of bytes in the range. This value must be greater than zero.
+    decoded_length: vuint,
+}
+```
+
+The half-open range `[decoded_offset, decoded_offset + decoded_length)` must be contained in the
+decoded blob. Readers must validate the range using checked arithmetic before copying or exposing it.
+
+`ContentRef<T>` stores logical content in one of three forms:
+
+```rust
+#[repr(u8)]
+enum ContentRef<T> {
+    /// Stores the complete encoded representation of `T` inline.
+    Inline {
+        content_type: u8, // 0
+        bytes: Vec<u8>,
+    },
+
+    /// Uses the complete decoded representation of one blob.
+    BlobRef {
+        content_type: u8, // 1
+        blob: BlobRef<T>,
+    },
+
+    /// Concatenates decoded blob ranges in array order.
+    BlobSlices {
+        content_type: u8, // 2
+        slices: Vec<BlobSlice>,
+    },
+}
+```
+
+For `Inline`, `bytes` must be a valid encoding of `T`; empty logical content is represented by an
+empty `bytes` vector. For `BlobRef`, the complete decoded blob is the encoded representation of `T`.
+For `BlobSlices`, concatenating the selected ranges in array order must produce a valid encoding of
+`T`. Readers must use checked arithmetic when calculating the total concatenated size and must reject
+an unsupported `content_type`.
+
+`BlobSlices.slices` must contain at least one element. A `BlobSlices` value containing exactly one
+slice that covers its complete decoded blob is not permitted; it must use the `BlobRef` variant
+instead. Zero-length slices are not permitted; therefore, empty logical content has the single
+canonical representation `Inline` with an empty byte vector. The size threshold at which a writer
+chooses `Inline` instead of pooled storage is a writer policy and is not part of the format semantics.
 
 #### Class File Compression
 
@@ -404,7 +451,7 @@ struct FileMetadataSection {
     /// where we will update the `minor_version` for every breaking change,
     /// and Janex tools should reject files with mismatched `minor_version`.
     ///
-    /// The current minor version is `2`.
+    /// The current minor version is `3`.
     minor_version: u32,
 
     /// File-level flags. Currently unused and must be `0`.
@@ -874,8 +921,8 @@ struct ResourceGroup {
 A `Resource` represents a single entry (regular file, directory, or symbolic link) within a resource
 group.
 
-Resources contain only metadata; the actual file content bytes are stored in a `DataPool` section and
-referenced through `BlobRef`.
+Resource entries normally contain only metadata. Small regular-file contents may be stored inline;
+other contents are stored in one or more blobs in `DataPool` sections.
 
 ```rust
 enum Resource {
@@ -889,10 +936,8 @@ enum Resource {
         /// The path of this resource within its resource group.
         path: ResourcePath,
 
-        /// A reference to this resource's content.
-        ///
-        /// The `uncompressed_size` field in `content.compress_info` gives the original file size in bytes.
-        content: BlobRef<[u8]>,
+        /// The content of this resource.
+        content: ContentRef<[u8]>,
 
         /// Optional metadata fields associated with this resource (e.g., timestamps, checksum).
         fields: Vec<ResourceField>,
@@ -986,9 +1031,9 @@ The supported fields are:
 ```rust
 #[repr(TaggedPayload<u8>)]
 enum ResourceField {
-    /// Checksum of the uncompressed resource content.
+    /// Checksum of the logical resource content.
     ///
-    /// Can be used by the extractor to verify data integrity after decompression.
+    /// Can be used by the extractor to verify data integrity after resolving the content reference.
     Checksum {
         /// The field ID for this variant.
         id: u8, // 0x01
@@ -996,7 +1041,7 @@ enum ResourceField {
         /// The number of bytes of the checksum payload.
         payload_bytes: vuint,
 
-        /// The checksum of the uncompressed resource content.
+        /// The checksum of the logical resource content.
         checksum: Checksum,
     },
 
@@ -1114,14 +1159,14 @@ struct StringPoolData {
 
 All strings stored in the `StringPool` are encoded in standard UTF-8. 
 When used to decompress class files, they need to be converted back to Modified UTF-8 encoding.
-The compression pipeline of `StringPoolSection.data` must not use `CLASSFILE`, either directly or
-within `COMPOSITE`, because decoding `CLASSFILE` data depends on this string pool.
+The compression pipeline of the blob referenced by `StringPoolSection.data` must not use `CLASSFILE`,
+either directly or within `COMPOSITE`, because decoding `CLASSFILE` data depends on this string pool.
 
 ### `DataPool` Section
 
-A `DataPool` stores opaque byte ranges referenced by `BlobRef`. Stored values may include resource
-metadata arrays, string-pool data, file contents, and extension-defined data. The pool does not define
-object boundaries or attach semantics to its bytes.
+A `DataPool` stores independently decoded blobs. Stored blobs may contain resource metadata arrays,
+string-pool data, file contents, or extension-defined data. Object semantics are assigned by typed
+references and are not part of the data-pool layout.
 
 A Janex file may contain any number of `DataPool` sections, including none when the file contains no
 `BlobRef`. Each data pool is identified by the `id` of its corresponding `SectionInfo`. Data-pool IDs
@@ -1132,14 +1177,71 @@ identifies a particular kind of data.
 ```rust
 struct DataPoolSection {
     magic_number: u64, // 0x4c4f_4f50_4154_4144 ("DATAPOOL")
+
+    /// Blob representations and the blob table in the layout selected by the writer.
     bytes: [u8; ...],
 }
 ```
 
 The length of `bytes` is `SectionInfo.length - 8`; therefore, a `DataPool` section must have a length
-of at least 8 bytes. Each `BlobRef` is resolved independently and may reference any data pool. A data
-pool may contain both structural metadata and file contents, and references from different roots may
-share stored byte ranges.
+of at least 8 bytes. The corresponding `SectionInfo.options` must contain exactly one
+`DataPoolBlobTable` option:
+
+```rust
+#[repr(TaggedPayload<u32>)]
+struct DataPoolBlobTable {
+    option_type: u32, // 0x5844_4942 ("BIDX")
+
+    /// The number of bytes in this option payload.
+    payload_bytes: vuint,
+
+    /// The byte offset of the stored blob table relative to the first byte of
+    /// `DataPoolSection.bytes`.
+    offset: vuint,
+
+    /// The compression metadata for the stored blob table.
+    compress_info: CompressInfo,
+
+    /// The checksum of the decoded `BlobTable` representation.
+    checksum: Checksum,
+}
+
+struct BlobTable {
+    /// Blob metadata in blob-index order.
+    blobs: Vec<BlobInfo>,
+}
+
+struct BlobInfo {
+    /// The byte offset of the stored blob relative to the first byte of
+    /// `DataPoolSection.bytes`.
+    offset: vuint,
+
+    /// The compression metadata for the stored and decoded blob representations.
+    compress_info: CompressInfo,
+
+    /// Optional metadata associated with this blob.
+    fields: Vec<TaggedPayload<u32>>,
+}
+```
+
+The stored blob table occupies the half-open range
+`[DataPoolBlobTable.offset, DataPoolBlobTable.offset + DataPoolBlobTable.compress_info.compressed_size)`.
+After decoding, it must contain exactly `DataPoolBlobTable.compress_info.uncompressed_size` bytes,
+must be a valid `BlobTable`, and, unless the checksum algorithm is `NONE`, must match
+`DataPoolBlobTable.checksum`. Its compression pipeline must not use `CLASSFILE`, directly or within
+`COMPOSITE`, because the table is bootstrap metadata.
+
+Each stored blob occupies the half-open range
+`[BlobInfo.offset, BlobInfo.offset + BlobInfo.compress_info.compressed_size)`. After decoding, it must
+contain exactly `BlobInfo.compress_info.uncompressed_size` bytes. Readers must validate all stored and
+decoded ranges using checked arithmetic. Stored blob ranges must be within `DataPoolSection.bytes` and
+must not overlap one another or the stored blob table. The stored blob-table range must also be within
+`DataPoolSection.bytes`. A writer may place the table anywhere in the section; placing it after the
+blob representations permits forward-only construction of the section payload.
+
+Each `BlobRef` is resolved independently and may reference any data pool. A data pool may contain both
+structural metadata and file contents, and references from different roots may share a blob. Blob
+indices are local to one data pool and do not provide stable identity across files or revisions.
 
 Writers should normally use separate data pools for structural data and file contents when both are
 substantial. In the typical layout, resource metadata arrays and string-pool data are placed in one
