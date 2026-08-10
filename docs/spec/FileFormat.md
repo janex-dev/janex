@@ -530,15 +530,16 @@ enum VerificationInfo {
 `verification_input` is the following byte string:
 
 ```text
-ASCII("JANEX-METADATA\0") || metadata_prefix || verification_type
+file_bytes[file_metadata_start .. verification_type_end]
 ```
 
-`metadata_prefix` is the exact encoded byte sequence starting with
-`FileMetadataSection.magic_number` and ending immediately before `verification_info`. The original
-on-disk bytes must be used without parsing and re-encoding them. `verification_type` is the single tag
-byte that immediately follows this prefix. Consequently, changing the verification type invalidates
-an existing checksum or signature instead of allowing the same verification payload to be interpreted
-under another type.
+`file_metadata_start` is the offset of the first byte of `FileMetadataSection.magic_number`, and
+`verification_type_end` is the offset immediately after the `verification_type` tag byte. This range
+is therefore the exact, contiguous on-disk representation from the start of `FileMetadataSection`
+through and including `verification_type`. These original bytes must be used directly without parsing,
+normalizing, or re-encoding them. Consequently, changing the verification type invalidates an existing
+checksum or signature instead of allowing the same verification payload to be interpreted under
+another type.
 
 For every known variant, the decoded payload must consume exactly `payload_bytes`; trailing or
 unconsumed bytes are invalid. An empty OpenPGP or CMS payload is invalid. A reader must reject an
