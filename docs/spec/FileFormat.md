@@ -191,229 +191,6 @@ struct Timestamp {
 }
 ```
 
-### Blob Encoding
-
-`BlobEncoding` describes the stored representation of a blob and the filters applied to produce it:
-
-```rust
-struct BlobEncoding {
-    /// The number of bytes in the stored representation.
-    stored_size: vuint,
-
-    /// The filters in the order in which the encoder applied them.
-    filters: Vec<BlobFilter>,
-}
-
-struct BlobFilter {
-    /// The number of bytes supplied to this filter by the encoder.
-    input_size: vuint,
-
-    /// The filter method and its decoder-required properties.
-    method: BlobFilterMethod,
-}
-```
-
-A reader reverses the filters in array order: it processes the last filter first and the first filter
-last. Reversing a filter must produce exactly `input_size` bytes. An empty filter array means that the
-blob is stored without transformation, in which case its decoded size equals `stored_size`. Otherwise,
-the decoded size of the blob is the `input_size` of the first filter.
-
-The stored size and every filter input size are independently authoritative. Readers must enforce
-implementation resource limits before allocating output buffers and must reject a filter that produces
-a different number of bytes. Filter properties contain only information required by a decoder; writer
-settings such as a compression level are not part of the format.
-
-The supported blob filters are:
-
-```rust
-#[repr(TaggedPayload<u8>)]
-enum BlobFilterMethod {
-    /// Zstandard (zstd) compression.
-    ///
-    /// See https://github.com/facebook/zstd for details.
-    Zstd {
-        filter_type: u8, // 1
-
-        /// Decoder-required Zstandard properties. Currently empty.
-        properties: Vec<u8>,
-    },
-}
-```
-
-A reader must reject a blob that uses an unsupported filter because it cannot reconstruct the decoded
-representation. The payload length in `BlobFilterMethod` still permits generic inspection tools to
-locate subsequent metadata without interpreting the filter properties.
-
-### Blob and Content References
-
-`BlobRef<T>` identifies one complete blob in a `BlobPool` section. A blob is an independently decoded
-physical storage unit. The type parameter `T` describes the logical type of the complete decoded blob
-and has no separate binary representation in `BlobRef`:
-
-```rust
-struct BlobRef<T> {
-    /// The ID of the referenced `BlobPool` section.
-    ///
-    /// This value must match the `SectionInfo.id` of exactly one `BlobPool` section.
-    blob_pool_id: vuint,
-
-    /// The zero-based index of the blob in the referenced blob pool's `BlobTable`.
-    blob_index: vuint,
-}
-```
-
-The selected `BlobInfo` supplies the location and encoding metadata of the stored representation.
-The `blob_index` must be less than the number of entries in the selected `BlobTable`. After decoding,
-the complete result must be a valid encoding of `T`. Multiple references may identify the same blob.
-
-`BlobSlice` identifies a non-empty range in the decoded representation of one blob:
-
-```rust
-struct BlobSlice {
-    /// The blob containing the decoded byte range.
-    blob: BlobRef<[u8]>,
-
-    /// The byte offset of the range in the decoded blob.
-    decoded_offset: vuint,
-
-    /// The number of bytes in the range. This value must be greater than zero.
-    decoded_length: vuint,
-}
-```
-
-The half-open range `[decoded_offset, decoded_offset + decoded_length)` must be contained in the
-decoded blob. Readers must validate the range using checked arithmetic before copying or exposing it.
-
-`ContentRef<T>` stores the encoded representation of a value in one of three forms:
-
-```rust
-#[repr(u8)]
-enum ContentRef<T> {
-    /// Stores the complete encoded representation of `T` inline.
-    Inline {
-        content_type: u8, // 0
-        bytes: Vec<u8>,
-    },
-
-    /// Uses the complete decoded representation of one blob.
-    BlobRef {
-        content_type: u8, // 1
-        blob: BlobRef<T>,
-    },
-
-    /// Concatenates decoded blob ranges in array order.
-    BlobSlices {
-        content_type: u8, // 2
-        slices: Vec<BlobSlice>,
-    },
-}
-```
-
-For `Inline`, `bytes` must be a valid encoding of `T`; an empty representation is encoded by an
-empty `bytes` vector. For `BlobRef`, the complete decoded blob is the encoded representation of `T`.
-For `BlobSlices`, concatenating the selected ranges in array order must produce a valid encoding of
-`T`. Readers must use checked arithmetic when calculating the total concatenated size and must reject
-an unsupported `content_type`.
-
-`BlobSlices.slices` must contain at least one element. A `BlobSlices` value containing exactly one
-slice that covers its complete decoded blob is not permitted; it must use the `BlobRef` variant
-instead. Zero-length slices are not permitted; therefore, an empty representation has the single
-canonical representation `Inline` with an empty byte vector. The size threshold at which a writer
-chooses `Inline` instead of pooled storage is a writer policy and is not part of the format semantics.
-
-### Content Transforms
-
-`FileContent` describes the encoded bytes associated with a regular-file entry and any logical
-transforms applied before those bytes were placed inline or in blobs:
-
-```rust
-struct FileContent {
-    /// The bytes produced after applying all content transforms.
-    source: ContentRef<[u8]>,
-
-    /// The transforms in the order in which the encoder applied them.
-    transforms: Vec<ContentTransform>,
-}
-
-struct ContentTransform {
-    /// The number of bytes supplied to this transform by the encoder.
-    input_size: vuint,
-
-    /// The transform method and its decoder-required properties.
-    method: ContentTransformMethod,
-}
-
-#[repr(TaggedPayload<u8>)]
-enum ContentTransformMethod {
-    /// A class-file-aware transform using the shared `StringPool`.
-    ClassFile {
-        transform_type: u8, // 1
-
-        /// Decoder-required transform properties. Currently empty.
-        properties: Vec<u8>,
-    },
-}
-```
-
-As with blob filters, transforms are stored in encoding order and reversed by readers. The byte
-sequence obtained from `source` is passed through the transforms from last to first. Reversing each
-transform must produce exactly its `input_size` bytes. An empty transform array means that `source`
-already contains the logical file content. Otherwise, the logical file size is the `input_size` of the
-first transform.
-
-Content transforms operate after blob decoding and slice concatenation. They are properties of a
-logical file entry, not of a physical blob. Consequently, a solid-compressed blob may contain encoded
-ranges belonging to entries with different transforms. A reader must reject a regular-file entry that
-uses an unsupported content transform because it cannot reconstruct the logical content; the tagged
-method payload still permits generic tools to inspect or skip its metadata.
-
-#### Class File Transform
-
-Janex typically extracts frequently occurring strings (such as common package names, type descriptors,
-and method signatures) from class file constant pools into a shared `StringPool`. Writers store the
-transformed class representations as file-content sources and may pack them with other sources into
-blobs before applying Zstandard at the blob layer. This approach allows strings that appear across
-many class files to be stored only once while retaining solid-compression support.
-
-The `ClassFile` content transform largely preserves the standard class file format, but introduces
-the following modifications:
-
-1. The magic number of the transformed class file is rewritten to `0x70CAFECA`
-   (`0xCA 0xFE 0xCA 0x70` in file order) to distinguish it from an unmodified class file.
-2. The transformed class file may contain new constant types that reference entries in the shared
-   `StringPool` by index, replacing the original `CONSTANT_Utf8` entries.
-
-    New constant pool entries include:
-
-    1. `CONSTANT_External_String`:
-   
-        ```rust
-        struct CONSTANT_External_Utf8 {
-            tag: u8, // 0xFF
-        
-            /// The index of the string in the shared `StringPool`.
-            string_pool_index: vuint,
-        }
-        ```
-
-    2. `CONSTANT_External_String_Class`:
-
-        ```rust
-        struct CONSTANT_External_String {
-            tag: u8, // 0xFE
-        
-            /// The index of the package name in the shared `StringPool`.
-            package_name_index: vuint,
-       
-            /// The index of the class name in the shared `StringPool`.
-            class_name_index: vuint,
-        }
-        ```
-
-The input to the `ClassFile` transform must be a valid Java class file. A Janex file containing a
-`ClassFile` transform must contain exactly one `StringPool` section, and reversing the transform uses
-that string pool. The `properties` payload of the transform is currently empty.
-
 ### `Checksum`
 
 ```rust
@@ -1028,6 +805,136 @@ enum Resource {
 }
 ```
 
+#### File Content
+
+`ContentRef<T>` stores the encoded representation of a value in one of three forms:
+
+```rust
+#[repr(u8)]
+enum ContentRef<T> {
+    /// Stores the complete encoded representation of `T` inline.
+    Inline {
+        content_type: u8, // 0
+        bytes: Vec<u8>,
+    },
+
+    /// Uses the complete decoded representation of one blob.
+    BlobRef {
+        content_type: u8, // 1
+        blob: BlobRef<T>,
+    },
+
+    /// Concatenates decoded blob ranges in array order.
+    BlobSlices {
+        content_type: u8, // 2
+        slices: Vec<BlobSlice>,
+    },
+}
+```
+
+For `Inline`, `bytes` must be a valid encoding of `T`; an empty representation is encoded by an
+empty `bytes` vector. For `BlobRef`, the complete decoded blob is the encoded representation of `T`.
+For `BlobSlices`, concatenating the selected ranges in array order must produce a valid encoding of
+`T`. Readers must use checked arithmetic when calculating the total concatenated size and must reject
+an unsupported `content_type`.
+
+`BlobSlices.slices` must contain at least one element. A `BlobSlices` value containing exactly one
+slice that covers its complete decoded blob is not permitted; it must use the `BlobRef` variant
+instead. Zero-length slices are not permitted; therefore, an empty representation has the single
+canonical representation `Inline` with an empty byte vector. The size threshold at which a writer
+chooses `Inline` instead of pooled storage is a writer policy and is not part of the format semantics.
+
+`FileContent` describes the encoded bytes associated with a regular-file entry and any logical
+transforms applied before those bytes were placed inline or in blobs:
+
+```rust
+struct FileContent {
+    /// The bytes produced after applying all content transforms.
+    source: ContentRef<[u8]>,
+
+    /// The transforms in the order in which the encoder applied them.
+    transforms: Vec<ContentTransform>,
+}
+
+struct ContentTransform {
+    /// The number of bytes supplied to this transform by the encoder.
+    input_size: vuint,
+
+    /// The transform method and its decoder-required properties.
+    method: ContentTransformMethod,
+}
+
+#[repr(TaggedPayload<u8>)]
+enum ContentTransformMethod {
+    /// A class-file-aware transform using the shared `StringPool`.
+    ClassFile {
+        transform_type: u8, // 1
+
+        /// Decoder-required transform properties. Currently empty.
+        properties: Vec<u8>,
+    },
+}
+```
+
+As with blob filters, transforms are stored in encoding order and reversed by readers. The byte
+sequence obtained from `source` is passed through the transforms from last to first. Reversing each
+transform must produce exactly its `input_size` bytes. An empty transform array means that `source`
+already contains the logical file content. Otherwise, the logical file size is the `input_size` of the
+first transform.
+
+Content transforms operate after blob decoding and slice concatenation. They are properties of a
+logical file entry, not of a physical blob. Consequently, a solid-compressed blob may contain encoded
+ranges belonging to entries with different transforms. A reader must reject a regular-file entry that
+uses an unsupported content transform because it cannot reconstruct the logical content; the tagged
+method payload still permits generic tools to inspect or skip its metadata.
+
+##### Class File Transform
+
+Janex typically extracts frequently occurring strings (such as common package names, type descriptors,
+and method signatures) from class file constant pools into a shared `StringPool`. Writers store the
+transformed class representations as file-content sources and may pack them with other sources into
+blobs before applying Zstandard at the blob layer. This approach allows strings that appear across
+many class files to be stored only once while retaining solid-compression support.
+
+The `ClassFile` content transform largely preserves the standard class file format, but introduces
+the following modifications:
+
+1. The magic number of the transformed class file is rewritten to `0x70CAFECA`
+   (`0xCA 0xFE 0xCA 0x70` in file order) to distinguish it from an unmodified class file.
+2. The transformed class file may contain new constant types that reference entries in the shared
+   `StringPool` by index, replacing the original `CONSTANT_Utf8` entries.
+
+    New constant pool entries include:
+
+    1. `CONSTANT_External_String`:
+
+        ```rust
+        struct CONSTANT_External_Utf8 {
+            tag: u8, // 0xFF
+
+            /// The index of the string in the shared `StringPool`.
+            string_pool_index: vuint,
+        }
+        ```
+
+    2. `CONSTANT_External_String_Class`:
+
+        ```rust
+        struct CONSTANT_External_String {
+            tag: u8, // 0xFE
+
+            /// The index of the package name in the shared `StringPool`.
+            package_name_index: vuint,
+
+            /// The index of the class name in the shared `StringPool`.
+            class_name_index: vuint,
+        }
+        ```
+
+The input to the `ClassFile` transform must be a valid Java class file. A Janex file containing a
+`ClassFile` transform must contain exactly one `StringPool` section, and reversing the transform uses
+that string pool. The `properties` payload of the transform is currently empty.
+
 #### `ResourcePath`
 
 `ResourcePath` represents the path of a `Resource`, for example `java/lang/Object.class`.
@@ -1234,6 +1141,61 @@ struct BlobPoolSection {
 }
 ```
 
+#### Blob Encoding
+
+`BlobEncoding` describes the stored representation of a blob and the filters applied to produce it:
+
+```rust
+struct BlobEncoding {
+    /// The number of bytes in the stored representation.
+    stored_size: vuint,
+
+    /// The filters in the order in which the encoder applied them.
+    filters: Vec<BlobFilter>,
+}
+
+struct BlobFilter {
+    /// The number of bytes supplied to this filter by the encoder.
+    input_size: vuint,
+
+    /// The filter method and its decoder-required properties.
+    method: BlobFilterMethod,
+}
+```
+
+A reader reverses the filters in array order: it processes the last filter first and the first filter
+last. Reversing a filter must produce exactly `input_size` bytes. An empty filter array means that the
+blob is stored without transformation, in which case its decoded size equals `stored_size`. Otherwise,
+the decoded size of the blob is the `input_size` of the first filter.
+
+The stored size and every filter input size are independently authoritative. Readers must enforce
+implementation resource limits before allocating output buffers and must reject a filter that produces
+a different number of bytes. Filter properties contain only information required by a decoder; writer
+settings such as a compression level are not part of the format.
+
+The supported blob filters are:
+
+```rust
+#[repr(TaggedPayload<u8>)]
+enum BlobFilterMethod {
+    /// Zstandard (zstd) compression.
+    ///
+    /// See https://github.com/facebook/zstd for details.
+    Zstd {
+        filter_type: u8, // 1
+
+        /// Decoder-required Zstandard properties. Currently empty.
+        properties: Vec<u8>,
+    },
+}
+```
+
+A reader must reject a blob that uses an unsupported filter because it cannot reconstruct the decoded
+representation. The payload length in `BlobFilterMethod` still permits generic inspection tools to
+locate subsequent metadata without interpreting the filter properties.
+
+#### Blob Table
+
 The length of `bytes` is `SectionInfo.length - 8`; therefore, a `BlobPool` section must have a length
 of at least 8 bytes. The corresponding `SectionInfo.options` must contain exactly one
 `BlobPoolIndex` option:
@@ -1288,6 +1250,46 @@ arithmetic. Stored blob ranges must be within `BlobPoolSection.bytes` and must n
 or the stored blob table. The stored blob-table range must also be within `BlobPoolSection.bytes`. A
 writer may place the table anywhere in the section; placing it after the blob representations permits
 forward-only construction of the section payload.
+
+#### Blob References
+
+`BlobRef<T>` identifies one complete blob in a `BlobPool` section. A blob is an independently decoded
+physical storage unit. The type parameter `T` describes the logical type of the complete decoded blob
+and has no separate binary representation in `BlobRef`:
+
+```rust
+struct BlobRef<T> {
+    /// The ID of the referenced `BlobPool` section.
+    ///
+    /// This value must match the `SectionInfo.id` of exactly one `BlobPool` section.
+    blob_pool_id: vuint,
+
+    /// The zero-based index of the blob in the referenced blob pool's `BlobTable`.
+    blob_index: vuint,
+}
+```
+
+The selected `BlobInfo` supplies the location and encoding metadata of the stored representation.
+The `blob_index` must be less than the number of entries in the selected `BlobTable`. After decoding,
+the complete result must be a valid encoding of `T`. Multiple references may identify the same blob.
+
+`BlobSlice` identifies a non-empty range in the decoded representation of one blob:
+
+```rust
+struct BlobSlice {
+    /// The blob containing the decoded byte range.
+    blob: BlobRef<[u8]>,
+
+    /// The byte offset of the range in the decoded blob.
+    decoded_offset: vuint,
+
+    /// The number of bytes in the range. This value must be greater than zero.
+    decoded_length: vuint,
+}
+```
+
+The half-open range `[decoded_offset, decoded_offset + decoded_length)` must be contained in the
+decoded blob. Readers must validate the range using checked arithmetic before copying or exposing it.
 
 Each `BlobRef` is resolved independently and may reference any blob pool. A blob pool may contain both
 structural metadata and file contents, and references from different roots may share a blob. Blob
