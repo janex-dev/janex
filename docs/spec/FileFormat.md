@@ -263,8 +263,9 @@ The complete physical file may contain data outside `JanexFile`:
 [external header] [JanexFile] [external tail]
 ```
 
-External regions are described by `FileMetadataSection.external_header` and
-`FileMetadataSection.external_tail`; they are not Janex sections and do not appear in
+External regions may be described by `FileMetadataSection.external_header` and
+`FileMetadataSection.external_tail`. Their physical presence is independent of whether these
+descriptions are present. External regions are not Janex sections and do not appear in
 `section_table`.
 
 ### `FileMetadata` Section
@@ -301,11 +302,11 @@ struct FileMetadataSection {
     /// Records the length and other information of each section in `JanexFile.sections`.
     section_table: Vec<SectionInfo>,
 
-    /// Describes data located before the `JanexFile` structure.
-    external_header: ExternalRegionInfo,
+    /// Optionally describes and constrains data located before the `JanexFile` structure.
+    external_header: Option<ExternalRegion>,
 
-    /// Describes data located after the `JanexFile` structure.
-    external_tail: ExternalRegionInfo,
+    /// Optionally describes and constrains data located after the `JanexFile` structure.
+    external_tail: Option<ExternalRegion>,
 
     /// Currently, all fields will be skipped. Reserved for future use.
     fields: Vec<TaggedPayload<u32>>,
@@ -400,24 +401,32 @@ If additional data or padding needs to be inserted between them, the `Padding` s
 
 Unknown sections will be ignored.
 
-#### `ExternalRegionInfo` Structure
+#### `ExternalRegion` Structure
 
-`ExternalRegionInfo` describes bytes outside the `JanexFile` structure. External regions do not have
-Janex section magic numbers and are not addressed by `SectionInfo`.
+`ExternalRegion` describes and constrains bytes outside the `JanexFile` structure. External regions
+do not have Janex section magic numbers and are not addressed by `SectionInfo`.
 
 ```rust
-struct ExternalRegionInfo {
-    /// The exact number of bytes in the external region, or `0` if the region is absent.
-    length: u64,
+struct ExternalRegion {
+    /// The exact number of bytes required in the external region.
+    size: u64,
 
     /// The checksum of the complete external region.
     checksum: Checksum,
 }
 ```
 
-`external_header.length == 0` means that no bytes precede `JanexFile`, and
-`external_tail.length == 0` means that no bytes follow it. When `length` is zero, `checksum` must use
-the `NONE` algorithm. Metadata associated with the containing format may be stored in
+Each `Option<ExternalRegion>` is encoded as a one-byte tag followed by a conditional payload. Tag
+`0` encodes `None` and has no payload. Tag `1` encodes `Some` and is followed by one
+`ExternalRegion`. Other tag values are invalid.
+
+`None` means that Janex metadata does not describe or constrain the corresponding external region.
+The physical region may be absent or may contain arbitrary bytes, and tools may modify it without
+rewriting the Janex metadata. `Some` requires the physical region to have exactly the specified
+`size`. Consequently, `Some { size: 0, checksum: NONE }` explicitly requires that the physical region
+be absent; it is not equivalent to `None`. When `size` is zero, `checksum` must use the `NONE`
+algorithm. When `size` is nonzero, `checksum` must not use the `NONE` algorithm and a reader must
+verify it. Metadata associated with the containing format may be stored in
 `FileMetadataSection.fields`.
 
 For a physical file of `physical_file_size` bytes, a reader receives `external_tail_length` from its
@@ -429,8 +438,11 @@ janex_start = janex_end - file_length
 ```
 
 Both subtractions must use checked arithmetic. The reader locates the fixed footer immediately before
-`janex_end`. After decoding `FileMetadata`, it must verify that `external_tail.length` equals
-`external_tail_length` and that `external_header.length` equals `janex_start`.
+`janex_end`. The actual external header is the byte range before `janex_start`, and the actual external
+tail is the byte range from `janex_end` to `physical_file_size`. After decoding `FileMetadata`, the
+reader must compare an external region's actual size with its declared `size` and verify its checksum
+only when the corresponding `Option<ExternalRegion>` is `Some`. When it is `None`, the reader imposes
+no metadata-derived size or checksum requirement on that region.
 
 The standalone Janex layout uses `external_tail_length = 0`. A containing format may define how its
 caller obtains a nonzero value. For example, a JAR-formatted launcher appended as an external tail may
@@ -478,9 +490,11 @@ enum VerificationType {
 
 ```
 
-To sign or verify the integrity of the complete physical file, each entry in `section_table` and each
+To sign or verify the integrity of the complete physical file, each entry in `section_table` must
+contain a secure checksum, both external-region descriptions must be `Some`, and each described
 non-empty external region must contain a secure checksum. The signed `FileMetadata` representation
-then binds those checksums to the file metadata.
+then binds those checksums and any explicit zero-size requirements to the file metadata. An external
+region whose description is `None` is outside the integrity guarantees provided by Janex metadata.
 
 ### `Attributes` Section
 
