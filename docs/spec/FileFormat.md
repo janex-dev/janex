@@ -166,31 +166,14 @@ contain exactly one complete CBOR data item and no trailing bytes. Readers must 
 
 Current Janex CBOR schemas use unsigned integers, signed integers, byte strings, text strings, arrays,
 maps, booleans, and explicitly permitted `null` values. Floating-point values, CBOR `undefined`,
-bignum tags, and all other tags or simple values are invalid unless a future schema explicitly permits
-them. Unsigned integers must fit in `u64`, and negative integers must fit in `i64`. Integers inside
-CBOR use CBOR's own deterministic integer representation, not `vuint` or Janex's little-endian fixed
-integer representation.
+and other simple values are invalid unless a field schema explicitly permits them. CBOR tags,
+including bignum tags, are also invalid unless explicitly permitted by the field schema. Unless a
+field schema defines another range, unsigned integers must fit in `u64` and signed integers must fit
+in `i64`. Integers inside CBOR use CBOR's own deterministic integer representation, not `vuint` or
+Janex's little-endian fixed integer representation.
 
 Readers must apply implementation limits to encoded size, collection length, text and byte-string
 length, and nesting depth before allocating resources.
-
-### Timestamp
-
-Janex uses a 96-bit high-precision timestamp, which can represent times approximately 292.2 billion years
-before or after the Unix epoch (`1970-01-01T00:00:00Z`), with nanosecond precision.
-
-```rust
-struct Timestamp {
-    /// The number of seconds elapsed since `1970-01-01T00:00:00Z`.
-    /// May be negative for timestamps before the epoch.
-    epoch_second: i64,
-
-    /// The sub-second component of the timestamp, in nanoseconds.
-    ///
-    /// Must be in the range `[0, 1_000_000_000)`.
-    nanos: u32,
-}
-```
 
 ### `Checksum`
 
@@ -937,8 +920,8 @@ enum Resource {
         /// The content of this resource and its logical transforms.
         content: FileContent,
 
-        /// Optional metadata fields associated with this resource (e.g., timestamps, checksum).
-        fields: Vec<ResourceField>,
+        /// One deterministic CBOR resource-metadata map.
+        metadata: CborObject, // ResourceMetadataObject
     },
 
     /// Represents a directory entry.
@@ -951,8 +934,8 @@ enum Resource {
         /// The path of this directory within its resource group.
         path: ResourcePath,
 
-        /// Optional metadata fields associated with this directory (e.g., timestamps, permissions).
-        fields: Vec<ResourceField>,
+        /// One deterministic CBOR resource-metadata map.
+        metadata: CborObject, // ResourceMetadataObject
     },
 
     /// Represents a symbolic link.
@@ -968,8 +951,8 @@ enum Resource {
         /// The target path that this symbolic link points to.
         target: ResourcePath,
 
-        /// Optional metadata fields associated with this symbolic link.
-        fields: Vec<ResourceField>,
+        /// One deterministic CBOR resource-metadata map.
+        metadata: CborObject, // ResourceMetadataObject
     }
 }
 ```
@@ -1149,115 +1132,44 @@ enum ResourcePathContent {
 }
 ```
 
-#### `ResourceField`
+#### Resource Metadata
 
-`ResourceField` carries optional metadata attached to a resource entry. Each field is identified by a
-1-byte `id`.
+Every resource contains one length-delimited `ResourceMetadataObject`:
 
-The supported fields are:
-
-```rust
-#[repr(TaggedPayload<u8>)]
-enum ResourceField {
-    /// Checksum of the logical resource content.
-    ///
-    /// Can be used by the extractor to verify data integrity after resolving the content reference.
-    Checksum {
-        /// The field ID for this variant.
-        id: u8, // 0x01
-
-        /// The number of bytes of the checksum payload.
-        payload_bytes: vuint,
-
-        /// The checksum of the logical resource content.
-        checksum: Checksum,
-    },
-
-    Comment {
-        /// The field ID for this variant.
-        id: u8, // 0x02
-
-        /// A UTF-8 encoded comment string associated with this resource.
-        comment: String,
-    },
-
-    /// File creation timestamp.
-    FileCreateTime {
-        /// The field ID for this variant.
-        id: u8, // 0x03
-
-        /// The number of bytes of the timestamp payload.
-        /// 
-        /// Always `12` (the size of the `Timestamp` structure).
-        payload_bytes: vuint,
-
-        /// The file creation timestamp.
-        timestamp: Timestamp,
-    },
-
-    /// File last-modification timestamp.
-    FileModifyTime {
-        /// The field ID for this variant.
-        id: u8, // 0x04
-
-        /// The number of bytes of the timestamp payload.
-        /// 
-        /// Always `12` (the size of the `Timestamp` structure).
-        payload_bytes: vuint,
-
-        /// The file last-modification timestamp.
-        timestamp: Timestamp,
-    },
-
-    /// File last-access timestamp.
-    FileAccessTime {
-        /// The field ID for this variant.
-        id: u8, // 0x05
-
-        /// The number of bytes of the timestamp payload.
-        /// 
-        /// Always `12` (the size of the `Timestamp` structure).
-        payload_bytes: vuint,
-
-        /// The file last-access timestamp.
-        timestamp: Timestamp,
-    },
-
-    /// POSIX file permission bits (e.g., `0o755`).
-    PosixFilePermissions {
-        /// The field ID for this variant.
-        id: u8, // 0x06
-
-        /// The number of bytes of the permissions payload.
-        /// 
-        /// Always `2` (the size of the `u16` structure).
-        payload_bytes: vuint,
-
-        /// The POSIX permission bits for this resource, stored as a 16-bit unsigned integer.
-        permissions: u16,
-    },
-
-    /// A custom, application-defined metadata field.
-    /// 
-    /// Users should prefer this field type for custom metadata rather than using a custom `id`, 
-    /// to avoid conflicts with field IDs that Janex may add in the future.
-    ///
-    /// Custom fields are not interpreted by Janex and are ignored during normal processing.
-    /// They can be used to attach arbitrary metadata for tooling or third-party extensions.
-    Custom {
-        id: u8, // 0x7F
-
-        /// The number of bytes of the name and content payload.
-        payload_bytes: vuint,
-
-        /// The name of the custom field, used to identify its purpose.
-        name: String,
-
-        /// The raw content bytes of the custom field.
-        content: Vec<u8>,
-    }
+```cbor
+ResourceMetadataObject = {
+    ? 0: extensions,              // map<tstr, any>
+    ? 1: checksum,                // ChecksumObject
+    ? 2: comment,                 // tstr
+    ? 3: creation_time,           // UnixNanosecondsObject
+    ? 4: modification_time,       // UnixNanosecondsObject
+    ? 5: access_time,             // UnixNanosecondsObject
+    ? 6: posix_permissions,       // uint in [0, 65535]
 }
+
+UnixNanosecondsObject = i128
 ```
+
+The empty map is the canonical representation of a resource with no metadata. The top-level value and
+all currently defined values must not be `null`. `extensions`, when present, follows the text-key
+naming rules in [Metadata Evolution and Extensions](#metadata-evolution-and-extensions); writers
+should omit it when empty. Unknown numeric keys are optional unless guarded by a required feature.
+
+`checksum` is valid only for a regular file and verifies the logical file content after reversing its
+content transforms. `comment` is UTF-8 text. `posix_permissions` contains the POSIX file permission
+bits as an unsigned integer and must fit in `u16`.
+
+Each time value is a signed count of nanoseconds elapsed since `1970-01-01T00:00:00Z` on the POSIX
+time scale, which does not represent leap seconds. For example, `-1` represents
+`1969-12-31T23:59:59.999999999Z`. Its logical range is the complete signed `i128` range
+`[-2^127, 2^127 - 1]`.
+
+A value in the basic CBOR integer range `[-2^64, 2^64 - 1]` must use CBOR major type `0` or `1` with
+preferred serialization. A larger nonnegative value uses tag `2`; a value less than `-2^64` uses tag
+`3`, whose encoded unsigned magnitude is `-1 - value`. In either tagged form, the tag contains a
+big-endian byte string of 9 through 16 bytes with no leading zero byte. Tags `2` and `3` are permitted
+only for `UnixNanosecondsObject` values that cannot use a basic CBOR integer. Other tags, floating-point
+timestamps, and textual timestamps are invalid.
 
 ### `StringPool` Section
 
