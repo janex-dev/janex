@@ -184,15 +184,17 @@ explicitly declare a CBOR representation.
 type CborObject = Vec<u8>;
 ```
 
-Every `CborObject` must contain exactly one complete CBOR data item and no trailing bytes. Its encoded
-item must satisfy the Core Deterministic Encoding Requirements in RFC 8949 Section 4.2.1, including
-preferred serialization, definite lengths, and deterministic map-key ordering. Readers must reject:
+Every CBOR data item used by Janex, whether length-delimited by `CborObject` or embedded directly by a
+schema, must satisfy the Core Deterministic Encoding Requirements in RFC 8949 Section 4.2.1, including
+preferred serialization, definite lengths, and deterministic map-key ordering. A `CborObject` must
+contain exactly one complete CBOR data item and no trailing bytes. Readers must reject:
 
 - non-shortest integer, length, or tag encodings;
 - indefinite-length items;
 - duplicate map keys;
 - invalid UTF-8 text strings;
-- trailing bytes after the first data item; and
+- trailing bytes after the first data item within a `CborObject` or another explicitly delimited CBOR
+  payload; and
 - an item that does not match the schema required at that location.
 
 Current Janex CBOR schemas use unsigned integers, signed integers, byte strings, text strings, arrays,
@@ -209,8 +211,11 @@ definition of a key determines the exact schema and semantics of its value.
 
 An unknown key must not change the interpretation of known keys and may be ignored. A new field that
 is required to interpret existing data must instead be guarded by an explicit required feature, a new
-section type, or a new supported format revision. Readers must apply implementation limits to encoded
-size, collection length, text and byte-string length, and nesting depth before allocating resources.
+section type, or a new supported format revision. A tool that rewrites a file while claiming to
+preserve its semantics must preserve unknown optional map entries at the data-model level, although it
+may re-encode them in the required deterministic form. Readers must apply implementation limits to
+encoded size, collection length, text and byte-string length, and nesting depth before allocating
+resources.
 
 Empty maps and arrays are valid wherever their schema permits an empty collection. Writers should
 omit an optional empty map, but readers must accept it when the containing key or section is present.
@@ -384,13 +389,25 @@ FileMetadataObject = {
     2: external_header,   // ExternalRegionObject
     3: external_tail,     // ExternalRegionObject
     ? 4: extensions,      // map<tstr, any>
+    ? 5: required_features, // [FeatureIdObject, ...]
 }
+
+FeatureIdObject = uint / tstr
 ```
 
 Keys `0` through `3` are required. `flags` must currently be `0`. `section_table` may be empty because
 it does not include the final `FileMetadata` section. `extensions`, when present, is a text-keyed map
 whose values follow their key-specific schemas; an empty map is valid, although writers should omit
 it.
+
+`required_features` declares features that a reader must understand to interpret the file correctly.
+Numeric feature IDs are assigned by this specification. A text feature ID must be non-empty and
+follow the text-key naming rules in [Deterministic CBOR Objects](#deterministic-cbor-objects). Feature
+IDs must be unique. The array must be sorted by the bytewise lexicographic order of each feature ID's
+deterministic encoding, matching the map-key ordering in RFC 8949 Section 4.2.1. A reader must reject a
+file containing an unsupported required feature. No core required feature IDs are currently defined.
+A writer that uses no required features should omit key `5`; readers must also accept an empty array,
+which has the same meaning as omission.
 
 #### `SectionInfoObject` Map
 
@@ -399,59 +416,58 @@ Each element of `FileMetadataObject.section_table` is a deterministic CBOR map:
 ```cbor
 SectionInfoObject = {
     0: section_type,      // uint fitting in u64
-    1: namespace_id,      // uint in [1, 2^64 - 1]
-    2: id,                // uint fitting in u64
-    3: length,            // uint fitting in u64
-    4: checksum,          // ChecksumObject
-    ? 5: metadata,        // section-type-specific map
+    1: id,                // uint fitting in u64
+    2: length,            // uint fitting in u64
+    3: checksum,          // ChecksumObject
+    ? 4: metadata,        // section-type-specific map
 }
 ```
 
 Generally, `section_type` is the same as the `magic_number` of the section content when that section
-has a magic number. A section is identified within one `JanexFile` by the tuple
-`(namespace_id, section_type, id)`. Two entries with the same tuple are invalid. IDs may be sparse and
-carry no ordering, priority, or semantic meaning. A section type that permits at most one instance in
-a namespace must use ID `0` for that instance.
+has a magic number. A section is identified within one `JanexFile` by `(section_type, id)`. Two entries
+with the same pair are invalid. IDs may be sparse and carry no ordering, priority, or semantic
+meaning. They are file-local identities rather than stable cross-file identities. A tool may remap an
+ID only when it also rewrites every affected reference. A section type that permits at most one
+instance in a file must use ID `0` for that instance.
 
 `length` is the exact encoded byte length of the corresponding section. `checksum` covers those exact
 section bytes. Unless its algorithm is `NONE`, readers must verify the checksum before trusting the
 section contents.
 
-`namespace_id` is a file-local merge scope and is not a stable identity. Standalone writers should use
-namespace `1`. A merger may assign another nonzero namespace to imported sections without changing
-their type-local IDs. Cross-file stable identity, if required by a future application, must use
-separate metadata rather than overloading `namespace_id` or `id`.
-
 The optional `metadata` map is interpreted according to `section_type`. An empty map is valid; writers
-should omit key `5` when it is empty. Unknown keys in a known section-type metadata map are optional
-and may be ignored unless that section type defines an explicit required-feature mechanism.
+should omit key `4` when it is empty. Unknown keys in a known section-type metadata map are optional
+and may be ignored unless their semantics are guarded by a feature listed in
+`FileMetadataObject.required_features`.
 
-#### Section References and Namespace Context
+#### Section References
 
-A typed binary reference to a section uses the following structure. The type parameter determines the
-required `section_type` and has no binary representation:
+A typed section reference is one deterministic CBOR data item embedded directly at the reference's
+position. It is not wrapped in `CborObject` and therefore has no preceding Janex `Vec<u8>` length. The
+type parameter determines the required `section_type` and has no binary representation:
 
-```rust
-struct SectionRef<T> {
-    /// `0` selects the current namespace; a nonzero value selects that namespace explicitly.
-    namespace_id: vuint,
+```cbor
+SectionRef<T> =
+    id: uint
+  / [reference_kind: SectionReferenceKindObject, payload: bstr]
 
-    /// The section ID within the selected namespace and the statically known type `T`.
-    id: vuint,
-}
+SectionReferenceKindObject = uint / tstr
 ```
 
-The current namespace of a top-level structure stored directly in a section is that section's
-`SectionInfoObject.namespace_id`. Nested and inline structures inherit their containing structure's
-current namespace. A value decoded through a `BlobRef<T>` retains the namespace context in which that
-`BlobRef<T>` occurred; storage in a blob pool does not change the logical namespace of the decoded
-value. This rule permits a merger to reassign the namespace of imported section descriptors while
-same-namespace references encoded with `namespace_id == 0` remain unchanged.
+The `uint` form is a local reference and must resolve to the unique section identified by `(T, id)` in
+the same `JanexFile`; `id` must fit in `u64`. All currently defined section references use this form.
+In particular, IDs from `0` through `23` occupy one byte.
 
-A nonzero `SectionRef.namespace_id` is an explicit cross-namespace reference. It must select exactly
-one section with the required type and ID. A reference with namespace `0` is invalid when no current
-namespace is defined. An untyped reference, when a future schema needs one, must additionally encode
-the target `section_type`.
+The two-element array reserves an explicitly framed form for future reference mechanisms. Numeric
+reference kinds are assigned by this specification. A text reference kind must be non-empty and
+follow the text-key naming rules in [Deterministic CBOR Objects](#deterministic-cbor-objects). The
+`payload` byte string must contain exactly one complete deterministic CBOR data item and no trailing
+bytes. Its byte-string length lets a reader skip an unsupported payload without recursively scanning
+it. A reader that must resolve a reference must reject an unsupported reference kind. No core extended
+reference kinds are currently defined. Writers that do not use an extension-defined reference kind
+must use the `uint` form.
+
+An untyped reference, if introduced by a future schema, must additionally identify its target section
+type.
 
 Currently supported section types:
 
@@ -494,7 +510,8 @@ All entries in `FileMetadataObject.section_table` describe sections arranged con
 `JanexFile.sections`. If additional data or padding needs to be inserted between them, the `Padding`
 section can be used.
 
-Unknown sections will be ignored.
+Unknown sections may be skipped. A feature that requires an unknown section type must be declared in
+`FileMetadataObject.required_features`, causing readers that do not support it to reject the file.
 
 #### `ExternalRegionObject`
 
@@ -744,7 +761,7 @@ struct AttributesSection {
 }
 ```
 
-Each namespace may contain at most one `Attributes` section, whose section ID must be `0`.
+Each Janex file may contain at most one `Attributes` section, whose section ID must be `0`.
 Attributes are descriptive metadata unless another part of this specification explicitly assigns a
 particular attribute operational semantics.
 
@@ -756,7 +773,7 @@ AttributesObject = {
 }
 ```
 
-Attribute names follow the text-key namespace rules in
+Attribute names follow the text-key naming rules in
 [Deterministic CBOR Objects](#deterministic-cbor-objects). Each value is interpreted according to its
 attribute name. Readers that do not recognize an attribute must ignore it and may preserve its encoded
 value when rewriting the file.
@@ -767,7 +784,7 @@ an empty map. The top-level value must not be `null` or an array. An individual 
 
 ### `RootConfigGroup` Section
 
-Each namespace may contain at most one `RootConfigGroup` section, whose section ID must be `0`.
+Each Janex file may contain at most one `RootConfigGroup` section, whose section ID must be `0`.
 
 ```rust
 struct RootConfigGroupSection {
@@ -812,7 +829,7 @@ independently. For a group whose condition matches, the configuration keys are a
 - an empty array is valid and appends nothing.
 
 `subgroups` preserves array order and must not be `null`. `extensions`, when present, follows the
-text-key namespace rules for CBOR extension maps. An empty extension map is valid, although writers
+text-key naming rules for CBOR extension maps. An empty extension map is valid, although writers
 should omit it.
 
 #### `ResourceGroupReferenceObject`
@@ -821,13 +838,11 @@ A resource-group reference is one of the following exact-length CBOR arrays:
 
 ```cbor
 ResourceGroupReferenceObject =
-    [0, namespace_id: uint, group_name: tstr]
+    [0, resource_groups: SectionRef<ResourceGroupsSection>, group_name: tstr]
   / [1, purl: tstr, checksum: ChecksumObject]
 ```
 
-Variant `0` refers to an embedded resource group. A `namespace_id` of `0` means the current logical
-namespace as defined under [Section References and Namespace Context](#section-references-and-namespace-context);
-a nonzero value selects that namespace explicitly. The selected namespace must contain exactly one
+Variant `0` refers to an embedded resource group. `resource_groups` must resolve to a
 `ResourceGroups` section, and `group_name` must match exactly one group in that section.
 
 Variant `1` refers to a package that the launcher resolves and downloads without resolving transitive
@@ -850,8 +865,24 @@ The array must contain exactly two elements. An empty `option` means that no age
 
 ### `ResourceGroups` Section
 
-`ResourceGroups` contains embedded resource groups. Each namespace may contain at most one
-`ResourceGroups` section, whose section ID must be `0`.
+`ResourceGroups` contains embedded resource groups. A Janex file may contain any number of
+`ResourceGroups` sections. Each is identified by the ID of its corresponding `SectionInfoObject`.
+
+When key `4` (`metadata`) is present in the corresponding `SectionInfoObject`, it must be the following
+deterministic CBOR map:
+
+```cbor
+ResourceGroupsMetadataObject = {
+    ? 0: string_pool,     // SectionRef<StringPoolSection>
+    ? 1: extensions,      // map<tstr, any>
+}
+```
+
+`string_pool` selects the string pool used by every `ClassFile` transform and `RefBody` path contained
+in this `ResourceGroups` section. It is required if any such value occurs and may refer to a string
+pool shared with other resource-group sections. `extensions`, when present, follows the text-key
+naming rules for CBOR extension maps. Empty maps are valid, although writers should omit an empty
+`extensions` map and omit section metadata entirely when it would be empty.
 
 Each resource group is a logical container of related files, typically corresponding to a single JAR
 or module from the original Java project. Group names must be unique within the section.
@@ -906,7 +937,7 @@ ResourceGroupMetadataObject = {
 }
 ```
 
-Metadata names follow the text-key namespace rules in
+Metadata names follow the text-key naming rules in
 [Deterministic CBOR Objects](#deterministic-cbor-objects). Unknown entries have no effect on resource
 decoding and may be ignored. The empty map is valid and is the canonical representation of no group
 metadata; unlike an optional map field in a surrounding CBOR object, this object is required by the
@@ -1097,9 +1128,10 @@ the following modifications:
         }
         ```
 
-The input to the `ClassFile` transform must be a valid Java class file. The current logical namespace
-of a `ClassFile` transform must contain exactly one `StringPool` section, and reversing the transform
-uses that string pool. The `properties` field of `CLASSFILE` is currently empty.
+The input to the `ClassFile` transform must be a valid Java class file. The containing
+`ResourceGroups` section must select a `StringPool` through its `ResourceGroupsMetadataObject`, and
+reversing the transform uses that string pool. The `properties` field of `CLASSFILE` is currently
+empty.
 
 #### `ResourcePath`
 
@@ -1134,7 +1166,7 @@ enum ResourcePathContent {
 
     /// Reference-based path encoding, used when `length == 0`.
     ///
-    /// Requires a `StringPool` section in the current logical namespace.
+    /// Requires the containing `ResourceGroups` section to select a `StringPool`.
     RefBody {
         /// The index of the directory path component in the `StringPool`
         /// (e.g., the index for `"com/example"`).
@@ -1260,9 +1292,10 @@ enum ResourceField {
 
 A shared string pool used by the class file transform and `RefBody` resource paths.
 
-Each namespace may contain at most one `StringPool` section, whose section ID must be `0`. When
-present, it must appear before the `ResourceGroups` section in the same namespace. A `ClassFile`
-transform or `RefBody` path resolves indices against the `StringPool` in its current logical namespace.
+A Janex file may contain any number of `StringPool` sections. Each is identified by the ID of its
+corresponding `SectionInfoObject`. A `ResourceGroups` section explicitly selects its string pool
+through `ResourceGroupsMetadataObject.string_pool`; multiple resource-group sections may select the
+same string pool.
 
 ```rust
 struct StringPoolSection {
@@ -1294,10 +1327,10 @@ string-pool data, file contents, or extension-defined data. Object semantics are
 references and are not part of the blob-pool layout.
 
 A Janex file may contain any number of `BlobPool` sections, including none when the file contains no
-`BlobRef`. Each blob pool is identified by the namespace and `id` of its corresponding
-`SectionInfoObject`. Blob-pool IDs must be unique within their namespace and section type, as required
-for all section IDs, and carry no semantic meaning. Readers must not assume that a particular ID,
-physical position, or creation order identifies a particular kind of data.
+`BlobRef`. Each blob pool is identified by the `id` of its corresponding `SectionInfoObject`.
+Blob-pool IDs must be unique within the section type, as required for all section IDs, and carry no
+semantic meaning. Readers must not assume that a particular ID, physical position, or creation order
+identifies a particular kind of data.
 
 ```rust
 struct BlobPoolSection {
@@ -1364,7 +1397,7 @@ The `properties` field of `ZSTD` is currently empty.
 #### Blob Table
 
 The length of `bytes` is `SectionInfoObject.length - 8`; therefore, a `BlobPool` section must have a
-length of at least 8 bytes. Key `5` (`metadata`) of the corresponding `SectionInfoObject` is required
+length of at least 8 bytes. Key `4` (`metadata`) of the corresponding `SectionInfoObject` is required
 and must be the following deterministic CBOR map:
 
 ```cbor
@@ -1372,19 +1405,21 @@ BlobPoolMetadataObject = {
     0: table_offset,      // uint
     1: table_encoding,    // BlobEncodingObject
     2: table_checksum,    // ChecksumObject
+    ? 3: extensions,      // map<tstr, any>
 }
 
 BlobEncodingObject = [stored_size: uint, filters: [BlobFilterObject, ...]]
 BlobFilterObject = [input_size: uint, method: uint, properties: bstr]
 ```
 
-Keys `0` through `2` are required. No other key is currently defined. `table_offset`, `stored_size`,
-and each `input_size` must fit in `u64`; `method` must fit in `u8`. `BlobEncodingObject` must contain
-exactly two elements, and each `BlobFilterObject` must contain exactly three. The `filters` array may
-be empty, uses encoding order, and has the same decoding and size semantics as binary `BlobEncoding`.
-A reader must reject a blob pool whose table encoding uses an unsupported filter. The section metadata
-uses `BlobEncodingObject` to locate and decode the bootstrap blob table. Each `BlobInfo` uses the
-binary `BlobEncoding` structure defined above.
+Keys `0` through `2` are required. `table_offset`, `stored_size`, and each `input_size` must fit in
+`u64`; `method` must fit in `u8`. `BlobEncodingObject` must contain exactly two elements, and each
+`BlobFilterObject` must contain exactly three. The `filters` array may be empty, uses encoding order,
+and has the same decoding and size semantics as binary `BlobEncoding`. `extensions`, when present,
+follows the text-key naming rules for CBOR extension maps. An empty extension map is valid, although
+writers should omit it. A reader must reject a blob pool whose table encoding uses an unsupported
+filter. The section metadata uses `BlobEncodingObject` to locate and decode the bootstrap blob table.
+Each `BlobInfo` uses the binary `BlobEncoding` structure defined above.
 
 ```rust
 struct BlobTable {
@@ -1428,7 +1463,7 @@ and has no separate binary representation in `BlobRef`:
 
 ```rust
 struct BlobRef<T> {
-    /// The namespace and ID of the referenced `BlobPool` section.
+    /// A reference to the `BlobPool` section, encoded as a `SectionRef` CBOR item.
     blob_pool: SectionRef<BlobPoolSection>,
 
     /// The zero-based index of the blob in the referenced blob pool's `BlobTable`.
