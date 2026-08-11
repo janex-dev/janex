@@ -146,6 +146,11 @@ struct MyStruct {
 Janex uses [CBOR](https://www.rfc-editor.org/rfc/rfc8949.html) for extensible metadata structures that
 explicitly declare a CBOR representation.
 
+CBOR schemas in this document are written in
+[CDDL](https://www.rfc-editor.org/rfc/rfc8610.html). Code blocks marked `cddl` contain schema fragments
+and may reference rules defined in another fragment. Prose requirements remain normative for
+constraints that the CDDL fragments do not express.
+
 ```rust
 /// A length-delimited byte sequence containing exactly one CBOR data item.
 type CborObject = Vec<u8>;
@@ -226,8 +231,11 @@ an unsupported algorithm because it cannot perform that validation.
 
 CBOR metadata represents the same value as a two-element array:
 
-```cbor
-ChecksumObject = [algorithm: uint, checksum: bstr]
+```cddl
+ChecksumObject = [
+    algorithm: 0..65535,
+    checksum: bstr,
+]
 ```
 
 The array must contain exactly two elements. `algorithm` must fit in `u16`, and `checksum` must satisfy
@@ -317,17 +325,20 @@ struct FileMetadataSection {
 
 `metadata` must contain a `FileMetadataObject`, represented by the following deterministic CBOR map:
 
-```cbor
+```cddl
 FileMetadataObject = {
-    0: flags,             // uint; currently 0
-    1: section_table,     // [SectionInfoObject, ...]
-    2: external_header,   // ExternalRegionObject
-    3: external_tail,     // ExternalRegionObject
-    ? 4: extensions,      // map<tstr, any>
-    ? 5: required_features, // [FeatureIdObject, ...]
+    0: 0,                              ; flags
+    1: [* SectionInfoObject],          ; section_table
+    2: ExternalRegionObject,           ; external_header
+    3: ExternalRegionObject,           ; external_tail
+    ? 4: ExtensionMap,                 ; extensions
+    ? 5: [* FeatureIdObject],          ; required_features
+    * uint => any,
 }
 
-FeatureIdObject = uint / tstr
+FeatureIdObject = uint / NonemptyText
+ExtensionMap = { * NonemptyText => any }
+NonemptyText = tstr .ne ""
 ```
 
 Keys `0` through `3` are required. `flags` must currently be `0`. `section_table` may be empty because
@@ -365,14 +376,17 @@ key `5`; readers must also accept an empty array, which has the same meaning as 
 
 Each element of `FileMetadataObject.section_table` is a deterministic CBOR map:
 
-```cbor
+```cddl
 SectionInfoObject = {
-    0: section_type,      // uint fitting in u64
-    1: id,                // uint fitting in u64
-    2: length,            // uint fitting in u64
-    3: checksum,          // ChecksumObject
-    ? 4: metadata,        // section-type-specific map
+    0: uint,                         ; section_type
+    1: uint,                         ; id
+    2: uint,                         ; length
+    3: ChecksumObject,               ; checksum
+    ? 4: SectionMetadataObject,      ; metadata
+    * uint => any,
 }
+
+SectionMetadataObject = { * uint => any }
 ```
 
 Generally, `section_type` is the same as the `magic_number` of the section content when that section
@@ -395,14 +409,18 @@ and may be ignored unless their semantics are guarded by a feature listed in
 
 A typed section reference is one deterministic CBOR data item embedded directly at the reference's
 position. It is not wrapped in `CborObject` and therefore has no preceding Janex `Vec<u8>` length. The
-type parameter determines the required `section_type` and has no binary representation:
+logical type parameter `T` determines the required `section_type` and has no binary representation, so
+it is omitted from the CDDL rule:
 
-```cbor
-SectionRef<T> =
-    id: uint
-  / [reference_kind: SectionReferenceKindObject, payload: bstr]
+```cddl
+SectionRef =
+    uint
+  / [
+        reference_kind: SectionReferenceKindObject,
+        payload: bstr .cbor any,
+    ]
 
-SectionReferenceKindObject = uint / tstr
+SectionReferenceKindObject = uint / NonemptyText
 ```
 
 The `uint` form is a local reference and must resolve to the unique section identified by `(T, id)` in
@@ -472,10 +490,10 @@ Unknown sections may be skipped. A feature that requires an unknown section type
 constrained by Janex metadata. External regions do not have Janex section magic numbers and are not
 addressed by `SectionInfoObject`.
 
-```cbor
+```cddl
 ExternalRegionObject =
-    [0]                               // NotDescribed
-  / [1, size: uint, ChecksumObject]   // Described
+    [not_described: 0]
+  / [described: 1, size: uint, checksum: ChecksumObject]
 ```
 
 The array tag is part of an explicit two-variant enum. `NotDescribed` contains exactly one element.
@@ -720,10 +738,8 @@ particular attribute operational semantics.
 
 The CBOR object is a text-keyed map:
 
-```cbor
-AttributesObject = {
-    * attribute_name: attribute_value,
-}
+```cddl
+AttributesObject = { * NonemptyText => any }
 ```
 
 Attribute names follow the text-key naming rules in
@@ -753,17 +769,18 @@ struct RootConfigGroupSection {
 
 #### `ConfigGroupObject` Map
 
-```cbor
+```cddl
 ConfigGroupObject = {
-    ? 0: condition,       // tstr
-    ? 1: main_class,      // tstr / null
-    ? 2: main_module,     // tstr / null
-    ? 3: module_path,     // [ResourceGroupReferenceObject, ...] / null
-    ? 4: class_path,      // [ResourceGroupReferenceObject, ...] / null
-    ? 5: agents,          // [JavaAgentObject, ...] / null
-    ? 6: jvm_options,     // [tstr, ...] / null
-    ? 7: subgroups,       // [ConfigGroupObject, ...]
-    ? 8: extensions,      // map<tstr, any>
+    ? 0: tstr,                                  ; condition
+    ? 1: (tstr / null),                         ; main_class
+    ? 2: (tstr / null),                         ; main_module
+    ? 3: ([* ResourceGroupReferenceObject] / null), ; module_path
+    ? 4: ([* ResourceGroupReferenceObject] / null), ; class_path
+    ? 5: ([* JavaAgentObject] / null),          ; agents
+    ? 6: ([* tstr] / null),                     ; jvm_options
+    ? 7: [* ConfigGroupObject],                 ; subgroups
+    ? 8: ExtensionMap,                          ; extensions
+    * uint => any,
 }
 ```
 
@@ -789,10 +806,10 @@ empty extension map is valid, although writers should omit it.
 
 A resource-group reference is one of the following exact-length CBOR arrays:
 
-```cbor
+```cddl
 ResourceGroupReferenceObject =
-    [0, resource_groups: SectionRef<ResourceGroupsSection>, group_name: tstr]
-  / [1, purl: tstr, checksum: ChecksumObject]
+    [local: 0, resource_groups: SectionRef, group_name: tstr]
+  / [remote: 1, purl: tstr, checksum: ChecksumObject]
 ```
 
 Variant `0` refers to an embedded resource group. `resource_groups` must resolve to a
@@ -810,7 +827,7 @@ part of the Janex trust policy rather than a PURL `checksum` qualifier. Examples
 
 #### `JavaAgentObject`
 
-```cbor
+```cddl
 JavaAgentObject = [reference: ResourceGroupReferenceObject, option: tstr]
 ```
 
@@ -824,10 +841,11 @@ The array must contain exactly two elements. An empty `option` means that no age
 When key `4` (`metadata`) is present in the corresponding `SectionInfoObject`, it must be the following
 deterministic CBOR map:
 
-```cbor
+```cddl
 ResourceGroupsMetadataObject = {
-    ? 0: string_pool,     // SectionRef<StringPoolSection>
-    ? 1: extensions,      // map<tstr, any>
+    ? 0: SectionRef,          ; string_pool
+    ? 1: ExtensionMap,        ; extensions
+    * uint => any,
 }
 ```
 
@@ -885,10 +903,8 @@ struct ResourceGroup {
 
 The resource-group metadata is a text-keyed map:
 
-```cbor
-ResourceGroupMetadataObject = {
-    * metadata_name: metadata_value,
-}
+```cddl
+ResourceGroupMetadataObject = { * NonemptyText => any }
 ```
 
 Metadata names follow the text-key naming rules in
@@ -1136,18 +1152,22 @@ enum ResourcePathContent {
 
 Every resource contains one length-delimited `ResourceMetadataObject`:
 
-```cbor
+```cddl
 ResourceMetadataObject = {
-    ? 0: extensions,              // map<tstr, any>
-    ? 1: checksum,                // ChecksumObject
-    ? 2: comment,                 // tstr
-    ? 3: creation_time,           // UnixNanosecondsObject
-    ? 4: modification_time,       // UnixNanosecondsObject
-    ? 5: access_time,             // UnixNanosecondsObject
-    ? 6: posix_permissions,       // uint in [0, 65535]
+    ? 0: ExtensionMap,               ; extensions
+    ? 1: ChecksumObject,             ; checksum
+    ? 2: tstr,                       ; comment
+    ? 3: UnixNanosecondsObject,      ; creation_time
+    ? 4: UnixNanosecondsObject,      ; modification_time
+    ? 5: UnixNanosecondsObject,      ; access_time
+    ? 6: 0..65535,                   ; posix_permissions
+    * uint => any,
 }
 
-UnixNanosecondsObject = i128
+UnixNanosecondsObject =
+    int
+  / #6.2(bstr .size (9..16))
+  / #6.3(bstr .size (9..16))
 ```
 
 The empty map is the canonical representation of a resource with no metadata. The top-level value and
@@ -1283,16 +1303,17 @@ The length of `bytes` is `SectionInfoObject.length - 8`; therefore, a `BlobPool`
 length of at least 8 bytes. Key `4` (`metadata`) of the corresponding `SectionInfoObject` is required
 and must be the following deterministic CBOR map:
 
-```cbor
+```cddl
 BlobPoolMetadataObject = {
-    0: table_offset,      // uint
-    1: table_encoding,    // BlobEncodingObject
-    2: table_checksum,    // ChecksumObject
-    ? 3: extensions,      // map<tstr, any>
+    0: uint,                  ; table_offset
+    1: BlobEncodingObject,    ; table_encoding
+    2: ChecksumObject,        ; table_checksum
+    ? 3: ExtensionMap,        ; extensions
+    * uint => any,
 }
 
-BlobEncodingObject = [stored_size: uint, filters: [BlobFilterObject, ...]]
-BlobFilterObject = [input_size: uint, method: uint, properties: bstr]
+BlobEncodingObject = [stored_size: uint, filters: [* BlobFilterObject]]
+BlobFilterObject = [input_size: uint, method: 0..255, properties: bstr]
 ```
 
 Keys `0` through `2` are required. `table_offset`, `stored_size`, and each `input_size` must fit in
