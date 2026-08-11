@@ -81,40 +81,7 @@ serves as the continuation flag:
 
 Because `vuint` has a width of 64 bits, its encoding must not exceed ten bytes, and the tenth byte can contain
 at most one non-zero payload bit. Janex writers emit the shortest ULEB128 representation. Readers also accept
-zero-padded ULEB128 representations within the ten-byte width limit. Janex does not currently use signed
-LEB128 (SLEB128).
-
-Reading `vuint` follows this algorithm:
-
-```rust
-fn read_vuint(read: &mut impl Read) -> Result<vuint, Error> {
-    let first = read.read_u8()?;
-
-    if first < 0x80 {
-        return Ok(first as u64);
-    }
-
-    let mut result = (first & 0x7F) as u64;
-
-    for i in 1..10 {
-        let byte = read.read_u8()?;
-        let low_bits = byte & 0x7F;
-
-        // the 10th byte can have at most 1 valid bit
-        if i == 9 && low_bits > 1 {
-            return Err(Error::InvalidVUInt);
-        }
-
-        result |= (low_bits as u64) << (7 * i);
-
-        if byte == low_bits {
-            return Ok(result);
-        }
-    }
-
-    Err(Error::InvalidVUInt)
-}
-```
+zero-padded ULEB128 representations within the ten-byte width limit.
 
 ### Dynamic Array
 
