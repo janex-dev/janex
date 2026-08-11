@@ -204,23 +204,8 @@ them. Unsigned integers must fit in `u64`, and negative integers must fit in `i6
 CBOR use CBOR's own deterministic integer representation, not `vuint` or Janex's little-endian fixed
 integer representation.
 
-Maps that define Janex core structures use unsigned integer keys. Maps intended for attributes or
-third-party extensions use non-empty text keys. The `janex.` key prefix is reserved for this
-specification; third-party keys should use a reverse-domain prefix such as `org.example.`. The
-definition of a key determines the exact schema and semantics of its value.
-
-An unknown key must not change the interpretation of known keys and may be ignored. A new field that
-is required to interpret existing data must instead be guarded by an explicit required feature, a new
-section type, or a new supported format revision. A tool that rewrites a file while claiming to
-preserve its semantics must preserve unknown optional map entries at the data-model level, although it
-may re-encode them in the required deterministic form. Readers must apply implementation limits to
-encoded size, collection length, text and byte-string length, and nesting depth before allocating
-resources.
-
-Empty maps and arrays are valid wherever their schema permits an empty collection. Writers should
-omit an optional empty map, but readers must accept it when the containing key or section is present.
-An omitted key and a `null` value are distinct: omission means that no value was supplied, while
-`null` has meaning only where the field's schema explicitly defines it.
+Readers must apply implementation limits to encoded size, collection length, text and byte-string
+length, and nesting depth before allocating resources.
 
 ### Timestamp
 
@@ -400,14 +385,31 @@ it does not include the final `FileMetadata` section. `extensions`, when present
 whose values follow their key-specific schemas; an empty map is valid, although writers should omit
 it.
 
+#### Metadata Evolution and Extensions
+
+Maps that define Janex core structures use unsigned integer keys. Maps intended for attributes or
+third-party extensions use non-empty text keys. The `janex.` key prefix is reserved for this
+specification; third-party keys should use a reverse-domain prefix such as `org.example.`. The
+definition of a key determines the exact schema and semantics of its value.
+
+An unknown key must not change the interpretation of known keys and may be ignored. A new field that
+is required to interpret existing data must instead be guarded by an explicit required feature, a new
+section type, or a new supported format revision. A tool that rewrites a file while claiming to
+preserve its semantics must preserve unknown optional map entries at the data-model level, although it
+may re-encode them in the required deterministic form.
+
+Empty maps and arrays are valid wherever their schema permits an empty collection. Writers should
+omit an optional empty map, but readers must accept it when the containing key or section is present.
+An omitted key and a `null` value are distinct: omission means that no value was supplied, while
+`null` has meaning only where the field's schema explicitly defines it.
+
 `required_features` declares features that a reader must understand to interpret the file correctly.
 Numeric feature IDs are assigned by this specification. A text feature ID must be non-empty and
-follow the text-key naming rules in [Deterministic CBOR Objects](#deterministic-cbor-objects). Feature
-IDs must be unique. The array must be sorted by the bytewise lexicographic order of each feature ID's
-deterministic encoding, matching the map-key ordering in RFC 8949 Section 4.2.1. A reader must reject a
-file containing an unsupported required feature. No core required feature IDs are currently defined.
-A writer that uses no required features should omit key `5`; readers must also accept an empty array,
-which has the same meaning as omission.
+follow the text-key naming rules above. Feature IDs must be unique. The array must be sorted by the
+bytewise lexicographic order of each feature ID's deterministic encoding, matching the map-key ordering
+in RFC 8949 Section 4.2.1. A reader must reject a file containing an unsupported required feature. No
+core required feature IDs are currently defined. A writer that uses no required features should omit
+key `5`; readers must also accept an empty array, which has the same meaning as omission.
 
 #### `SectionInfoObject` Map
 
@@ -459,12 +461,13 @@ In particular, IDs from `0` through `23` occupy one byte.
 
 The two-element array reserves an explicitly framed form for future reference mechanisms. Numeric
 reference kinds are assigned by this specification. A text reference kind must be non-empty and
-follow the text-key naming rules in [Deterministic CBOR Objects](#deterministic-cbor-objects). The
-`payload` byte string must contain exactly one complete deterministic CBOR data item and no trailing
-bytes. Its byte-string length lets a reader skip an unsupported payload without recursively scanning
-it. A reader that must resolve a reference must reject an unsupported reference kind. No core extended
-reference kinds are currently defined. Writers that do not use an extension-defined reference kind
-must use the `uint` form.
+follow the text-key naming rules in
+[Metadata Evolution and Extensions](#metadata-evolution-and-extensions). The `payload` byte string
+must contain exactly one complete deterministic CBOR data item and no trailing bytes. Its byte-string
+length lets a reader skip an unsupported payload without recursively scanning it. A reader that must
+resolve a reference must reject an unsupported reference kind. No core extended reference kinds are
+currently defined. Writers that do not use an extension-defined reference kind must use the `uint`
+form.
 
 An untyped reference, if introduced by a future schema, must additionally identify its target section
 type.
@@ -774,9 +777,9 @@ AttributesObject = {
 ```
 
 Attribute names follow the text-key naming rules in
-[Deterministic CBOR Objects](#deterministic-cbor-objects). Each value is interpreted according to its
-attribute name. Readers that do not recognize an attribute must ignore it and may preserve its encoded
-value when rewriting the file.
+[Metadata Evolution and Extensions](#metadata-evolution-and-extensions). Each value is interpreted
+according to its attribute name. Readers that do not recognize an attribute must ignore it and may
+preserve its encoded value when rewriting the file.
 
 Writers should omit the section when it would contain no attributes. Readers must nevertheless accept
 an empty map. The top-level value must not be `null` or an array. An individual attribute value may be
@@ -829,8 +832,8 @@ independently. For a group whose condition matches, the configuration keys are a
 - an empty array is valid and appends nothing.
 
 `subgroups` preserves array order and must not be `null`. `extensions`, when present, follows the
-text-key naming rules for CBOR extension maps. An empty extension map is valid, although writers
-should omit it.
+text-key naming rules in [Metadata Evolution and Extensions](#metadata-evolution-and-extensions). An
+empty extension map is valid, although writers should omit it.
 
 #### `ResourceGroupReferenceObject`
 
@@ -881,8 +884,9 @@ ResourceGroupsMetadataObject = {
 `string_pool` selects the string pool used by every `ClassFile` transform and `RefBody` path contained
 in this `ResourceGroups` section. It is required if any such value occurs and may refer to a string
 pool shared with other resource-group sections. `extensions`, when present, follows the text-key
-naming rules for CBOR extension maps. Empty maps are valid, although writers should omit an empty
-`extensions` map and omit section metadata entirely when it would be empty.
+naming rules in [Metadata Evolution and Extensions](#metadata-evolution-and-extensions). Empty maps
+are valid, although writers should omit an empty `extensions` map and omit section metadata entirely
+when it would be empty.
 
 Each resource group is a logical container of related files, typically corresponding to a single JAR
 or module from the original Java project. Group names must be unique within the section.
@@ -938,10 +942,10 @@ ResourceGroupMetadataObject = {
 ```
 
 Metadata names follow the text-key naming rules in
-[Deterministic CBOR Objects](#deterministic-cbor-objects). Unknown entries have no effect on resource
-decoding and may be ignored. The empty map is valid and is the canonical representation of no group
-metadata; unlike an optional map field in a surrounding CBOR object, this object is required by the
-binary `ResourceGroup` structure.
+[Metadata Evolution and Extensions](#metadata-evolution-and-extensions). Unknown entries have no
+effect on resource decoding and may be ignored. The empty map is valid and is the canonical
+representation of no group metadata; unlike an optional map field in a surrounding CBOR object, this
+object is required by the binary `ResourceGroup` structure.
 
 #### `Resource`
 
@@ -1416,10 +1420,11 @@ Keys `0` through `2` are required. `table_offset`, `stored_size`, and each `inpu
 `u64`; `method` must fit in `u8`. `BlobEncodingObject` must contain exactly two elements, and each
 `BlobFilterObject` must contain exactly three. The `filters` array may be empty, uses encoding order,
 and has the same decoding and size semantics as binary `BlobEncoding`. `extensions`, when present,
-follows the text-key naming rules for CBOR extension maps. An empty extension map is valid, although
-writers should omit it. A reader must reject a blob pool whose table encoding uses an unsupported
-filter. The section metadata uses `BlobEncodingObject` to locate and decode the bootstrap blob table.
-Each `BlobInfo` uses the binary `BlobEncoding` structure defined above.
+follows the text-key naming rules in
+[Metadata Evolution and Extensions](#metadata-evolution-and-extensions). An empty extension map is
+valid, although writers should omit it. A reader must reject a blob pool whose table encoding uses an
+unsupported filter. The section metadata uses `BlobEncodingObject` to locate and decode the bootstrap
+blob table. Each `BlobInfo` uses the binary `BlobEncoding` structure defined above.
 
 ```rust
 struct BlobTable {
