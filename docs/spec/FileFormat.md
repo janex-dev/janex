@@ -176,8 +176,8 @@ struct MyStruct {
 
 ### Deterministic CBOR Objects
 
-Janex uses [CBOR](https://www.rfc-editor.org/rfc/rfc8949.html) for small, extensible control-plane
-metadata. It does not use CBOR for fixed framing, bulk resource entries, blob tables, or file content.
+Janex uses [CBOR](https://www.rfc-editor.org/rfc/rfc8949.html) for extensible metadata structures that
+explicitly declare a CBOR representation.
 
 ```rust
 /// A length-delimited byte sequence containing exactly one CBOR data item.
@@ -1382,9 +1382,9 @@ Keys `0` through `2` are required. No other key is currently defined. `table_off
 and each `input_size` must fit in `u64`; `method` must fit in `u8`. `BlobEncodingObject` must contain
 exactly two elements, and each `BlobFilterObject` must contain exactly three. The `filters` array may
 be empty, uses encoding order, and has the same decoding and size semantics as binary `BlobEncoding`.
-A reader must reject a blob pool whose table encoding uses an unsupported filter. This CBOR
-representation is used only to locate and decode the bootstrap blob table; each ordinary blob retains
-the compact binary metadata below.
+A reader must reject a blob pool whose table encoding uses an unsupported filter. The section metadata
+uses `BlobEncodingObject` to locate and decode the bootstrap blob table. Each `BlobInfo` uses the
+binary `BlobEncoding` structure defined above.
 
 ```rust
 struct BlobTable {
