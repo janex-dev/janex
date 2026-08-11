@@ -41,7 +41,8 @@ This document is an improvement based on the prototype, and we hope to make it s
 
 ### Basic Data Types
 
-Janex uses little-endian encoding for all integer and floating-point numbers.
+Janex uses little-endian encoding for fixed-width binary integer and floating-point fields. `vuint`
+and values inside CBOR objects use the encodings defined in their respective sections below.
 
 This document uses `u8`/`u16`/`u32`/`u64` to represent 8/16/32/64-bit unsigned integers,
 uses `i8`/`i16`/`i32`/`i64` to represent 8/16/32/64-bit signed integers,
@@ -173,6 +174,49 @@ struct MyStruct {
 }
 ```
 
+### Deterministic CBOR Objects
+
+Janex uses [CBOR](https://www.rfc-editor.org/rfc/rfc8949.html) for small, extensible control-plane
+metadata. It does not use CBOR for fixed framing, bulk resource entries, blob tables, or file content.
+
+```rust
+/// A length-delimited byte sequence containing exactly one CBOR data item.
+type CborObject = Vec<u8>;
+```
+
+Every `CborObject` must contain exactly one complete CBOR data item and no trailing bytes. Its encoded
+item must satisfy the Core Deterministic Encoding Requirements in RFC 8949 Section 4.2.1, including
+preferred serialization, definite lengths, and deterministic map-key ordering. Readers must reject:
+
+- non-shortest integer, length, or tag encodings;
+- indefinite-length items;
+- duplicate map keys;
+- invalid UTF-8 text strings;
+- trailing bytes after the first data item; and
+- an item that does not match the schema required at that location.
+
+Current Janex CBOR schemas use unsigned integers, signed integers, byte strings, text strings, arrays,
+maps, booleans, and explicitly permitted `null` values. Floating-point values, CBOR `undefined`,
+bignum tags, and all other tags or simple values are invalid unless a future schema explicitly permits
+them. Unsigned integers must fit in `u64`, and negative integers must fit in `i64`. Integers inside
+CBOR use CBOR's own deterministic integer representation, not `vuint` or Janex's little-endian fixed
+integer representation.
+
+Maps that define Janex core structures use unsigned integer keys. Maps intended for attributes or
+third-party extensions use non-empty text keys. The `janex.` key prefix is reserved for this
+specification; third-party keys should use a reverse-domain prefix such as `org.example.`. The
+definition of a key determines the exact schema and semantics of its value.
+
+An unknown key must not change the interpretation of known keys and may be ignored. A new field that
+is required to interpret existing data must instead be guarded by an explicit required feature, a new
+section type, or a new supported format revision. Readers must apply implementation limits to encoded
+size, collection length, text and byte-string length, and nesting depth before allocating resources.
+
+Empty maps and arrays are valid wherever their schema permits an empty collection. Writers should
+omit an optional empty map, but readers must accept it when the containing key or section is present.
+An omitted key and a `null` value are distinct: omission means that no value was supplied, while
+`null` has meaning only where the field's schema explicitly defines it.
+
 ### Timestamp
 
 Janex uses a 96-bit high-precision timestamp, which can represent times approximately 292.2 billion years
@@ -240,6 +284,15 @@ For a known algorithm, the length of `checksum` must match the length specified 
 continue parsing subsequent metadata. If a checksum is required for validation, a reader must reject
 an unsupported algorithm because it cannot perform that validation.
 
+CBOR metadata represents the same value as a two-element array:
+
+```cbor
+ChecksumObject = [algorithm: uint, checksum: bstr]
+```
+
+The array must contain exactly two elements. `algorithm` must fit in `u16`, and `checksum` must satisfy
+the same algorithm-specific length requirements as the binary `Checksum` structure.
+
 ## Janex File Structure
 
 The Janex file is the binary format produced by the Janex build tool for packaging and distributing
@@ -263,10 +316,10 @@ The complete physical file may contain data outside `JanexFile`:
 [external header] [JanexFile] [external tail]
 ```
 
-External regions may be described by `FileMetadataSection.external_header` and
-`FileMetadataSection.external_tail`. Their physical presence is independent of whether these
-descriptions are present. External regions are not Janex sections and do not appear in
-`section_table`.
+External regions may be described by `FileMetadataObject.external_header` and
+`FileMetadataObject.external_tail`. Their physical presence is independent of whether these
+descriptions are present. External regions are not Janex sections and do not appear in the section
+table.
 
 ### `FileMetadata` Section
 
@@ -296,20 +349,8 @@ struct FileMetadataSection {
     /// The current minor version is `1`.
     minor_version: u32,
 
-    /// File-level flags. Currently unused and must be `0`.
-    flags: u64,
-
-    /// Records the length and other information of each section in `JanexFile.sections`.
-    section_table: Vec<SectionInfo>,
-
-    /// Describes whether data before the `JanexFile` structure is constrained by this metadata.
-    external_header: ExternalRegion,
-
-    /// Describes whether data after the `JanexFile` structure is constrained by this metadata.
-    external_tail: ExternalRegion,
-
-    /// Currently, all fields will be skipped. Reserved for future use.
-    fields: Vec<TaggedPayload<u32>>,
+    /// The deterministic CBOR file-metadata map.
+    metadata: CborObject, // FileMetadataObject
     
     /// The verification information.
     verification_info: VerificationInfo,
@@ -334,32 +375,83 @@ struct FileMetadataSection {
 }
 ```
 
-#### `SectionInfo` Structure
+`metadata` must contain a `FileMetadataObject`, represented by the following deterministic CBOR map:
 
-The structure of the `SectionInfo` is as follows:
-
-```rust
-struct SectionInfo {
-    /// The type of a section.
-    ///
-    /// Generally, `section_type` is the same as the `magic_number` of the section content (if the section has a `magic_number`).
-    section_type: SectionType,
-    
-    /// The ID of a section.
-    /// 
-    /// Sections with the same `section_type` must have different IDs; two `section_type`s can have the same ID.
-    id: vuint,
-    
-    /// Options related to the section.
-    options: Vec<TaggedPayload<u32>>,
-    
-    /// The length in bytes of the section content.
-    length: vuint,
-    
-    /// The checksum of the section content.
-    checksum: Checksum,
+```cbor
+FileMetadataObject = {
+    0: flags,             // uint; currently 0
+    1: section_table,     // [SectionInfoObject, ...]
+    2: external_header,   // ExternalRegionObject
+    3: external_tail,     // ExternalRegionObject
+    ? 4: extensions,      // map<tstr, any>
 }
 ```
+
+Keys `0` through `3` are required. `flags` must currently be `0`. `section_table` may be empty because
+it does not include the final `FileMetadata` section. `extensions`, when present, is a text-keyed map
+whose values follow their key-specific schemas; an empty map is valid, although writers should omit
+it.
+
+#### `SectionInfoObject` Map
+
+Each element of `FileMetadataObject.section_table` is a deterministic CBOR map:
+
+```cbor
+SectionInfoObject = {
+    0: section_type,      // uint fitting in u64
+    1: namespace_id,      // uint in [1, 2^64 - 1]
+    2: id,                // uint fitting in u64
+    3: length,            // uint fitting in u64
+    4: checksum,          // ChecksumObject
+    ? 5: metadata,        // section-type-specific map
+}
+```
+
+Generally, `section_type` is the same as the `magic_number` of the section content when that section
+has a magic number. A section is identified within one `JanexFile` by the tuple
+`(namespace_id, section_type, id)`. Two entries with the same tuple are invalid. IDs may be sparse and
+carry no ordering, priority, or semantic meaning. A section type that permits at most one instance in
+a namespace must use ID `0` for that instance.
+
+`length` is the exact encoded byte length of the corresponding section. `checksum` covers those exact
+section bytes. Unless its algorithm is `NONE`, readers must verify the checksum before trusting the
+section contents.
+
+`namespace_id` is a file-local merge scope and is not a stable identity. Standalone writers should use
+namespace `1`. A merger may assign another nonzero namespace to imported sections without changing
+their type-local IDs. Cross-file stable identity, if required by a future application, must use
+separate metadata rather than overloading `namespace_id` or `id`.
+
+The optional `metadata` map is interpreted according to `section_type`. An empty map is valid; writers
+should omit key `5` when it is empty. Unknown keys in a known section-type metadata map are optional
+and may be ignored unless that section type defines an explicit required-feature mechanism.
+
+#### Section References and Namespace Context
+
+A typed binary reference to a section uses the following structure. The type parameter determines the
+required `section_type` and has no binary representation:
+
+```rust
+struct SectionRef<T> {
+    /// `0` selects the current namespace; a nonzero value selects that namespace explicitly.
+    namespace_id: vuint,
+
+    /// The section ID within the selected namespace and the statically known type `T`.
+    id: vuint,
+}
+```
+
+The current namespace of a top-level structure stored directly in a section is that section's
+`SectionInfoObject.namespace_id`. Nested and inline structures inherit their containing structure's
+current namespace. A value decoded through a `BlobRef<T>` retains the namespace context in which that
+`BlobRef<T>` occurred; storage in a blob pool does not change the logical namespace of the decoded
+value. This rule permits a merger to reassign the namespace of imported section descriptors while
+same-namespace references encoded with `namespace_id == 0` remain unchanged.
+
+A nonzero `SectionRef.namespace_id` is an explicit cross-namespace reference. It must select exactly
+one section with the required type and ID. A reference with namespace `0` is invalid when no current
+namespace is defined. An untyped reference, when a future schema needs one, must additionally encode
+the target `section_type`.
 
 Currently supported section types:
 
@@ -375,8 +467,8 @@ enum SectionType {
     /// 
     /// This section is always the last section in `sections`.
     /// 
-    /// It will not be recorded in `section_table`,
-    /// because `section_table` is inside this section, and attempting to record it in `section_table` would create a self-referential problem.
+    /// It is not recorded in `FileMetadataObject.section_table`, because that table is inside this
+    /// section and recording the section there would create a self-reference.
     /// This section verifies itself using the internal `verification_info` information.
     FileMetadata = 0x4154_4144_4154_454d, // "METADATA"
 
@@ -398,50 +490,35 @@ enum SectionType {
 }
 ```
 
-All entries in `section_table` describe sections arranged consecutively within `JanexFile.sections`.
-If additional data or padding needs to be inserted between them, the `Padding` section can be used.
+All entries in `FileMetadataObject.section_table` describe sections arranged consecutively within
+`JanexFile.sections`. If additional data or padding needs to be inserted between them, the `Padding`
+section can be used.
 
 Unknown sections will be ignored.
 
-#### `ExternalRegion` Structure
+#### `ExternalRegionObject`
 
-`ExternalRegion` states whether bytes outside the `JanexFile` structure are described and constrained
-by Janex metadata. External regions do not have Janex section magic numbers and are not addressed by
-`SectionInfo`.
+`ExternalRegionObject` states whether bytes outside the `JanexFile` structure are described and
+constrained by Janex metadata. External regions do not have Janex section magic numbers and are not
+addressed by `SectionInfoObject`.
 
-```rust
-#[repr(u8)]
-enum ExternalRegion {
-    /// Does not describe or constrain the external region.
-    NotDescribed {
-        description_type: u8, // 0
-    },
-
-    /// Describes the exact size and checksum of the external region.
-    Described {
-        description_type: u8, // 1
-
-        /// The exact number of bytes required in the external region.
-        size: u64,
-
-        /// The checksum of the complete external region.
-        checksum: Checksum,
-    },
-}
+```cbor
+ExternalRegionObject =
+    [0]                               // NotDescribed
+  / [1, size: uint, ChecksumObject]   // Described
 ```
 
-The first byte of `ExternalRegion` is `description_type` and determines which remaining fields are
-encoded. `NotDescribed` has no remaining fields. `Described` is followed by `size` and `checksum`.
-Values other than `0` and `1` are invalid.
+The array tag is part of an explicit two-variant enum. `NotDescribed` contains exactly one element.
+`Described` contains exactly three elements. Other tags or array lengths are invalid.
 
 `NotDescribed` means that Janex metadata does not describe or constrain the corresponding external
 region. The physical region may be absent or may contain arbitrary bytes, and tools may modify it
 without rewriting the Janex metadata. `Described` requires the physical region to have exactly the
-specified `size`. Consequently, `Described { size: 0, checksum: NONE }` explicitly requires that the
-physical region be absent; it is not equivalent to `NotDescribed`. When `size` is zero, `checksum`
-must use the `NONE` algorithm. When `size` is nonzero, `checksum` must not use the `NONE` algorithm
-and a reader must verify it. Metadata associated with the containing format may be stored in
-`FileMetadataSection.fields`.
+specified `size`. Consequently, `[1, 0, [0, h'']]` (where checksum algorithm `0` is `NONE`)
+explicitly requires that the physical region be absent; it is not equivalent to `[0]`. When `size` is
+zero, the checksum must use the `NONE` algorithm. When `size` is nonzero, the checksum must not use
+the `NONE` algorithm and a reader must verify it.
+Metadata associated with the containing format may be stored in `FileMetadataObject.extensions`.
 
 For a physical file of `physical_file_size` bytes, a reader receives `external_tail_length` from its
 caller and calculates:
@@ -455,7 +532,7 @@ Both subtractions must use checked arithmetic. The reader locates the fixed foot
 `janex_end`. The actual external header is the byte range before `janex_start`, and the actual external
 tail is the byte range from `janex_end` to `physical_file_size`. After decoding `FileMetadata`, the
 reader must compare an external region's actual size with its declared `size` and verify its checksum
-only when the corresponding `ExternalRegion` is `Described`. When it is `NotDescribed`, the reader
+only when the corresponding `ExternalRegionObject` is `Described`. When it is `NotDescribed`, the reader
 imposes no metadata-derived size or checksum requirement on that region.
 
 The reader must reject the file unless `end_mark` has its required value, `metadata_length` equals the
@@ -463,7 +540,7 @@ exact encoded length of `FileMetadataSection`, and the following equation holds 
 arithmetic:
 
 ```text
-file_length = 8 + sum(section_table[*].length) + metadata_length
+file_length = 8 + sum(FileMetadataObject.section_table[*].length) + metadata_length
 ```
 
 These requirements ensure that the located `JanexFile`, its consecutively stored sections, and its
@@ -623,9 +700,10 @@ one, a specified subset, or all of them must succeed.
 
 ##### Authenticated Content Scope
 
-To authenticate every Janex section and both external data regions, each entry in `section_table` must
-use a cryptographically secure checksum, both external regions must be `Described`, and each described
-non-empty external region must use a cryptographically secure checksum. The signed
+To authenticate every Janex section and both external data regions, each entry in
+`FileMetadataObject.section_table` must use a cryptographically secure checksum, both external regions
+must be `Described`, and each described non-empty external region must use a cryptographically secure
+checksum. The signed
 `verification_input` then binds those checksums and any explicit zero-size requirements to the file
 metadata. `SHA256`, `SHA512`, and `SM3` are cryptographically secure checksum algorithms for this
 purpose; `NONE` and `XXH64` are not. A reader claiming this scope of authentication must verify every
@@ -656,263 +734,127 @@ provide trusted freshness.
 
 ```rust
 struct AttributesSection {
-    /// The magic number identifying this as a attributes section.
+    /// The magic number identifying this as an attributes section.
     ///
     /// Always `0x2e53_4249_5254_5441` ("ATTRIBS.").
     magic_number: u64, // 0x2e53_4249_5254_5441 ("ATTRIBS.")
-    
-    /// The list of attributes.
-    attributes: Vec<Attribute>,
+
+    /// One deterministic CBOR `AttributesObject`.
+    attributes: CborObject,
 }
 ```
 
-In the future, we may use it to record author names and other information.
+Each namespace may contain at most one `Attributes` section, whose section ID must be `0`.
+Attributes are descriptive metadata unless another part of this specification explicitly assigns a
+particular attribute operational semantics.
 
-#### `Attribute` Structure
+The CBOR object is a text-keyed map:
 
-```rust
-struct Attribute {
-    /// The name of the attribute.
-    name: String,
-    
-    /// The value of the attribute.
-    /// 
-    /// This `Vec<u8>` can actually be interpreted as a `String` (They have the same binary representation),
-    /// or it may carry arbitrary binary data.
-    value: Vec<u8>,
+```cbor
+AttributesObject = {
+    * attribute_name: attribute_value,
 }
 ```
+
+Attribute names follow the text-key namespace rules in
+[Deterministic CBOR Objects](#deterministic-cbor-objects). Each value is interpreted according to its
+attribute name. Readers that do not recognize an attribute must ignore it and may preserve its encoded
+value when rewriting the file.
+
+Writers should omit the section when it would contain no attributes. Readers must nevertheless accept
+an empty map. The top-level value must not be `null` or an array. An individual attribute value may be
+`null` only when that attribute's schema explicitly assigns meaning to `null`.
 
 ### `RootConfigGroup` Section
 
-The structure of the `RootConfigGroup` is as follows:
+Each namespace may contain at most one `RootConfigGroup` section, whose section ID must be `0`.
 
 ```rust
 struct RootConfigGroupSection {
     /// The magic number identifying the `RootConfigGroup` section.
-    /// 
+    ///
     /// Always `0x5055_4f52_4747_4643` ("CFGGROUP").
     magic_number: u64, // 0x5055_4f52_4747_4643 "CFGGROUP"
-    
-    /// The root config group.
-    root_group: ConfigGroup,
+
+    /// One deterministic CBOR `ConfigGroupObject`.
+    root_group: CborObject,
 }
 ```
 
-#### `ConfigGroup` Structure
+#### `ConfigGroupObject` Map
 
-A `ConfigGroup` is a logical grouping of configuration fields.
-
-Groups may be nested via `SubGroups` fields, forming a configuration tree.
-
-Each group can carry an optional `Condition` field.
-For the root group, the `condition` is used to detect whether the Java runtime and platform environment are suitable
-for this program, and to select the optimal Java runtime based on this;
-For subgroups, the `condition` is used to determine whether the group is applicable to the current environment,
-and if so, apply its configuration.
-
-This design allows the launcher to express conditional configurations such as
-"add this JVM option only when running on Java 21 or newer" or
-"use this native library path only on Linux/aarch64".
-
-When launching a program, the Janex Launcher starts from the root group and traverses all subgroups in a depth-first order, 
-applying configurations that meet the conditions.
-
-When applying configurations, if the value type of `ConfigField` is `Vec`,
-all matching `ConfigGroup` fields will be aggregated into a single `Vec`,
-with the element order consistent with the traversal order;  
-If the value type of `ConfigField` is another type, the field of the last matching `ConfigGroup` will be applied to the configuration.
-
-
-```rust
-struct ConfigGroup {
-    /// The magic number identifying this as a configuration group.
-    ///
-    /// Always `0x50524743` ("CGRP").
-    magic_number: u32, // 0x50524743 ("CGRP")
-
-    /// The list of configuration fields contained in this group.
-    fields: Vec<ConfigField>,
+```cbor
+ConfigGroupObject = {
+    ? 0: condition,       // tstr
+    ? 1: main_class,      // tstr / null
+    ? 2: main_module,     // tstr / null
+    ? 3: module_path,     // [ResourceGroupReferenceObject, ...] / null
+    ? 4: class_path,      // [ResourceGroupReferenceObject, ...] / null
+    ? 5: agents,          // [JavaAgentObject, ...] / null
+    ? 6: jvm_options,     // [tstr, ...] / null
+    ? 7: subgroups,       // [ConfigGroupObject, ...]
+    ? 8: extensions,      // map<tstr, any>
 }
 ```
 
-#### `ConfigField`
+An empty `ConfigGroupObject` is valid. A missing `condition` means that the group is unconditional;
+`condition` must not be `null`. When present, it is a CEL expression that must evaluate to `bool` or
+`int` as described in [Conditions](#conditions). The root condition may be used to determine whether a
+runtime and platform are suitable. Subgroup conditions select environment-specific configuration.
 
-Configuration fields carry the actual launch settings within a `ConfigGroup`.
+The launcher visits the root and its `subgroups` in depth-first pre-order. Each subgroup is evaluated
+independently. For a group whose condition matches, the configuration keys are applied as follows:
 
-Each field begins with a 4-byte type tag followed by a length-prefixed payload.
+- a missing key makes no contribution;
+- `main_class` and `main_module` replace the value previously selected, while `null` clears it;
+- an array in `module_path`, `class_path`, `agents`, or `jvm_options` appends its elements in array
+  order, while `null` clears all elements accumulated for that key; and
+- an empty array is valid and appends nothing.
 
-Readers must skip unknown field types to allow forward compatibility.
+`subgroups` preserves array order and must not be `null`. `extensions`, when present, follows the
+text-key namespace rules for CBOR extension maps. An empty extension map is valid, although writers
+should omit it.
 
-Supported fields:
+#### `ResourceGroupReferenceObject`
 
-```rust
-#[repr(TaggedPayload<u32>)]
-enum ConfigField {
-    /// A CEL condition expression that guards the enclosing `ConfigGroup`.
-    ///
-    /// See the [Conditions](#conditions) section for details.
-    Condition {
-        field_type: u32, // 0x444e4f43 ("COND")
+A resource-group reference is one of the following exact-length CBOR arrays:
 
-        /// The CEL expression string. Must evaluate to `bool` or `int`.
-        condition: String,
-    },
-
-    /// The fully qualified binary name of the application's main class.
-    MainClass {
-        field_type: u32, // 0x534c434d ("MCLS")
-
-        /// The fully qualified binary name of the main class (e.g., `"com.example.Main"`).
-        value: String,
-    },
-
-    /// The name of the application's main module.
-    ///
-    /// Passed to the JVM via `--module` when launching with the Java module system.
-    MainModule {
-        field_type: u32, // 0x444f4d4d ("MMOD")
-
-        /// The main module name.
-        value: String,
-    },
-
-    /// The ordered list of resource groups to place on the module path (`--module-path`).
-    ModulePath {
-        field_type: u32, // 0x50444f4d ("MODP")
-
-        /// The number of bytes of the items.
-        payload_bytes: vuint,
-
-        /// The resource group references to add to the module path, in order.
-        items: Vec<ResourceGroupReference>,
-    },
-
-    /// The ordered list of resource groups to place on the class path (`-classpath`).
-    ClassPath {
-        field_type: u32, // 0x50534c43 ("CLSP")
-
-        /// The number of bytes of the items.
-        payload_bytes: vuint,
-
-        /// The resource group references to add to the class path, in order.
-        items: Vec<ResourceGroupReference>,
-    },
-
-    /// The list of resource groups to load as Java agents (`-javaagent`).
-    Agents {
-        field_type: u32, // 0x544e4741 ("AGNT")
-
-        /// The number of bytes of the items.
-        payload_bytes: vuint,
-
-        /// The agents.
-        items: Vec<JavaAgent>,
-    },
-
-    /// A list of additional JVM options to pass when launching the application.
-    ///
-    /// Each element is a single JVM option string
-    /// (e.g., `"--add-exports=java.base/sun.nio.ch=ALL-UNNAMED"` or `"-Xmx512m"`).
-    JvmOptions {
-        field_type: u32, // 0x54504f4a ("JOPT")
-
-        /// The number of bytes of the options.
-        payload_bytes: vuint,
-
-        /// The list of JVM option strings, each passed as a separate argument to the JVM.
-        options: Vec<String>
-    },
-
-    /// A list of nested `ConfigGroup` entries within the enclosing group.
-    ///
-    /// Each subgroup may carry its own `Condition`, enabling fine-grained conditional configuration.
-    /// The launcher evaluates each subgroup independently and applies those whose conditions are satisfied.
-    SubGroups {
-        field_type: u32, // 0x50524753 ("SGRP")
-
-        /// The number of bytes of the subgroups.
-        payload_bytes: vuint,
-
-        /// The list of nested configuration groups.
-        subgroups: Vec<ConfigGroup>
-    }
-}
+```cbor
+ResourceGroupReferenceObject =
+    [0, namespace_id: uint, group_name: tstr]
+  / [1, purl: tstr, checksum: ChecksumObject]
 ```
 
-#### `ResourceGroupReference` Structure
+Variant `0` refers to an embedded resource group. A `namespace_id` of `0` means the current logical
+namespace as defined under [Section References and Namespace Context](#section-references-and-namespace-context);
+a nonzero value selects that namespace explicitly. The selected namespace must contain exactly one
+`ResourceGroups` section, and `group_name` must match exactly one group in that section.
 
-A `ResourceGroupReference` identifies a resource group to be placed on the class path, module path,
-or agent list.
+Variant `1` refers to a package that the launcher resolves and downloads without resolving transitive
+dependencies. `purl` must be a canonical Package URL identifying one concrete package version and must
+not use a `vers` qualifier. Maven artifacts should use `pkg:maven`; a non-default Maven repository is
+specified with the `repository_url` qualifier. The checksum verifies the downloaded package and is
+part of the Janex trust policy rather than a PURL `checksum` qualifier. Examples include:
 
-It is either a reference to a resource group embedded in the Janex file itself or a reference
-to an external package that is resolved and downloaded at launch time.
+- `pkg:maven/org.slf4j/slf4j-api@2.0.9`
+- `pkg:maven/org.apache.xmlgraphics/batik-anim@1.9.1?type=pom`
+- `pkg:maven/net.sf.jacob-projec/jacob@1.14.3?classifier=x64&type=dll`
 
-```rust
-enum ResourceGroupReference {
-    /// A reference to a resource group embedded in this Janex file.
-    Local {
-        /// The reference type tag for this variant.
-        ref_type: u32, // 0x00434f4c ("LOC\0")
+#### `JavaAgentObject`
 
-        /// The name of the local resource group, matching the `name` field of a `ResourceGroup`
-        /// declared in the `ResourceGroups` section.
-        group_name: String,
-    },
-
-    /// A reference to a package hosted in a remote repository.
-    ///
-    /// The package is not embedded in the Janex file. The Janex Launcher resolves and downloads
-    /// it at launch time (if not already present in a local cache) before starting the JVM.
-    ///
-    /// At runtime, only the specified package is downloaded, and dependencies are not resolved.
-    /// If this package depends on other packages, those dependencies should also be recorded.
-    Purl {
-        /// The reference type tag for this variant.
-        ref_type: u32, // 0x4c525550 ("PURL")
-
-        /// The canonical Package URL of the remote package.
-        ///
-        /// Maven artifacts should use the `pkg:maven` type. A runtime dependency must identify
-        /// a single package version, so the PURL must include a concrete version and must not use
-        /// a `vers` qualifier. For non-default Maven repositories, use the `repository_url`
-        /// qualifier in the PURL.
-        ///
-        /// Examples:
-        ///
-        /// - `pkg:maven/org.slf4j/slf4j-api@2.0.9`
-        /// - `pkg:maven/org.apache.xmlgraphics/batik-anim@1.9.1?type=pom`
-        /// - `pkg:maven/net.sf.jacob-projec/jacob@1.14.3?classifier=x64&type=dll`
-        purl: String,
-
-        /// The expected checksum of the downloaded package, used to verify the integrity of the download.
-        ///
-        /// This checksum is part of Janex's trust policy and should not be replaced by a PURL
-        /// `checksum` qualifier.
-        checksum: Checksum,
-    }
-}
+```cbor
+JavaAgentObject = [reference: ResourceGroupReferenceObject, option: tstr]
 ```
 
-#### `JavaAgent` Structure
-
-`JavaAgent` represents a Java Agent JAR and its option.
-
-```rust
-struct JavaAgent {
-    /// The resource group reference for the Java agent JAR.
-    reference: ResourceGroupReference,
-    
-    /// The agent option string passed to the JVM via `-javaagent`.
-    option: String,
-}
-```
+The array must contain exactly two elements. An empty `option` means that no agent option is supplied.
 
 ### `ResourceGroups` Section
 
-`ResourceGroups` contains all embedded resource groups in the Janex file. 
+`ResourceGroups` contains embedded resource groups. Each namespace may contain at most one
+`ResourceGroups` section, whose section ID must be `0`.
 
-Each resource group is a logical container of related files, typically corresponding to a single JAR or module from the original Java project.
+Each resource group is a logical container of related files, typically corresponding to a single JAR
+or module from the original Java project. Group names must be unique within the section.
 
 ```rust
 struct ResourceGroupsSection {
@@ -938,14 +880,13 @@ struct ResourceGroup {
     /// Always `0x47534552` ("RESG").
     magic_number: u32, // 0x47534552 ("RESG")
 
-    /// The unique name of this resource group within the `ResourceGroups` entry.
-    /// 
-    /// This name is referenced by `ResourceGroupReference::Local` in the launcher configuration
-    /// to add this group to the class path, module path, or agent list.
+    /// The unique name of this resource group within the `ResourceGroups` section.
+    ///
+    /// This name is referenced by local `ResourceGroupReferenceObject` values.
     name: String,
 
-    /// Currently, all fields will be skipped. Reserved for future use.
-    fields: Vec<TaggedPayload<u32>>, 
+    /// One deterministic CBOR `ResourceGroupMetadataObject`.
+    metadata: CborObject,
 
     /// The number of `Resource` entries stored in this group.
     resources_count: vuint,
@@ -956,6 +897,20 @@ struct ResourceGroup {
     resources: BlobRef<[Resource; resources_count]>
 }
 ```
+
+The resource-group metadata is a text-keyed map:
+
+```cbor
+ResourceGroupMetadataObject = {
+    * metadata_name: metadata_value,
+}
+```
+
+Metadata names follow the text-key namespace rules in
+[Deterministic CBOR Objects](#deterministic-cbor-objects). Unknown entries have no effect on resource
+decoding and may be ignored. The empty map is valid and is the canonical representation of no group
+metadata; unlike an optional map field in a surrounding CBOR object, this object is required by the
+binary `ResourceGroup` structure.
 
 #### `Resource`
 
@@ -1142,9 +1097,9 @@ the following modifications:
         }
         ```
 
-The input to the `ClassFile` transform must be a valid Java class file. A Janex file containing a
-`ClassFile` transform must contain exactly one `StringPool` section, and reversing the transform uses
-that string pool. The `properties` field of `CLASSFILE` is currently empty.
+The input to the `ClassFile` transform must be a valid Java class file. The current logical namespace
+of a `ClassFile` transform must contain exactly one `StringPool` section, and reversing the transform
+uses that string pool. The `properties` field of `CLASSFILE` is currently empty.
 
 #### `ResourcePath`
 
@@ -1179,7 +1134,7 @@ enum ResourcePathContent {
 
     /// Reference-based path encoding, used when `length == 0`.
     ///
-    /// Requires a `StringPool` section to be present in the Janex file.
+    /// Requires a `StringPool` section in the current logical namespace.
     RefBody {
         /// The index of the directory path component in the `StringPool`
         /// (e.g., the index for `"com/example"`).
@@ -1305,8 +1260,9 @@ enum ResourceField {
 
 A shared string pool used by the class file transform and `RefBody` resource paths.
 
-Each Janex file may contain at most one `StringPool` section.
-When present, it must appear before the `ResourceGroups` section.
+Each namespace may contain at most one `StringPool` section, whose section ID must be `0`. When
+present, it must appear before the `ResourceGroups` section in the same namespace. A `ClassFile`
+transform or `RefBody` path resolves indices against the `StringPool` in its current logical namespace.
 
 ```rust
 struct StringPoolSection {
@@ -1338,10 +1294,10 @@ string-pool data, file contents, or extension-defined data. Object semantics are
 references and are not part of the blob-pool layout.
 
 A Janex file may contain any number of `BlobPool` sections, including none when the file contains no
-`BlobRef`. Each blob pool is identified by the `id` of its corresponding `SectionInfo`. Blob-pool IDs
-must be unique within the `BlobPool` section type, as required for all section IDs, and carry no
-semantic meaning. Readers must not assume that a particular ID, physical position, or creation order
-identifies a particular kind of data.
+`BlobRef`. Each blob pool is identified by the namespace and `id` of its corresponding
+`SectionInfoObject`. Blob-pool IDs must be unique within their namespace and section type, as required
+for all section IDs, and carry no semantic meaning. Readers must not assume that a particular ID,
+physical position, or creation order identifies a particular kind of data.
 
 ```rust
 struct BlobPoolSection {
@@ -1407,29 +1363,30 @@ The `properties` field of `ZSTD` is currently empty.
 
 #### Blob Table
 
-The length of `bytes` is `SectionInfo.length - 8`; therefore, a `BlobPool` section must have a length
-of at least 8 bytes. The corresponding `SectionInfo.options` must contain exactly one
-`BlobPoolIndex` option:
+The length of `bytes` is `SectionInfoObject.length - 8`; therefore, a `BlobPool` section must have a
+length of at least 8 bytes. Key `5` (`metadata`) of the corresponding `SectionInfoObject` is required
+and must be the following deterministic CBOR map:
 
-```rust
-#[repr(TaggedPayload<u32>)]
-struct BlobPoolIndex {
-    option_type: u32, // 0x5844_4942 ("BIDX")
-
-    /// The number of bytes in this option payload.
-    payload_bytes: vuint,
-
-    /// The byte offset of the stored blob table relative to the first byte of
-    /// `BlobPoolSection.bytes`.
-    offset: vuint,
-
-    /// The encoding metadata for the stored blob table.
-    encoding: BlobEncoding,
-
-    /// The checksum of the decoded `BlobTable` representation.
-    checksum: Checksum,
+```cbor
+BlobPoolMetadataObject = {
+    0: table_offset,      // uint
+    1: table_encoding,    // BlobEncodingObject
+    2: table_checksum,    // ChecksumObject
 }
 
+BlobEncodingObject = [stored_size: uint, filters: [BlobFilterObject, ...]]
+BlobFilterObject = [input_size: uint, method: uint, properties: bstr]
+```
+
+Keys `0` through `2` are required. No other key is currently defined. `table_offset`, `stored_size`,
+and each `input_size` must fit in `u64`; `method` must fit in `u8`. `BlobEncodingObject` must contain
+exactly two elements, and each `BlobFilterObject` must contain exactly three. The `filters` array may
+be empty, uses encoding order, and has the same decoding and size semantics as binary `BlobEncoding`.
+A reader must reject a blob pool whose table encoding uses an unsupported filter. This CBOR
+representation is used only to locate and decode the bootstrap blob table; each ordinary blob retains
+the compact binary metadata below.
+
+```rust
 struct BlobTable {
     /// Blob metadata in blob-index order.
     blobs: Vec<BlobInfo>,
@@ -1449,10 +1406,11 @@ struct BlobInfo {
 ```
 
 The stored blob table occupies the half-open range
-`[BlobPoolIndex.offset, BlobPoolIndex.offset + BlobPoolIndex.encoding.stored_size)`. Reversing its
-filter chain must produce a valid `BlobTable` and, unless the checksum algorithm is `NONE`, the decoded
-representation must match `BlobPoolIndex.checksum`. Blob-table filters must be self-contained and must
-not depend on a `BlobRef` or other external data because the table is bootstrap metadata.
+`[BlobPoolMetadataObject.table_offset, BlobPoolMetadataObject.table_offset +
+BlobPoolMetadataObject.table_encoding.stored_size)`. Reversing its filter chain must produce a valid
+`BlobTable` and, unless the checksum algorithm is `NONE`, the decoded representation must match
+`BlobPoolMetadataObject.table_checksum`. Blob-table filters must be self-contained and must not depend
+on a `BlobRef` or other external data because the table is bootstrap metadata.
 
 Each stored blob occupies the half-open range
 `[BlobInfo.offset, BlobInfo.offset + BlobInfo.encoding.stored_size)`. Readers must reverse its filters
@@ -1470,19 +1428,18 @@ and has no separate binary representation in `BlobRef`:
 
 ```rust
 struct BlobRef<T> {
-    /// The ID of the referenced `BlobPool` section.
-    ///
-    /// This value must match the `SectionInfo.id` of exactly one `BlobPool` section.
-    blob_pool_id: vuint,
+    /// The namespace and ID of the referenced `BlobPool` section.
+    blob_pool: SectionRef<BlobPoolSection>,
 
     /// The zero-based index of the blob in the referenced blob pool's `BlobTable`.
     blob_index: vuint,
 }
 ```
 
-The selected `BlobInfo` supplies the location and encoding metadata of the stored representation.
-The `blob_index` must be less than the number of entries in the selected `BlobTable`. After decoding,
-the complete result must be a valid encoding of `T`. Multiple references may identify the same blob.
+The `blob_pool` reference must resolve to exactly one `BlobPool` section. The selected `BlobInfo`
+supplies the location and encoding metadata of the stored representation. The `blob_index` must be
+less than the number of entries in the selected `BlobTable`. After decoding, the complete result must
+be a valid encoding of `T`. Multiple references may identify the same blob.
 
 `BlobSlice` identifies a non-empty range in the decoded representation of one blob:
 
