@@ -112,14 +112,8 @@ struct Sized<T> {
 }
 ```
 
-`byte_size` counts only the encoded bytes of `value`; it does not include its own ULEB128 encoding.
-The encoding of `T` is otherwise unchanged and includes any lengths intrinsic to `T`. A reader must
-parse `value` within a bounded region of exactly `byte_size` bytes and reject premature end, overrun,
-or unconsumed trailing bytes. `Sized<T>` adds no alignment or padding and does not imply that a reader
-must allocate the complete value in memory.
-
-A zero `byte_size` is valid only when `T` has a valid zero-byte encoding. No CBOR data item has such an
-encoding, so every `Sized<CborValue>` and its more specific aliases must have a nonzero `byte_size`.
+`byte_size` counts only the encoded bytes of `value`. The value must occupy exactly that many bytes;
+`Sized<T>` adds no alignment or padding.
 
 ### String
 
@@ -164,19 +158,12 @@ struct MyStruct {
 }
 ```
 
-### Deterministic CBOR Values
+### CBOR
 
-Janex uses [CBOR](https://www.rfc-editor.org/rfc/rfc8949.html) for extensible metadata structures that
-explicitly declare a CBOR representation.
+Janex uses [CBOR](https://www.rfc-editor.org/rfc/rfc8949.html) for extensible metadata. Schemas are
+written in [CDDL](https://www.rfc-editor.org/rfc/rfc8610.html).
 
-CBOR schemas in this document are written in
-[CDDL](https://www.rfc-editor.org/rfc/rfc8610.html). Code blocks marked `cddl` contain schema fragments
-and may reference rules defined in another fragment. Prose requirements remain normative for
-constraints that the CDDL fragments do not express.
-
-The following non-generic aliases describe bare CBOR encodings at their current position. They do not
-add a Janex `vuint` length prefix. The more specific aliases restrict the top-level CBOR data item to
-the corresponding CDDL type:
+The following non-generic aliases represent bare CBOR values without a Janex length prefix:
 
 ```rust
 /// Exactly one deterministic CBOR data item permitted by the applicable schema.
@@ -192,48 +179,12 @@ type CborMap = CborValue;   // map
 type CborNull = CborValue;  // null
 ```
 
-The aliases identify wire-level CBOR categories rather than in-memory collection types. In
-particular, `CborArray` and `CborMap` are not generic: their element, key, and value schemas are defined
-by the CDDL rule named at each use site. `CborValue` does not permit every value supported by RFC 8949;
-the applicable CDDL and prose still determine the allowed value set.
+The aliases describe the top-level CBOR type; their contents are defined by the CDDL schema at each use
+site. A bare value is used inside CBOR or when an enclosing structure already supplies its byte
+boundary. Other binary fields use `Sized<CborValue>` or a more specific alias.
 
-Each CBOR use site must specify exactly one of the following framing forms:
-
-- A CBOR value embedded in another CBOR value is bare. CBOR array, map, byte-string, and text-string
-  lengths provide their own framing; no Janex `Sized<T>` wrapper is added inside the enclosing CBOR.
-- A bare CBOR value may also occupy an entire region whose byte boundary is supplied by the enclosing
-  structure, such as the bytes remaining in a section. It must consume that complete region.
-- A CBOR value embedded in a Janex binary structure uses `Sized<CborValue>` or a more specific alias
-  unless its schema explicitly defines another unambiguous boundary. This permits bounded parsing and
-  constant-time skipping without recursively scanning the CBOR value.
-
-A field must not accept both bare and byte-sized forms. For example, a bare empty map is the single
-byte `0xA0`, while a `Sized<CborMap>` containing an empty map is `0x01 0xA0`; a zero byte size does not
-represent an empty map.
-
-Every CBOR data item used by Janex, whether bare or wrapped in `Sized<T>`, must satisfy the Core
-Deterministic Encoding Requirements in RFC 8949 Section 4.2.1, including preferred serialization,
-definite lengths, and deterministic map-key ordering. A `Sized<CborValue>` must contain exactly one
-complete CBOR data item in its bounded `value` region. Readers must reject:
-
-- non-shortest integer, length, or tag encodings;
-- indefinite-length items;
-- duplicate map keys;
-- invalid UTF-8 text strings;
-- trailing bytes after the first data item within a `Sized<CborValue>` or another explicitly delimited
-  CBOR payload; and
-- an item that does not match the schema required at that location.
-
-Current Janex CBOR schemas use unsigned integers, signed integers, byte strings, text strings, arrays,
-maps, booleans, and explicitly permitted `null` values. Floating-point values, CBOR `undefined`,
-and other simple values are invalid unless a field schema explicitly permits them. CBOR tags,
-including bignum tags, are also invalid unless explicitly permitted by the field schema. Unless a
-field schema defines another range, unsigned integers must fit in `u64` and signed integers must fit
-in `i64`. Integers inside CBOR use CBOR's own deterministic integer representation, not `vuint` or
-Janex's little-endian fixed integer representation.
-
-Readers must apply implementation limits to encoded size, collection length, text and byte-string
-length, and nesting depth before allocating resources.
+All CBOR values must follow the Core Deterministic Encoding Requirements in RFC 8949 Section 4.2.1 and
+match their applicable schema. A `Sized<CborValue>` contains exactly one complete CBOR item.
 
 ### `Checksum`
 
@@ -788,9 +739,7 @@ struct AttributesSection {
 }
 ```
 
-`attributes` is a bare `CborMap`: it has no Janex byte-size prefix and must occupy exactly the bytes
-remaining in the section after `magic_number`. The map must therefore consume
-`SectionInfoObject.length - 8` bytes with no trailing data, and the section length must be at least 9.
+`attributes` is a bare `CborMap` occupying the remainder of the section.
 
 Each Janex file may contain at most one `Attributes` section, whose section ID must be `0`.
 Attributes are descriptive metadata unless another part of this specification explicitly assigns a
@@ -827,9 +776,7 @@ struct RootConfigGroupSection {
 }
 ```
 
-`root_group` is a bare `CborMap`: it has no Janex byte-size prefix and must occupy exactly the bytes
-remaining in the section after `magic_number`. The map must therefore consume
-`SectionInfoObject.length - 8` bytes with no trailing data, and the section length must be at least 9.
+`root_group` is a bare `CborMap` occupying the remainder of the section.
 
 #### `ConfigGroupObject` Map
 
@@ -1203,9 +1150,7 @@ ContentTransformPropertiesObject = { * uint => any }
 ClassFileTransformPropertiesObject = {}
 ```
 
-The schema of `properties.value` is selected by `method`. The outer `Sized<T>` boundary permits a
-reader to skip the map without recursively scanning it, although an unsupported transform still
-prevents reconstruction of the containing `Content<T>` value.
+The schema of `properties.value` is selected by `method`.
 
 As with blob filters, transforms are stored in encoding order and reversed by readers. The byte
 sequence obtained from `source` is passed through the transforms from last to first. Reversing each
@@ -1215,10 +1160,9 @@ the encoded representation of `T`. Otherwise, the logical encoded size is the `i
 first transform.
 
 Content transforms operate after blob decoding and slice concatenation. They are properties of a
-logical `Content<T>` value, not of a physical blob. Each transform method must define the logical types
-to which it may be applied, and readers must reject a transform that is unsupported or incompatible
-with `T`. The byte-size boundary of `properties` permits readers to skip the map and continue parsing
-subsequent metadata, but does not permit reconstruction of that `Content<T>` value.
+logical `Content<T>` value, not of a physical blob. Each transform method defines the logical types to
+which it may be applied. A reader must reject a transform that is unsupported or incompatible with
+`T`.
 
 The only currently defined transform, `CLASSFILE`, is valid only for `Content<[u8]>` belonging to a
 regular-file resource. Consequently, the transform arrays of `ResourceGroup.resources` and
@@ -1375,9 +1319,7 @@ enum BlobFilterId {
 }
 ```
 
-A reader must reject a blob that uses an unsupported filter because it cannot reconstruct the decoded
-representation. The byte-size boundary of `properties` still permits readers to skip an unsupported
-filter's property map and continue parsing subsequent metadata.
+A reader must reject a blob that uses an unsupported filter.
 
 The `properties.value` map of `ZSTD` must be empty.
 
@@ -1403,10 +1345,9 @@ BlobFilterPropertiesObject = { * uint => any }
 
 Keys `0` through `2` are required. `table_offset`, `stored_size`, and each `input_size` must fit in
 `u64`; `method` must fit in `u8`. `BlobEncodingObject` must contain exactly two elements, and each
-`BlobFilterObject` must contain exactly three. Because `BlobFilterObject` is already embedded in CBOR,
-its `properties` map is bare rather than wrapped in `Sized<T>`. For `ZSTD`, this map must be empty. The
-`filters` array may be empty, uses encoding order, and has the same decoding and size semantics as
-binary `BlobEncoding`. `extensions`, when present,
+`BlobFilterObject` must contain exactly three. For `ZSTD`, `properties` must be empty. The `filters`
+array may be empty, uses encoding order, and has the same decoding and size semantics as binary
+`BlobEncoding`. `extensions`, when present,
 follows the text-key naming rules in
 [Metadata Evolution and Extensions](#metadata-evolution-and-extensions). An empty extension map is
 valid, although writers should omit it. A reader must reject a blob pool whose table encoding uses an
