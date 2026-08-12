@@ -537,8 +537,18 @@ object contributes as follows:
 
 ```cddl
 JavaPathEntryObject =
-    [embedded: 0, resource_groups: SectionRef, group_name: tstr]
-  / [remote: 1, purl: tstr, checksum: ChecksumObject]
+    {
+        0: 0,                    ; embedded
+        1: SectionRef,           ; resource_groups
+        2: tstr,                 ; group_name
+        * uint => any,
+    }
+  / {
+        0: 1,                    ; remote
+        1: tstr,                 ; purl
+        2: ChecksumObject,       ; checksum
+        * uint => any,
+    }
 ```
 
 Variant `0` selects an embedded resource group. Variant `1` identifies one concrete package version
@@ -549,7 +559,11 @@ repository with `repository_url`.
 ##### `JavaAgentObject`
 
 ```cddl
-JavaAgentObject = [reference: JavaPathEntryObject, option: tstr]
+JavaAgentObject = {
+    0: JavaPathEntryObject,      ; reference
+    1: tstr,                     ; option
+    * uint => any,
+}
 ```
 
 An empty `option` means that no agent option is supplied.
