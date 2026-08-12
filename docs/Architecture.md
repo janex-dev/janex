@@ -149,7 +149,8 @@ Application Service 负责：
 
 应用启动只消费已安装结果或显式指定的本地 artifact，不求值项目构建配置，也不加载 build plugin。
 
-`.janex` 是 Application Service 可消费的一种 application bundle。Application Service 通过格式适配器调用 `janex-format`，而不是把文件格式模型扩散到整个程序。
+`.janex` 是通用容器。Application Service 只消费带有受支持应用描述符的容器；Java 类库等其他用途由相应领域解释自己的描述符。各领域通过格式适配器调用
+`janex-format`，不把文件格式模型扩散到整个程序。
 
 ### Dependency Service
 

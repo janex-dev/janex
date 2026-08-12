@@ -4,6 +4,9 @@ This document is a draft of the Janex command-line interface.
 
 The file format itself is specified in `docs/spec/FileFormat.md`. This document only describes the user-facing CLI behavior.
 
+Application commands require a supported application descriptor. A generic Janex container or a
+library-only container is not directly executable.
+
 ## Command Design
 
 The CLI should separate software acquisition from software execution:
@@ -97,9 +100,9 @@ The `run` subcommand is responsible for execution, not software acquisition.
 At a high level, the command should:
 
 1. Locate the installed application or open the local Janex file.
-2. Read the launcher metadata from the selected target.
+2. Select a `JavaApplicationDescriptor` from the target.
 3. Detect the current platform and available Java runtimes.
-4. Evaluate the root configuration condition to select the best runtime.
+4. Evaluate its launch conditions to select the best runtime.
 5. Build the final JVM invocation, including module path, class path, Java agents, and JVM options.
 6. Start the target application and forward its exit code.
 
@@ -496,7 +499,7 @@ When a command needs a Java runtime, Janex should resolve it in the following or
 4. Compatible managed runtime installed by `janex java install`.
 5. Compatible external runtime discovered from the host system.
 
-`janex run` must still evaluate the root configuration condition from the Janex file. If the selected runtime is
+`janex run` must still evaluate the selected Java application descriptor. If the selected runtime is
 incompatible, it should continue searching lower-precedence candidates unless the user provided an explicit override.
 
 ### Java Indexes

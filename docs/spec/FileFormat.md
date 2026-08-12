@@ -1,11 +1,8 @@
 # Janex File Format
 
-Janex is a sectioned container format for packaging Java applications. It supports isolated resource
-groups, the Java module system, compressed and shared content, remote dependencies, embedded launch
-configuration, conditional runtime selection, and optional data before or after the Janex container.
-
-The Janex Launcher selects a Java runtime and starts the application. Janex Boot provides the class
-loader that reads classes and resources from the container.
+Janex is a sectioned, multi-root container format. Its core stores resources, shared content, metadata,
+and verification information. Optional descriptor sections define uses such as Java applications,
+Java libraries, or executables for other runtimes.
 
 ## Data Types
 
@@ -174,8 +171,8 @@ The Janex container has the following layout:
 struct JanexFile {
     /// The magic number identifying this as a Janex file.
     ///
-    /// Always `0x5050_4158_454e_414a` ("JANEXAPP").
-    magic_number: u64, // 0x50504158454e414a  ("JANEXAPP")
+    /// Always `0x544d_4658_454e_414a` ("JANEXFMT").
+    magic_number: u64, // 0x544d_4658_454e_414a ("JANEXFMT")
 
     /// The sections of the Janex file.
     sections: [Section; ...],
@@ -311,7 +308,9 @@ enum SectionType {
     
     BlobPool = 0x4c4f_4f50_424f_4c42, // "BLOBPOOL"
     
-    RootConfigGroup = 0x5055_4f52_4747_4643, // "CFGGROUP"
+    JavaApplicationDescriptor = 0x2e50_5041_4156_414a, // "JAVAAPP."
+
+    JavaLibraryDescriptor = 0x2e42_494c_4156_414a, // "JAVALIB."
 
     ResourceGroups = 0x0053_5052_4753_4552, // "RESGRPS\0"
 
@@ -497,77 +496,95 @@ AttributesObject = { * NonemptyText => any }
 Attribute names follow the extension naming rules. Unknown attributes may be ignored. An empty map is
 valid, though writers should omit the section in that case.
 
-### `RootConfigGroup` Section
+### Descriptor Sections
 
-Each Janex file may contain at most one `RootConfigGroup` section, whose section ID must be `0`.
+Descriptor sections give meaning to container contents but do not affect core decoding. A file may
+contain any number, identified by section type and ID. A file without one is a plain container. Other
+descriptor types may be defined independently. Descriptors may share the same resources and blobs.
+
+```cddl
+ResourceGroupRefObject = [resource_groups: SectionRef, group_name: tstr]
+```
+
+The reference selects one named group from a `ResourceGroups` section.
+
+#### `JavaApplicationDescriptor` Section
 
 ```rust
-struct RootConfigGroupSection {
-    /// The magic number identifying the `RootConfigGroup` section.
-    ///
-    /// Always `0x5055_4f52_4747_4643` ("CFGGROUP").
-    magic_number: u64, // 0x5055_4f52_4747_4643 "CFGGROUP"
-
-    /// One deterministic CBOR `ConfigGroupObject`.
-    root_group: CborMap, // ConfigGroupObject
+struct JavaApplicationDescriptorSection {
+    magic_number: u64, // 0x2e50_5041_4156_414a ("JAVAAPP.")
+    configuration: CborMap, // JavaLaunchConfigObject
 }
 ```
 
-`root_group` occupies the remainder of the section.
+`configuration` occupies the remainder of the section.
 
-#### `ConfigGroupObject` Map
+##### `JavaLaunchConfigObject`
 
 ```cddl
-ConfigGroupObject = {
+JavaLaunchConfigObject = {
     ? 0: tstr,                                  ; condition
     ? 1: (tstr / null),                         ; main_class
     ? 2: (tstr / null),                         ; main_module
-    ? 3: ([* ResourceGroupReferenceObject] / null), ; module_path
-    ? 4: ([* ResourceGroupReferenceObject] / null), ; class_path
-    ? 5: ([* JavaAgentObject] / null),          ; agents
+    ? 3: ([* JavaPathEntryObject] / null),       ; module_path
+    ? 4: ([* JavaPathEntryObject] / null),       ; class_path
+    ? 5: ([* JavaAgentObject] / null),           ; agents
     ? 6: ([* tstr] / null),                     ; jvm_options
-    ? 7: [* ConfigGroupObject],                 ; subgroups
+    ? 7: [* JavaLaunchConfigObject],             ; overlays
     * uint => any,
 }
 ```
 
-An omitted `condition` is unconditional. Otherwise, it is a CEL expression described in
-[Conditions](#conditions).
+An omitted `condition` is unconditional. Otherwise, it is described in
+[Java Application Conditions](#java-application-conditions).
 
-The launcher visits the root and its `subgroups` in depth-first pre-order. Each subgroup is evaluated
-independently. For a group whose condition matches, the configuration keys are applied as follows:
+The launcher visits the root configuration and its `overlays` in depth-first pre-order. Each matching
+object contributes as follows:
 
-- a missing key makes no contribution;
-- `main_class` and `main_module` replace the value previously selected, while `null` clears it;
-- an array in `module_path`, `class_path`, `agents`, or `jvm_options` appends its elements in array
-  order, while `null` clears all elements accumulated for that key; and
-- an empty array is valid and appends nothing.
+- missing keys make no contribution;
+- `main_class` and `main_module` replace the current value, while `null` clears it;
+- arrays append to `module_path`, `class_path`, `agents`, or `jvm_options`, while `null` clears that
+  list; and
+- `overlays` preserves array order and must not be `null`.
 
-`subgroups` preserves array order and must not be `null`.
-
-#### `ResourceGroupReferenceObject`
-
-A resource-group reference is one of these CBOR arrays:
+##### `JavaPathEntryObject`
 
 ```cddl
-ResourceGroupReferenceObject =
-    [local: 0, resource_groups: SectionRef, group_name: tstr]
+JavaPathEntryObject =
+    [embedded: 0, resource_groups: SectionRef, group_name: tstr]
   / [remote: 1, purl: tstr, checksum: ChecksumObject]
 ```
 
-Variant `0` selects one named group from the referenced `ResourceGroups` section.
+Variant `0` selects an embedded resource group. Variant `1` identifies one concrete package version
+by canonical Package URL. It is downloaded without transitive dependency resolution and verified by
+`checksum`. A `vers` qualifier is not allowed; Maven artifacts use `pkg:maven` and may select a
+repository with `repository_url`.
 
-Variant `1` identifies one concrete package version by canonical Package URL. The launcher downloads
-it without resolving transitive dependencies and verifies `checksum`. A `vers` qualifier is not
-allowed. Maven artifacts use `pkg:maven`; `repository_url` selects a non-default repository.
-
-#### `JavaAgentObject`
+##### `JavaAgentObject`
 
 ```cddl
-JavaAgentObject = [reference: ResourceGroupReferenceObject, option: tstr]
+JavaAgentObject = [reference: JavaPathEntryObject, option: tstr]
 ```
 
 An empty `option` means that no agent option is supplied.
+
+#### `JavaLibraryDescriptor` Section
+
+```rust
+struct JavaLibraryDescriptorSection {
+    magic_number: u64, // 0x2e42_494c_4156_414a ("JAVALIB.")
+    descriptor: CborMap, // JavaLibraryDescriptorObject
+}
+```
+
+```cddl
+JavaLibraryDescriptorObject = {
+    0: [+ ResourceGroupRefObject],    ; roots
+    * uint => any,
+}
+```
+
+`descriptor` occupies the remainder of the section. Roots are searched in array order.
 
 ### `ResourceGroups` Section
 
@@ -610,7 +627,7 @@ struct ResourceGroup {
 
     /// The unique name of this resource group within the `ResourceGroups` section.
     ///
-    /// This name is referenced by local `ResourceGroupReferenceObject` values.
+    /// This name is referenced by `ResourceGroupRefObject` and embedded `JavaPathEntryObject` values.
     name: String,
 
     /// One deterministic CBOR `ResourceGroupMetadataObject`.
@@ -789,7 +806,7 @@ struct ContentTransform {
 
 #[repr(u8)]
 enum ContentTransformId {
-    /// A class-file-aware transform using the shared `StringPool`.
+    /// A Java class-file transform using the shared `StringPool`.
     CLASSFILE = 1,
 }
 ```
@@ -808,7 +825,7 @@ An empty transform array means the source already encodes `T`. Unsupported metho
 `CLASSFILE` is valid only for regular-file `Content<[u8]>`. The transform arrays of
 `ResourceDirectory.entries` and `StringPoolSection.data` must therefore be empty.
 
-#### Class File Transform
+#### Java Class File Transform
 
 The class-file transform moves selected constant-pool strings into a shared `StringPool`.
 
@@ -1001,17 +1018,18 @@ Blob distribution is writer policy; readers must support any valid distribution.
 structural data and file content for locality or incremental updates. Content dependencies must be
 finite and acyclic.
 
-## Conditions
+## Java Application Conditions
 
-Conditions are [Common Expression Language (CEL)](https://cel.dev/overview/cel-overview) expressions
-used to select Java runtimes and environment-specific configuration.
+`JavaLaunchConfigObject.condition` is a
+[Common Expression Language (CEL)](https://cel.dev/overview/cel-overview) expression used for runtime
+and platform selection.
 
 A condition expression must evaluate to either `bool` or `int`:
 
 - A `bool` result matches when `true`.
 - If it evaluates to `int`:
-  - for a root group, the value is the runtime priority;
-  - for a subgroup, any value matches.
+  - for the descriptor's root configuration, the value is the runtime priority;
+  - for an overlay, any value matches.
 
 ### Environment
 
