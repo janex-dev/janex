@@ -137,8 +137,6 @@ Checksum algorithms:
 ```rust
 #[repr(vuint)]
 enum ChecksumAlgorithm {
-    NONE = 0,   // 0 bytes
-    
     XXH64 = 1,  // 8 bytes
     
     SHA256 = 2, // 32 bytes
@@ -149,8 +147,8 @@ enum ChecksumAlgorithm {
 }
 ```
 
-The checksum length must match the algorithm. Unknown algorithms can be skipped but cannot satisfy a
-required validation.
+Algorithm ID `0` is reserved. The checksum length must match the algorithm. Unknown algorithms can be
+skipped but cannot satisfy a required validation.
 
 In CBOR:
 
@@ -255,7 +253,7 @@ SectionInfoObject = {
     0: uint,                         ; section_type
     1: uint,                         ; id
     2: uint,                         ; length
-    3: ChecksumObject,               ; checksum
+    ? 3: ChecksumObject,             ; checksum
     * uint => any,
 }
 ```
@@ -264,8 +262,8 @@ For sections with a magic number, `section_type` normally equals that number. `(
 be unique within the file. IDs are file-local, may be sparse, and carry no ordering or semantic
 meaning. Singleton section types use ID `0`.
 
-`length` is the exact encoded section length. `checksum` covers those bytes and must be verified unless
-its algorithm is `NONE`.
+`length` is the exact encoded section length. When present, `checksum` covers those bytes and must be
+verified.
 
 Other keys are defined by `section_type`.
 
@@ -305,14 +303,15 @@ Unknown sections may be skipped.
 #### `ExternalRegionObject`
 
 ```cddl
-ExternalRegionObject = [
-    size: uint,
-    checksum: ChecksumObject,
-]
+ExternalRegionObject = {
+    0: uint,                         ; size
+    ? 1: ChecksumObject,             ; checksum
+    * uint => any,
+}
 ```
 
-Omission leaves the region unconstrained. Otherwise, its size and checksum must match; zero size
-requires `NONE` and absence, while nonzero size requires a non-`NONE` checksum.
+Omission leaves the region unconstrained. Otherwise, `size` must match, and `checksum` must be verified
+when present. A size of zero requires the region to be absent.
 
 The caller supplies `external_tail_length`; standalone Janex uses zero. It is not inferred from the
 file. For a physical file of `physical_file_size` bytes:
@@ -351,8 +350,6 @@ enum VerificationInfo {
         payload_bytes: vuint,
 
         /// The checksum of `verification_input`.
-        ///
-        /// The algorithm must not be `NONE`.
         checksum: Checksum,
     },
 
@@ -446,8 +443,8 @@ do not affect the primary signature. Caller policy selects the required signers.
 
 Full-container authentication requires a secure checksum for every section and every nonempty external
 region, with both `external_header` and `external_tail` present. Readers must verify all of them.
-`SHA256`, `SHA512`, and `SM3` qualify; `NONE` and `XXH64` do not. An omitted external-region key places
-that region outside this scope.
+`SHA256`, `SHA512`, and `SM3` qualify; `XXH64` does not. An omitted external-region key places that
+region outside this scope.
 
 The signature binds metadata and the checksums recorded in it. It does not directly sign the
 verification payload, footer, or complete physical file representation.
@@ -911,7 +908,7 @@ BlobPoolSectionInfoFields = (
 BlobTablePageInfoObject = [
     offset: uint,
     encoding: BlobEncodingObject,
-    checksum: ChecksumObject,
+    ? checksum: ChecksumObject,
 ]
 
 BlobTablePageObject = [* BlobInfoObject]
@@ -932,10 +929,10 @@ For `blob_index`, the page index is `blob_index / page_capacity` and the index w
 order.
 
 Each page descriptor locates a stored page relative to `BlobPoolSection.bytes`. Decoding the page must
-produce one deterministic CBOR `BlobTablePageObject`. Its checksum covers those decoded CBOR bytes and
-must be verified unless the algorithm is `NONE`. Page filters must be self-contained and pages cannot
-depend on other pages or blobs. Table pages are not blobs and cannot be referenced by `BlobRef`.
-Resolving a blob requires decoding only its selected page.
+produce one deterministic CBOR `BlobTablePageObject`. When present, its checksum covers those decoded
+CBOR bytes and must be verified. Page filters must be self-contained and pages cannot depend on other
+pages or blobs. Table pages are not blobs and cannot be referenced by `BlobRef`. Resolving a blob
+requires decoding only its selected page.
 
 Each `BlobInfoObject.offset` locates a stored blob relative to `BlobPoolSection.bytes`. All page and
 blob ranges must fit in `bytes` and must not overlap. Writers may place them in any order.
