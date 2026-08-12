@@ -104,7 +104,7 @@ This document uses `#[repr(TaggedPayload<T>)]` to denote this layout.
 Janex uses [CBOR](https://www.rfc-editor.org/rfc/rfc8949.html) for extensible metadata. Schemas are
 written in [CDDL](https://www.rfc-editor.org/rfc/rfc8610.html).
 
-The following non-generic aliases represent bare CBOR values without a Janex length prefix:
+These aliases denote bare CBOR values; the CDDL schema at each use site defines their contents:
 
 ```rust
 /// Exactly one deterministic CBOR data item permitted by the applicable schema.
@@ -120,12 +120,8 @@ type CborMap = CborValue;   // map
 type CborNull = CborValue;  // null
 ```
 
-The aliases describe the top-level CBOR type; their contents are defined by the CDDL schema at each use
-site. A bare value is used inside CBOR or when an enclosing structure already supplies its byte
-boundary. Other binary fields use `Sized<CborValue>` or a more specific alias.
-
-All CBOR values must follow the Core Deterministic Encoding Requirements in RFC 8949 Section 4.2.1 and
-match their applicable schema. A `Sized<CborValue>` contains exactly one complete CBOR item.
+All values follow RFC 8949 Section 4.2.1 Core Deterministic Encoding and their applicable schema.
+Binary fields use `Sized<CborValue>` when they need an explicit byte boundary.
 
 ### `Checksum`
 
@@ -159,7 +155,7 @@ enum ChecksumAlgorithm {
 The checksum length must match the algorithm. Unknown algorithms can be skipped but cannot satisfy a
 required validation.
 
-CBOR metadata represents the same value as a two-element array:
+In CBOR:
 
 ```cddl
 ChecksumObject = [
@@ -168,8 +164,7 @@ ChecksumObject = [
 ]
 ```
 
-The array must contain exactly two elements. `algorithm` must fit in `u16`, and `checksum` must satisfy
-the same algorithm-specific length requirements as the binary `Checksum` structure.
+The same algorithm-specific checksum lengths apply.
 
 ## Janex File Structure
 
@@ -230,8 +225,7 @@ struct FileMetadataSection {
 }
 ```
 
-`metadata.value` must contain a `FileMetadataObject`, represented by the following deterministic CBOR
-map:
+`metadata.value` is a `FileMetadataObject`:
 
 ```cddl
 FileMetadataObject = {
@@ -260,8 +254,6 @@ is valid only where the schema defines it and is distinct from an omitted key.
 
 #### `SectionInfoObject` Map
 
-Each element of `FileMetadataObject.section_table` is a deterministic CBOR map:
-
 ```cddl
 SectionInfoObject = {
     0: uint,                         ; section_type
@@ -279,8 +271,7 @@ meaning. Singleton section types use ID `0`.
 `length` is the exact encoded section length. `checksum` covers those bytes and must be verified unless
 its algorithm is `NONE`.
 
-Keys `0` through `3` are common to all sections. Other keys are defined by `section_type` and belong
-directly to the same map.
+Other keys are defined by `section_type`.
 
 #### Section References
 
@@ -334,8 +325,6 @@ Unknown sections may be skipped.
 
 #### `ExternalRegionObject`
 
-`ExternalRegionObject` describes and constrains bytes outside `JanexFile`:
-
 ```cddl
 ExternalRegionObject = [
     size: uint,
@@ -343,33 +332,21 @@ ExternalRegionObject = [
 ]
 ```
 
-An omitted `external_header` or `external_tail` key imposes no restriction on that region. A present
-key requires the declared size and checksum. A zero size requires `NONE` and explicitly requires
-absence; a nonzero size requires a non-`NONE` checksum. Readers must compare the actual size and verify
-the non-`NONE` checksum.
+Omission leaves the region unconstrained. Otherwise, its size and checksum must match; zero size
+requires `NONE` and absence, while nonzero size requires a non-`NONE` checksum.
 
-For a physical file of `physical_file_size` bytes, a reader receives `external_tail_length` from its
-caller and calculates:
+The caller supplies `external_tail_length`; standalone Janex uses zero. It is not inferred from the
+file. For a physical file of `physical_file_size` bytes:
 
 ```text
 janex_end   = physical_file_size - external_tail_length
 janex_start = janex_end - file_length
-```
-
-The caller supplies `external_tail_length`; standalone Janex uses zero. Both subtractions use checked
-arithmetic. The external header precedes `janex_start`, and the external tail starts at `janex_end`.
-Janex does not infer the tail length by scanning the file.
-
-The 24-byte footer immediately before `janex_end` locates `FileMetadataSection` through
-`metadata_length` and the container start through `file_length`.
-
-`end_mark` must match, `metadata_length` must equal the encoded `FileMetadataSection` length, and:
-
-```text
 file_length = 8 + sum(FileMetadataObject.section_table[*].length) + metadata_length
 ```
 
-The equation must be evaluated with checked arithmetic.
+All arithmetic is checked. The external header precedes `janex_start`, and the tail starts at
+`janex_end`. The 24-byte footer before `janex_end` provides `metadata_length` and `file_length`;
+`end_mark` must match, and `metadata_length` must equal the encoded `FileMetadataSection` length.
 
 #### `VerificationInfo` Structure
 
@@ -513,14 +490,12 @@ struct AttributesSection {
 `attributes` occupies the remainder of the section. A file may contain at most one `Attributes`
 section, with ID `0`. Attributes are descriptive unless their definitions assign operational semantics.
 
-The CBOR object is a text-keyed map:
-
 ```cddl
 AttributesObject = { * NonemptyText => any }
 ```
 
-Attribute names follow the extension naming rules. Unknown attributes may be ignored. Writers should
-omit an empty section, but readers must accept its empty map.
+Attribute names follow the extension naming rules. Unknown attributes may be ignored. An empty map is
+valid, though writers should omit the section in that case.
 
 ### `RootConfigGroup` Section
 
@@ -624,8 +599,7 @@ struct ResourceGroupsSection {
 
 #### `ResourceGroup`
 
-A `ResourceGroup` is a named collection of resources, typically corresponding to a JAR or module. Its
-directories form a flat list; paths carry the hierarchy.
+Directories form a flat list; paths carry the hierarchy.
 
 ```rust
 struct ResourceGroup {
@@ -647,19 +621,14 @@ struct ResourceGroup {
 }
 ```
 
-The resource-group metadata is a text-keyed map:
-
 ```cddl
 ResourceGroupMetadataObject = { * NonemptyText => any }
 ```
 
-Names follow the extension naming rules. The required map may be empty; unknown entries do not affect
-resource decoding.
+Names follow the extension naming rules. The map may be empty; unknown entries do not affect resource
+decoding.
 
 #### `ResourceDirectory`
-
-Each directory record contains its direct non-directory entries. The entry payload may be inline or
-stored in one or more blobs through `Content`.
 
 ```rust
 struct ResourceDirectory {
@@ -682,13 +651,9 @@ must not start or end with `/` or contain empty, `.` or `..` components. Directo
 and sorted by their UTF-8 bytes. Parent directories may be implicit; an empty directory or its
 metadata is preserved by an explicit record with no entries.
 
-`entries` decodes to exactly `entries_count` values and has no content transforms. Inline entry bytes
-can be skipped while scanning the directory list because their length is encoded by `ContentSource`.
+`entries.transforms` must be empty.
 
 #### `DirectoryEntry`
-
-`DirectoryEntry` represents a regular file or symbolic link directly contained by a
-`ResourceDirectory`:
 
 ```rust
 enum DirectoryEntry {
@@ -737,9 +702,6 @@ Symbolic-link targets use normalized relative `/`-separated paths and follow the
 used for non-root directory paths.
 
 #### Resource Metadata
-
-Each `ResourceDirectory` and `DirectoryEntry` contains one `Sized<CborMap>` whose value is a
-`ResourceMetadataObject`:
 
 ```cddl
 ResourceMetadataObject = {
