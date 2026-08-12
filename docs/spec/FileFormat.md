@@ -586,16 +586,18 @@ one `StringPoolData` and consume every decoded byte. The blob must be referenced
 type StringPoolIndex = vuint;
 
 struct StringPoolData {
-    /// The strings in pool-index order.
-    ///
-    /// This vector must contain at least one element, and element `0` must be an empty string.
+    /// Distinct interned strings in pool-index order.
     strings: Vec<String>,
 }
 ```
 
-Directory paths, entry names, and symbolic-link targets are `StringPoolIndex` values. Index `0` is
-the empty string and is the root directory path. A `StringPoolIndex` must select an existing
-element. All other path and name rules apply to the resolved UTF-8 strings.
+The pool is an intern table. Each string must appear at most once. A `StringPoolIndex` must select an
+existing element. Index `0` has no special meaning. The empty string appears only when something
+refers to it.
+
+Directory paths, entry names, and symbolic-link targets are `StringPoolIndex` values. The root
+directory is the record whose resolved path is empty. All other path and name rules apply to the
+resolved UTF-8 strings.
 
 `CLASSFILE` transforms in the resource root use this same pool. Strings are UTF-8. Restoring a class
 file converts selected strings to Modified UTF-8.
@@ -618,8 +620,8 @@ struct ResourceDirectory {
 }
 ```
 
-The empty path, which must be index `0`, identifies the root directory. Other directory paths are
-UTF-8, `/`-separated, and must not start or end with `/` or contain empty, `.` or `..` components.
+The empty path identifies the root directory. Other directory paths are UTF-8, `/`-separated, and
+must not start or end with `/` or contain empty, `.` or `..` components.
 Directory paths are unique and sorted by the UTF-8 bytes of the resolved strings. Parent directories
 may be implicit; an empty directory or its metadata is preserved by an explicit record with no
 entries.
