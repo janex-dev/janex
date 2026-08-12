@@ -550,11 +550,15 @@ An empty `option` means that no agent option is supplied.
 A local `JavaPathEntryObject` names one blob with a `BlobRefObject`. Decoding that blob must produce
 exactly one `ResourceRoot` and consume every decoded byte. The blob must be referenced as a complete
 blob; `BlobSlices` are invalid. The root blob may use blob filters. It must not use content
-transforms. `Content` values inside the root may refer to other blobs. Those dependencies must be
-finite and acyclic. Multiple path entries may name the same blob.
+transforms. `Content` values inside the root may refer to other blobs. The string-pool blob and
+those content blobs are dependencies of the root and must be finite and acyclic. Multiple path
+entries may name the same resource-root blob.
 
 ```rust
 struct ResourceRoot {
+    /// The string pool used by paths in this root and by `CLASSFILE` transforms in this root.
+    string_pool: BlobRef,
+
     /// One deterministic CBOR `ResourceRootMetadataObject`.
     metadata: Sized<CborMap>, // ResourceRootMetadataObject
 
@@ -567,14 +571,41 @@ struct ResourceRoot {
 ResourceRootMetadataObject = { * NonemptyText => any }
 ```
 
-The metadata map may be empty. Directories form a flat list; paths carry the hierarchy.
+The metadata map may be empty. Directories form a flat list; paths carry the hierarchy. Readers must
+resolve `string_pool` before interpreting directory paths, entry names, or symbolic-link targets.
+Multiple resource roots may name the same string-pool blob.
+
+##### String Pools
+
+A `ResourceRoot` names one string-pool blob with a `BlobRef`. Decoding that blob must produce exactly
+one `StringPoolData` and consume every decoded byte. The blob must be referenced as a complete blob;
+`BlobSlices` are invalid. The pool blob may use blob filters. It must not use content transforms.
+
+```rust
+/// A zero-based index into `StringPoolData.strings`.
+type StringPoolIndex = vuint;
+
+struct StringPoolData {
+    /// The strings in pool-index order.
+    ///
+    /// This vector must contain at least one element, and element `0` must be an empty string.
+    strings: Vec<String>,
+}
+```
+
+Directory paths, entry names, and symbolic-link targets are `StringPoolIndex` values. Index `0` is
+the empty string and is the root directory path. A `StringPoolIndex` must select an existing
+element. All other path and name rules apply to the resolved UTF-8 strings.
+
+`CLASSFILE` transforms in the resource root use this same pool. Strings are UTF-8. Restoring a class
+file converts selected strings to Modified UTF-8.
 
 ##### `ResourceDirectory`
 
 ```rust
 struct ResourceDirectory {
-    /// The directory path relative to the resource root.
-    path: String,
+    /// The directory path relative to the resource root, as an index into the root's string pool.
+    path: StringPoolIndex,
 
     /// One deterministic CBOR resource-metadata map.
     metadata: Sized<CborMap>, // ResourceMetadataObject
@@ -587,10 +618,11 @@ struct ResourceDirectory {
 }
 ```
 
-The empty path identifies the root directory. Other directory paths are UTF-8, `/`-separated, and
-must not start or end with `/` or contain empty, `.` or `..` components. Directory paths are unique
-and sorted by their UTF-8 bytes. Parent directories may be implicit; an empty directory or its
-metadata is preserved by an explicit record with no entries.
+The empty path, which must be index `0`, identifies the root directory. Other directory paths are
+UTF-8, `/`-separated, and must not start or end with `/` or contain empty, `.` or `..` components.
+Directory paths are unique and sorted by the UTF-8 bytes of the resolved strings. Parent directories
+may be implicit; an empty directory or its metadata is preserved by an explicit record with no
+entries.
 
 `entries.transforms` must be empty.
 
@@ -605,8 +637,8 @@ enum DirectoryEntry {
         /// Always `0x00534552` ("RES\0").
         resource_type: u32, // 0x00534552 ("RES\0")
 
-        /// The file name within the directory.
-        name: String,
+        /// The file name within the directory, as an index into the root's string pool.
+        name: StringPoolIndex,
 
         /// The content of this file and its logical transforms.
         content: Content<[u8]>,
@@ -622,11 +654,11 @@ enum DirectoryEntry {
         /// Always `0x4c4d5953` ("SYML").
         resource_type: u32, // 0x4c4d5953 ("SYML")
 
-        /// The symbolic-link name within the directory.
-        name: String,
+        /// The symbolic-link name within the directory, as an index into the root's string pool.
+        name: StringPoolIndex,
 
-        /// The relative target path.
-        target: String,
+        /// The relative target path, as an index into the root's string pool.
+        target: StringPoolIndex,
 
         /// One deterministic CBOR resource-metadata map.
         metadata: Sized<CborMap>, // ResourceMetadataObject
@@ -635,9 +667,9 @@ enum DirectoryEntry {
 ```
 
 Entry names are nonempty UTF-8 strings without `/` and must not be `.` or `..`. They are unique within
-their directory and sorted by their UTF-8 bytes. A full resource path is the entry name for the root
-directory, or `directory_path + "/" + entry_name` otherwise. Directory records and entries must not
-produce conflicting paths.
+their directory and sorted by the UTF-8 bytes of the resolved strings. A full resource path is the
+resolved entry name for the root directory, or `directory_path + "/" + entry_name` otherwise, using
+the resolved strings. Directory records and entries must not produce conflicting paths.
 
 Symbolic-link targets use normalized relative `/`-separated paths and follow the nonempty path rules
 used for non-root directory paths.
@@ -737,14 +769,11 @@ enum ContentTransformId {
 
 ```cddl
 ContentTransformPropertiesObject = { * uint => any }
-ClassFileTransformPropertiesObject = {
-    0: BlobRefObject,                ; string_pool
-    * uint => any,
-}
+ClassFileTransformPropertiesObject = { * uint => any }
 ```
 
-The schema of `properties.value` is selected by `method`. `string_pool` selects the blob used as the
-string pool, as defined in [String Pools](#string-pools).
+The schema of `properties.value` is selected by `method`. `CLASSFILE` currently defines no
+properties. It uses the string pool named by the containing `ResourceRoot`.
 
 Transforms are stored in encoding order and reversed from last to first after blob decoding and slice
 concatenation. Each result must match `input_size`; the final value must be a valid encoding of `T`.
@@ -772,8 +801,8 @@ It modifies the class file as follows:
         struct CONSTANT_External_Utf8 {
             tag: u8, // 0xFF
 
-            /// The index of the string in the shared `StringPool`.
-            string_pool_index: vuint,
+            /// The index of the string in the containing resource root's string pool.
+            string_pool_index: StringPoolIndex,
         }
         ```
 
@@ -783,33 +812,16 @@ It modifies the class file as follows:
         struct CONSTANT_External_String {
             tag: u8, // 0xFE
 
-            /// The index of the package name in the shared `StringPool`.
-            package_name_index: vuint,
+            /// The index of the package name in the containing resource root's string pool.
+            package_name_index: StringPoolIndex,
 
-            /// The index of the class name in the shared `StringPool`.
-            class_name_index: vuint,
+            /// The index of the class name in the containing resource root's string pool.
+            class_name_index: StringPoolIndex,
         }
         ```
 
-The input must be a valid Java class file.
-
-##### String Pools
-
-A `CLASSFILE` transform names one blob with a `BlobRefObject`. Decoding that blob must produce
-exactly one `StringPoolData` and consume every decoded byte. The blob must be referenced as a
-complete blob; `BlobSlices` are invalid. The pool blob may use blob filters. It must not use content
-transforms. Multiple transforms may name the same blob.
-
-```rust
-struct StringPoolData {
-    /// The strings in pool-index order.
-    ///
-    /// This vector must contain at least one element, and element `0` must be an empty string.
-    strings: Vec<String>,
-}
-```
-
-Strings use UTF-8 and are converted to Modified UTF-8 when restoring a class file.
+The input must be a valid Java class file. External string indices select entries in the containing
+resource root's string pool.
 
 ### `BlobPool` Section
 
