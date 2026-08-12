@@ -370,7 +370,7 @@ Concrete Adapters
 
 Concrete adapter 只在 composition root 组装。Domain Service 测试可以使用 fake capability，不依赖真实网络、用户全局目录或终端。
 
-`janex-format` 是独立的格式 codec，只负责 `.janex` 编解码、格式校验、格式级条件、checksum 和 compression。它不依赖 SDK、Application、Dependency、Script、Project、CLI、网络或全局 Store。
+`janex-format` 是独立的格式 codec，只负责 `.janex` 编解码、格式校验、格式级条件、VERS 版本范围、checksum 和 compression。它不依赖 SDK、Application、Dependency、Script、Project、CLI、网络或全局 Store。
 
 需要禁止以下反向依赖：
 

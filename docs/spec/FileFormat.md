@@ -486,7 +486,7 @@ struct JavaApplicationDescriptorSection {
 
 ```cddl
 JavaLaunchConfigObject = {
-    ? 0: tstr,                                  ; condition
+    ? 0: ConditionObject,                       ; condition
     ? 1: (tstr / null),                         ; main_class
     ? 2: (tstr / null),                         ; main_module
     ? 3: ([* JavaPathEntryObject] / null),       ; module_path
@@ -959,37 +959,112 @@ Blob distribution is writer policy; readers must support any valid distribution.
 structural data and file content for locality or incremental updates. Content dependencies must be
 finite and acyclic.
 
+## Version Ranges
+
+Janex uses the [VErsion Range Specifier (VERS)](https://www.packageurl.org/docs/vers/specification.html)
+to describe version constraints. A VERS is a URI of the form:
+
+```text
+vers:<type>/<constraint>[|<constraint>]...
+```
+
+`<type>` selects the version notation and comparison rules. Each constraint is either `*`, a bare
+version, or a comparator (`=`, `!=`, `<`, `<=`, `>`, `>=`) immediately followed by a version. The
+pipe separates constraints. It is not a boolean operator. Constraints are signposts on a version
+timeline: they are sorted in version order and define intervals as specified by VERS.
+
+A VERS in a Janex file must be in the canonical form required by VERS. Whitespace is not permitted.
+An invalid or non-canonical VERS is invalid.
+
+This document defines the `jep322` type for Java SE platform versions. Later uses, such as unresolved
+library requirements, may use other registered types such as `maven`. Remote `JavaPathEntryObject`
+values remain exact Package URLs and must not carry a `vers` qualifier.
+
+### The `jep322` Type
+
+The `jep322` type uses Java SE version strings as defined by
+[JEP 322](https://openjdk.org/jeps/322) and parsed by `java.lang.Runtime.Version`. A version has a
+non-empty numeric sequence `$FEATURE.$INTERIM.$UPDATE.$PATCH` and optional later numeric elements,
+optionally followed by a pre-release identifier, a build number, and additional build information:
+
+```text
+$VNUM(-$PRE)?(\+$BUILD)?(-$OPT)?
+$VNUM-$PRE(-$OPT)?
+$VNUM(\+-$OPT)?
+```
+
+`$VNUM` is a period-separated sequence of decimal integers without leading zeros. Trailing zero
+elements are omitted from the written `$VNUM`. `$PRE` is a pre-release identifier such as `ea`.
+`$BUILD` is a decimal build number. `$OPT` is additional build information. Examples: `17`,
+`17.0.10`, `21.0.2+13`, `21-ea+11`.
+
+The legacy `1.8.0_402` form is not a `jep322` version.
+
+Comparison uses the numeric version elements and `$PRE` only. `$BUILD` and `$OPT` are ignored, so
+`21.0.2` and `21.0.2+13` compare equal. Missing numeric elements are treated as zero, so `21`,
+`21.0`, and `21.0.0` compare equal. Numeric elements are compared from left to right.
+
+When the numeric elements are equal:
+
+- a version with no `$PRE` is greater than a version with a `$PRE`;
+- two `$PRE` values that contain only digits are compared numerically;
+- otherwise `$PRE` values are compared lexicographically by ASCII code point;
+- a numeric `$PRE` is less than a non-numeric `$PRE`.
+
+Therefore `21-ea` is less than `21`, and `>=21` does not contain `21-ea`. `>=21-ea` contains both
+`21-ea` and `21`.
+
+A candidate version satisfies a `jep322` VERS when it lies in one of the intervals defined by the
+constraint timeline, using this comparison. The VERS `type` in a Java launch condition must be
+`jep322`.
+
+```text
+vers:jep322/>=17.0.10|<18|>=21.0.2|<22
+```
+
+This range contains Java 17 starting at 17.0.10, and Java 21 starting at 21.0.2. It does not contain
+Java 18, Java 22, or `17-ea`.
+
 ## Java Application Conditions
 
-`JavaLaunchConfigObject.condition` is a
-[Common Expression Language (CEL)](https://cel.dev/overview/cel-overview) expression used for runtime
-and platform selection.
+`JavaLaunchConfigObject.condition` is a `ConditionObject`. An omitted condition, or an empty
+`ConditionObject`, is unconditional.
 
-A condition expression must evaluate to either `bool` or `int`:
-
-- A `bool` result matches when `true`.
-- If it evaluates to `int`:
-  - for the descriptor's root configuration, the value is the runtime priority;
-  - for an overlay, any value matches.
-
-### Environment
-
-The launcher exposes these variables:
-
-```rust
-// Information about a candidate Java installation.
-let java: Java = ...;
-
-// Information about the current host platform.
-let platform: Platform = ...;
+```cddl
+ConditionObject = {
+    ? 0: tstr,                                  ; java
+    ? 1: (tstr / [+ tstr]),                     ; os
+    ? 2: (tstr / [+ tstr]),                     ; arch
+    ? 3: tstr,                                  ; vendor
+    ? 4: int,                                   ; priority
+    * uint => any,
+}
 ```
+
+`java` is a canonical VERS whose type is `jep322`. `os`, `arch`, and `vendor` are exact matches
+against the normalized names defined below. A text value matches that one name. An array matches if
+the candidate equals any element. An omitted key imposes no constraint.
+
+`priority` is consulted only on the descriptor's root configuration. A greater value is preferred.
+An omitted root `priority` is `0`. A `priority` on an overlay is ignored.
+
+A condition matches a candidate Java runtime and the current host when every present constraint
+matches. An invalid `java` VERS makes the descriptor invalid; it is not treated as a non-match.
+
+The launcher considers each candidate runtime against the root condition. A candidate that does not
+match is discarded. Among remaining candidates, the launcher walks the root configuration and its
+`overlays` in depth-first pre-order and applies each overlay whose condition matches. It then selects
+the remaining candidate with the greatest root `priority`. Ties are broken by the implementation's
+runtime selection order.
+
+### Candidate and Host Attributes
 
 A candidate Java runtime is described by:
 
 ```rust
 /// Information about a Java runtime environment.
 struct Java {
-    /// The version of the Java runtime.
+    /// The JEP 322 version of the Java runtime.
     version: JavaVersion,
 
     /// The vendor of the Java runtime (e.g., `"Eclipse Adoptium"`, `"Oracle Corporation"`).
@@ -1004,7 +1079,7 @@ struct Java {
 
 /// The parsed version of a Java runtime.
 struct JavaVersion {
-    /// The full, unparsed version string (e.g., `"21.0.3+9"`).
+    /// The full JEP 322 version string (e.g., `"21.0.3+9"`).
     full: String,
 
     /// The feature release number (the first version component, e.g., `21` for Java 21).
@@ -1030,6 +1105,10 @@ struct JavaVersion {
     optional: String,
 }
 ```
+
+`ConditionObject.java` is evaluated against `Java.version.full` using the `jep322` rules.
+`ConditionObject.vendor` is compared to `Java.vendor` for exact equality. This document does not
+normalize vendor strings.
 
 The current platform is described by:
 
@@ -1070,3 +1149,7 @@ struct CPU {
     arch: String,
 }
 ```
+
+`ConditionObject.os` is compared to `Platform.os.name`. `ConditionObject.arch` is compared to
+`Platform.cpu.arch`. The normalized operating-system names are `linux`, `windows`, and `macos`. The
+normalized CPU names are `x86`, `x86-64`, and `aarch64`. Other names match only by exact equality.
