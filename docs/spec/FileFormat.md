@@ -1022,9 +1022,9 @@ An optional `-$PRE` may follow `1.8.0` or `1.8.0_$N` and is kept on the canonica
 `1.8.0-ea` becomes `8-ea` and `1.8.0_402-ea` becomes `8.0.402-ea`. Other `1.x` forms, including
 `1.8`, `1.8.0_402-b06-extra`, `1.7.0_80`, and `1.9.0`, are invalid.
 
-Alias expansion applies to versions in a `jep322` VERS and to `Java.version.full` on a candidate
-runtime. After expansion, VERS uniqueness and ordering use the canonical versions. `1.8.0_402` and
-`8.0.402` in the same VERS are therefore the same version and make the VERS invalid.
+Alias expansion applies to versions in a `jep322` VERS and to the version string reported by a
+candidate runtime. After expansion, VERS uniqueness and ordering use the canonical versions.
+`1.8.0_402` and `8.0.402` in the same VERS are therefore the same version and make the VERS invalid.
 
 Comparison uses the numeric version elements and `$PRE` only. `$BUILD` and `$OPT` are ignored, so
 `21.0.2` and `21.0.2+13` compare equal. Missing numeric elements are treated as zero, so `21`,
@@ -1073,9 +1073,15 @@ ConditionObject = {
 }
 ```
 
-`java` is a canonical VERS whose type is `jep322`. `os`, `arch`, and `vendor` are exact matches
-against the normalized names defined below. A text value matches that one name. An array matches if
-the candidate equals any element. An omitted key imposes no constraint.
+`java` is a VERS whose type is `jep322`. It is matched against the candidate runtime's version
+string, including Java 8 alias expansion. `vendor` is an exact match against the candidate runtime's
+vendor string. This document does not normalize vendor strings. `os` is matched against the host
+operating system. `arch` is matched against the host CPU. The normalized operating-system names are
+`linux`, `windows`, and `macos`. The normalized CPU names are `x86`, `x86-64`, and `aarch64`. Other
+names match only by exact equality.
+
+A text `os` or `arch` value matches that one name. An array matches if the host name equals any
+element. An omitted key imposes no constraint.
 
 `priority` is consulted only on the descriptor's root configuration. A greater value is preferred.
 An omitted root `priority` is `0`. A `priority` on an overlay is ignored.
@@ -1088,101 +1094,3 @@ match is discarded. Among remaining candidates, the launcher walks the root conf
 `overlays` in depth-first pre-order and applies each overlay whose condition matches. It then selects
 the remaining candidate with the greatest root `priority`. Ties are broken by the implementation's
 runtime selection order.
-
-### Candidate and Host Attributes
-
-A candidate Java runtime is described by:
-
-```rust
-/// Information about a Java runtime environment.
-struct Java {
-    /// The version of the Java runtime. `full` may be a JEP 322 string or a Java 8 alias.
-    version: JavaVersion,
-
-    /// The vendor of the Java runtime (e.g., `"Eclipse Adoptium"`, `"Oracle Corporation"`).
-    vendor: String,
-
-    /// The operating system for which this Java runtime was built.
-    os: OperatingSystem,
-
-    /// The CPU architecture for which this Java runtime was built (e.g., `"x86-64"`, `"aarch64"`).
-    arch: String,
-}
-
-/// The parsed version of a Java runtime.
-struct JavaVersion {
-    /// The reported version string (e.g., `"21.0.3+9"` or `"1.8.0_402"`).
-    full: String,
-
-    /// The feature release number (the first version component, e.g., `21` for Java 21).
-    feature: uint,
-
-    /// The interim release number (the second version component).
-    interim: uint,
-
-    /// The update release number (the third version component).
-    update: uint,
-
-    /// The patch release number (the fourth version component).
-    patch: uint,
-
-    /// The optional pre-release identifier (e.g., `"ea"` for early-access builds).
-    /// Empty string if not present.
-    pre: String,
-
-    /// The build number.
-    build: uint,
-
-    /// Optional additional build metadata. Empty string if not present.
-    optional: String,
-}
-```
-
-`ConditionObject.java` is evaluated against `Java.version.full` using the `jep322` rules, including
-Java 8 alias expansion.
-`ConditionObject.vendor` is compared to `Java.vendor` for exact equality. This document does not
-normalize vendor strings.
-
-The current platform is described by:
-
-```rust
-/// Information about the current host platform.
-struct Platform {
-    /// The operating system of the host machine.
-    os: OperatingSystem,
-
-    /// The CPU of the host machine.
-    cpu: CPU,
-}
-
-/// Information about an operating system.
-struct OperatingSystem {
-    /// The normalized name of the operating system (e.g., `"linux"`, `"windows"`, `"macos"`).
-    name: String,
-
-    /// The version of the operating system.
-    version: OperatingSystemVersion,
-}
-
-/// The parsed version of an operating system.
-struct OperatingSystemVersion {
-    /// The full, unparsed version string.
-    full: String,
-
-    /// The major version number.
-    major: uint,
-
-    /// The minor version number.
-    minor: uint,
-}
-
-/// Information about the host CPU.
-struct CPU {
-    /// The CPU architecture name (e.g., `"x86-64"`, `"aarch64"`, `"x86"`).
-    arch: String,
-}
-```
-
-`ConditionObject.os` is compared to `Platform.os.name`. `ConditionObject.arch` is compared to
-`Platform.cpu.arch`. The normalized operating-system names are `linux`, `windows`, and `macos`. The
-normalized CPU names are `x86`, `x86-64`, and `aarch64`. Other names match only by exact equality.
