@@ -174,8 +174,11 @@ struct JanexFile {
     /// Always `0x0000_0058_454e_414a` ("JANEX\0\0\0").
     magic_number: u64, // 0x0000_0058_454e_414a ("JANEX\0\0\0")
 
-    /// The sections of the Janex file.
+    /// The ordinary sections of the Janex file.
     sections: [Section; ...],
+
+    /// The file-level metadata at the end of the Janex file.
+    file_metadata: FileMetadata,
 }
 ```
 
@@ -188,11 +191,11 @@ The complete physical file may contain data outside `JanexFile`:
 `FileMetadataObject` may constrain the external regions. They are not Janex sections and do not appear
 in the section table.
 
-### `FileMetadata` Section
+### `FileMetadata`
 
 ```rust
-struct FileMetadataSection {
-    /// The magic number identifying the `FileMetadata` section.
+struct FileMetadata {
+    /// The magic number identifying the file metadata.
     magic_number: u64, // 0x4154_4144_4154_454d ("METADATA")
 
     /// The format major version, currently `0`. Unsupported values are invalid.
@@ -214,7 +217,7 @@ struct FileMetadataSection {
     /// Always `0x444e_4558_454e_414a` ("JANEXEND").
     end_mark: u64,  // 0x444e_4558_454e_414a ("JANEXEND")
     
-    /// The length in bytes of the metadata section.
+    /// The encoded byte length of this `FileMetadata`.
     metadata_length: u64,
 
     /// The total byte length of `JanexFile`.
@@ -235,7 +238,8 @@ FileMetadataObject = {
 NonemptyText = tstr .ne ""
 ```
 
-`section_table` excludes the final `FileMetadata` section and may be empty.
+`file_metadata` is the final structure within `JanexFile` and has no section type or ID. Its
+`section_table` describes `sections` and may be empty.
 
 #### Metadata Evolution and Extensions
 
@@ -287,9 +291,6 @@ enum SectionType {
     /// Arbitrary padding bytes; no section magic number is required.
     Padding = 0x0047_4e49_4444_4150, // "PADDING\0"
 
-    /// The final section. It is omitted from its own section table.
-    FileMetadata = 0x4154_4144_4154_454d, // "METADATA"
-
     Attributes = 0x2e53_4249_5254_5441, // "ATTRIBS."
     
     BlobPool = 0x4c4f_4f50_424f_4c42, // "BLOBPOOL"
@@ -329,7 +330,7 @@ file_length = 8 + sum(FileMetadataObject.section_table[*].length) + metadata_len
 
 All arithmetic is checked. The external header precedes `janex_start`, and the tail starts at
 `janex_end`. The 24-byte footer before `janex_end` provides `metadata_length` and `file_length`;
-`end_mark` must match, and `metadata_length` must equal the encoded `FileMetadataSection` length.
+`end_mark` must match, and `metadata_length` must equal the encoded `FileMetadata` length.
 
 #### `VerificationInfo` Structure
 
@@ -390,7 +391,7 @@ enum VerificationInfo {
 file_bytes[file_metadata_start .. verification_type_end]
 ```
 
-The range starts at `FileMetadataSection.magic_number` and ends immediately after
+The range starts at `FileMetadata.magic_number` and ends immediately after
 `verification_type`. Verification uses these original bytes without re-encoding them.
 
 The payload must consume exactly `payload_bytes`. OpenPGP and CMS payloads must be nonempty. Unknown
