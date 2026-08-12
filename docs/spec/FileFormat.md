@@ -272,26 +272,12 @@ Other keys are defined by `section_type`.
 
 #### Section References
 
-A typed section reference is a bare CBOR item. Its logical type determines the required `section_type`
-but has no binary representation:
-
 ```cddl
-SectionRef =
-    uint
-  / [
-        reference_kind: SectionReferenceKindObject,
-        payload: bstr .cbor any,
-    ]
-
-SectionReferenceKindObject = uint / NonemptyText
+SectionRef = uint
 ```
 
-The `uint` form resolves `(T, id)` in the same file; `id` must fit in `u64`. All core references use
-this form.
-
-The array form is reserved for extended reference mechanisms. Its kind is a specification-assigned
-integer or an extension name. `payload` contains exactly one deterministic CBOR item. Unsupported
-kinds cannot be resolved. No core extended kinds are defined.
+A typed `SectionRef<T>` resolves `(T, id)` in the same file. The logical type `T` supplies the required
+`section_type` and has no binary representation.
 
 Currently supported section types:
 
