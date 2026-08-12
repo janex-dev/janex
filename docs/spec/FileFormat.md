@@ -238,11 +238,9 @@ FileMetadataObject = {
     0: [* SectionInfoObject],          ; section_table
     ? 1: ExternalRegionObject,         ; external_header
     ? 2: ExternalRegionObject,         ; external_tail
-    ? 3: [* FeatureIdObject],          ; required_features
     * uint => any,
 }
 
-FeatureIdObject = uint / NonemptyText
 NonemptyText = tstr .ne ""
 ```
 
@@ -253,17 +251,12 @@ NonemptyText = tstr .ne ""
 Core maps use unsigned integer keys. Text-keyed metadata uses non-empty keys; `janex.` is reserved.
 Third-party keys should use a reverse-domain prefix such as `org.example.`.
 
-Unknown optional keys may be ignored. Semantic rewrites must preserve them. A field required to
-interpret existing data must be declared through `required_features`, a new section type, or a new
-format revision.
+Unknown keys and section types may be ignored and must not change the meaning of known data. Semantic
+rewrites must preserve unknown keys. Changes that alter core interpretation require a format version
+that older readers reject.
 
 Empty collections are valid where allowed by the schema. Optional empty maps should be omitted. `null`
 is valid only where the schema defines it and is distinct from an omitted key.
-
-`required_features` contains unique feature IDs sorted bytewise by their deterministic CBOR encoding.
-Numeric IDs are assigned by this specification; text IDs follow the naming rules above. Readers must
-reject unsupported required features. No core feature IDs are currently defined. Omission and an empty
-array both mean that no feature is required.
 
 #### `SectionInfoObject` Map
 
@@ -339,8 +332,7 @@ enum SectionType {
 
 The table describes consecutive sections. Use `Padding` for bytes between them.
 
-Unknown sections may be skipped. A feature that requires an unknown section type must be declared in
-`FileMetadataObject.required_features`, causing readers that do not support it to reject the file.
+Unknown sections may be skipped.
 
 #### `ExternalRegionObject`
 
