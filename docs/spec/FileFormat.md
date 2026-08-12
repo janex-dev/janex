@@ -982,10 +982,14 @@ values remain exact Package URLs and must not carry a `vers` qualifier.
 
 ### The `jep322` Type
 
-The `jep322` type uses Java SE version strings as defined by
-[JEP 322](https://openjdk.org/jeps/322) and parsed by `java.lang.Runtime.Version`. A version has a
-non-empty numeric sequence `$FEATURE.$INTERIM.$UPDATE.$PATCH` and optional later numeric elements,
-optionally followed by a pre-release identifier, a build number, and additional build information:
+The `jep322` type compares Java SE 8 and later. Java 9 and later use version strings as defined by
+[JEP 223](https://openjdk.org/jeps/223) and [JEP 322](https://openjdk.org/jeps/322) and parsed by
+`java.lang.Runtime.Version`. Java 8 uses the aliases below; they are rewritten to the same
+four-tuple form before comparison.
+
+A canonical version has a non-empty numeric sequence `$FEATURE.$INTERIM.$UPDATE.$PATCH` and optional
+later numeric elements, optionally followed by a pre-release identifier, a build number, and
+additional build information:
 
 ```text
 $VNUM(-$PRE)?(\+$BUILD)?(-$OPT)?
@@ -995,10 +999,32 @@ $VNUM(\+-$OPT)?
 
 `$VNUM` is a period-separated sequence of decimal integers without leading zeros. Trailing zero
 elements are omitted from the written `$VNUM`. `$PRE` is a pre-release identifier such as `ea`.
-`$BUILD` is a decimal build number. `$OPT` is additional build information. Examples: `17`,
-`17.0.10`, `21.0.2+13`, `21-ea+11`.
+`$BUILD` is a decimal build number. `$OPT` is additional build information. Examples: `8`, `8.0.402`,
+`17`, `17.0.10`, `21.0.2+13`, `21-ea+11`.
 
-The legacy `1.8.0_402` form is not a `jep322` version.
+Writers should use this canonical form in a VERS. `8` means any Java 8 release. `8.0.402` means
+update 402 of Java 8.
+
+#### Java 8 Aliases
+
+The following Java 8 strings are aliases. They are not canonical JEP 322 versions. Readers rewrite
+each alias to a canonical version, then compare. `$N` and `$BUILD` are decimal integers without
+leading zeros, except that `$N` may be `0`:
+
+```text
+1.8.0               →  8
+1.8.0_$N            →  8.0.$N
+1.8.0_$N-b$BUILD    →  8.0.$N
+8u$N                →  8.0.$N
+```
+
+An optional `-$PRE` may follow `1.8.0` or `1.8.0_$N` and is kept on the canonical form, so
+`1.8.0-ea` becomes `8-ea` and `1.8.0_402-ea` becomes `8.0.402-ea`. Other `1.x` forms, including
+`1.8`, `1.8.0_402-b06-extra`, `1.7.0_80`, and `1.9.0`, are invalid.
+
+Alias expansion applies to versions in a `jep322` VERS and to `Java.version.full` on a candidate
+runtime. After expansion, VERS uniqueness and ordering use the canonical versions. `1.8.0_402` and
+`8.0.402` in the same VERS are therefore the same version and make the VERS invalid.
 
 Comparison uses the numeric version elements and `$PRE` only. `$BUILD` and `$OPT` are ignored, so
 `21.0.2` and `21.0.2+13` compare equal. Missing numeric elements are treated as zero, so `21`,
@@ -1024,6 +1050,12 @@ vers:jep322/>=17.0.10|<18|>=21.0.2|<22
 
 This range contains Java 17 starting at 17.0.10, and Java 21 starting at 21.0.2. It does not contain
 Java 18, Java 22, or `17-ea`.
+
+```text
+vers:jep322/>=8.0.402|<9
+```
+
+This range contains Java 8 starting at update 402. A candidate that reports `1.8.0_402` matches.
 
 ## Java Application Conditions
 
@@ -1064,7 +1096,7 @@ A candidate Java runtime is described by:
 ```rust
 /// Information about a Java runtime environment.
 struct Java {
-    /// The JEP 322 version of the Java runtime.
+    /// The version of the Java runtime. `full` may be a JEP 322 string or a Java 8 alias.
     version: JavaVersion,
 
     /// The vendor of the Java runtime (e.g., `"Eclipse Adoptium"`, `"Oracle Corporation"`).
@@ -1079,7 +1111,7 @@ struct Java {
 
 /// The parsed version of a Java runtime.
 struct JavaVersion {
-    /// The full JEP 322 version string (e.g., `"21.0.3+9"`).
+    /// The reported version string (e.g., `"21.0.3+9"` or `"1.8.0_402"`).
     full: String,
 
     /// The feature release number (the first version component, e.g., `21` for Java 21).
@@ -1106,7 +1138,8 @@ struct JavaVersion {
 }
 ```
 
-`ConditionObject.java` is evaluated against `Java.version.full` using the `jep322` rules.
+`ConditionObject.java` is evaluated against `Java.version.full` using the `jep322` rules, including
+Java 8 alias expansion.
 `ConditionObject.vendor` is compared to `Java.vendor` for exact equality. This document does not
 normalize vendor strings.
 
