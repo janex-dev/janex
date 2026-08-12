@@ -147,8 +147,8 @@ enum ChecksumAlgorithm {
 }
 ```
 
-Algorithm ID `0` is reserved. The checksum length must match the algorithm. Unknown algorithms can be
-skipped but cannot satisfy a required validation.
+Algorithm ID `0` is reserved. The checksum length must match the algorithm. Readers may skip unknown
+algorithms; required validation accepts supported algorithms only.
 
 In CBOR:
 
@@ -184,8 +184,7 @@ The complete physical file may contain data outside `JanexFile`:
 [external header] [JanexFile] [external tail]
 ```
 
-`FileMetadataObject` may constrain the external regions. They are not Janex sections and do not appear
-in the section table.
+`FileMetadataObject` records optional size and checksum constraints for the external regions.
 
 ### `FileMetadata`
 
@@ -271,8 +270,7 @@ Other keys are defined by `section_type`.
 SectionRef = uint
 ```
 
-A typed `SectionRef<T>` resolves `(T, id)` in the same file. The logical type `T` supplies the required
-`section_type` and has no binary representation.
+`SectionRef<T>` encodes the file-local ID of a section of type `T`.
 
 Section types:
 
@@ -326,8 +324,8 @@ All arithmetic is checked. The external header precedes `janex_start`, and the t
 
 #### `VerificationInfo` Structure
 
-`VerificationInfo` is a tagged payload. `verification_type` is included in `verification_input`; its
-payload is not.
+`VerificationInfo` is a tagged payload. `verification_input` ends after `verification_type` and before
+the payload.
 
 ```rust
 #[repr(TaggedPayload<u8>)]
@@ -382,16 +380,15 @@ file_bytes[file_metadata_start .. verification_type_end]
 ```
 
 The range starts at `FileMetadata.magic_number` and ends immediately after
-`verification_type`. Verification uses these original bytes without re-encoding them.
+`verification_type`. Verification uses these exact bytes.
 
 The payload must consume exactly `payload_bytes`. OpenPGP and CMS payloads must be nonempty. Unknown
 verification types are invalid.
 
 ##### Verification Policy
 
-`None` and `Checksum` provide no authentication and must be rejected when authentication is required.
-OpenPGP and CMS use caller-provided signer, trust, algorithm, time, and revocation policies. A malformed
-or invalid signature is invalid under its declared type; readers must not fall back to another type.
+Authentication requires OpenPGP or CMS and successful validation under the declared type. These
+variants use caller-provided signer, trust, algorithm, time, and revocation policies.
 
 OpenPGP and CMS implementations must support SHA-256 for content digests. Janex signatures must not
 use MD5, SHA-1, or RIPEMD-160. Other algorithms are subject to caller policy.
@@ -433,19 +430,18 @@ The CMS payload uses the syntax defined by
 - the same digest algorithm is used for the content digest and the signed attributes, as required by
   RFC 8933.
 
-Each required signer must pass digest, signature, identity, and caller-policy validation. Embedded
-certificates and revocation data are not trusted merely because they are embedded. Unsigned attributes
-do not affect the primary signature. Caller policy selects the required signers.
+Each required signer must pass digest, signature, identity, and caller-policy validation. Caller policy
+establishes trust for embedded certificates and revocation data and selects the required signers. Only
+signed attributes contribute to primary signature validation.
 
 ##### Authenticated Content Scope
 
-Full-container authentication requires a secure checksum for every section and every nonempty external
-region, with both `external_header` and `external_tail` present. Readers must verify all of them.
-`SHA256`, `SHA512`, and `SM3` qualify; `XXH64` does not. An omitted external-region key places that
-region outside this scope.
+Full-container authentication includes both `external_header` and `external_tail` and records a secure
+checksum for every section and every nonempty external region. Readers must verify all of them. Secure
+checksum algorithms are `SHA256`, `SHA512`, and `SM3`.
 
-The signature binds metadata and the checksums recorded in it. It does not directly sign the
-verification payload, footer, or complete physical file representation.
+The signature authenticates `verification_input`; the recorded secure checksums authenticate section
+and external-region bytes.
 
 ### `Attributes` Section
 
@@ -473,10 +469,9 @@ valid, though writers should omit the section in that case.
 
 ### Descriptor Sections
 
-Descriptor sections give meaning to container contents but do not affect core decoding. A file may
-contain any number, identified by section type and ID. A file without one is a plain container. Other
-descriptor types may be defined independently. Resource roots are local to their descriptor, while
-their contents may share blobs.
+A file contains zero or more descriptor sections that describe uses of container contents. Each
+descriptor is identified by section type and ID and owns its resource roots. Descriptors may share
+blob content.
 
 ```rust
 struct Descriptor<T> {
@@ -488,8 +483,7 @@ struct Descriptor<T> {
 }
 ```
 
-`T` selects the schema of `object.value` and has no binary representation. A resource root is
-identified by its zero-based index within `resource_roots`.
+`object.value` follows schema `T`. Resource roots use zero-based indices within `resource_roots`.
 
 #### `JavaApplicationDescriptor` Section
 
@@ -546,9 +540,9 @@ JavaPathEntryObject =
 ```
 
 Variant `0` selects a resource root from the containing descriptor. An out-of-range index is invalid.
-Variant `1` identifies one concrete package version by canonical Package URL. It is downloaded without
-transitive dependency resolution and verified by `checksum`. A `vers` qualifier is not allowed; Maven
-artifacts use `pkg:maven` and may select a repository with `repository_url`.
+Variant `1` resolves exactly the package identified by a canonical Package URL and verifies it by
+`checksum`. A `vers` qualifier is not allowed; Maven artifacts use `pkg:maven` and may select a
+repository with `repository_url`.
 
 ##### `JavaAgentObject`
 
@@ -595,8 +589,8 @@ struct ResourceRoot {
 ResourceRootMetadataObject = { * NonemptyText => any }
 ```
 
-The enclosing `Sized<ResourceRoot>` allows a root to be skipped without parsing it. The metadata map
-may be empty. Directories form a flat list; paths carry the hierarchy.
+`Sized<ResourceRoot>` delimits each root. The metadata map may be empty. Directories form a flat list;
+paths carry the hierarchy.
 
 ##### `ResourceDirectory`
 
@@ -701,8 +695,8 @@ magnitude; tag `3` encodes `-1 - value`.
 
 ### Content
 
-`Content<T>` stores an encoded value inline, in one blob, or across blob slices. `T` is the logical
-type obtained after reversing its transforms and has no binary representation of its own:
+`Content<T>` stores an encoded value inline, in one blob, or across blob slices. Reversing its
+transforms produces a logical value of type `T`:
 
 ```rust
 struct Content<T> {
@@ -851,8 +845,8 @@ Strings use UTF-8 and are converted to Modified UTF-8 when restoring a class fil
 
 ### `BlobPool` Section
 
-A `BlobPool` stores independently decoded byte blobs. Their logical types and transforms belong to
-`Content<T>`, not the pool. A file may contain any number of pools.
+A `BlobPool` stores independently decoded byte blobs. `Content<T>` assigns their logical types and
+transforms. A file may contain any number of pools.
 
 ```rust
 struct BlobPoolSection {
@@ -928,9 +922,8 @@ order.
 
 Each page descriptor locates a stored page relative to `BlobPoolSection.bytes`. Decoding the page must
 produce one deterministic CBOR `BlobTablePageObject`. When present, its checksum covers those decoded
-CBOR bytes and must be verified. Page filters must be self-contained and pages cannot depend on other
-pages or blobs. Table pages are not blobs and cannot be referenced by `BlobRef`. Resolving a blob
-requires decoding only its selected page.
+CBOR bytes and must be verified. Each page decodes independently using self-contained filters.
+`BlobRef` addresses stored blobs. Resolving a blob requires decoding only its selected page.
 
 Each `BlobInfoObject.offset` locates a stored blob relative to `BlobPoolSection.bytes`. All page and
 blob ranges must fit in `bytes` and must not overlap. Writers may place them in any order.
