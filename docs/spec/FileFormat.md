@@ -480,12 +480,11 @@ struct JavaApplicationDescriptorSection {
     magic_number: u64, // 0x2e50_5041_4156_414a ("JAVAAPP.")
 
     /// One deterministic CBOR `JavaLaunchConfigObject`.
-    config: Sized<CborMap>, // JavaLaunchConfigObject
-
-    /// The anonymous resource roots in local-index order.
-    resource_roots: Vec<Sized<ResourceRoot>>,
+    config: CborMap, // JavaLaunchConfigObject
 }
 ```
+
+`config` occupies the remainder of the section.
 
 ##### `JavaLaunchConfigObject`
 
@@ -521,7 +520,7 @@ object contributes as follows:
 JavaPathEntryObject =
     {
         0: 0,                    ; embedded
-        1: uint,                 ; resource_root_index
+        1: ResourceRootObject,   ; resource_root
         * uint => any,
     }
   / {
@@ -532,11 +531,9 @@ JavaPathEntryObject =
     }
 ```
 
-Variant `0` selects a resource root by its zero-based index in
-`JavaApplicationDescriptorSection.resource_roots`. An out-of-range index is invalid. Variant `1`
-resolves exactly the package identified by a canonical Package URL and verifies it by `checksum`. A
-`vers` qualifier is not allowed; Maven artifacts use `pkg:maven` and may select a repository with
-`repository_url`.
+Variant `0` contains an embedded resource root. Variant `1` resolves exactly the package identified by
+a canonical Package URL and verifies it by `checksum`. A `vers` qualifier is not allowed; Maven
+artifacts use `pkg:maven` and may select a repository with `repository_url`.
 
 ##### `JavaAgentObject`
 
@@ -557,22 +554,26 @@ struct JavaLibraryDescriptorSection {
     magic_number: u64, // 0x2e42_494c_4156_414a ("JAVALIB.")
 
     /// One deterministic CBOR `JavaLibraryDescriptorObject`.
-    metadata: Sized<CborMap>, // JavaLibraryDescriptorObject
-
-    /// The anonymous resource roots in search order.
-    resource_roots: Vec<Sized<ResourceRoot>>,
+    metadata: CborMap, // JavaLibraryDescriptorObject
 }
 ```
 
 ```cddl
-JavaLibraryDescriptorObject = { * uint => any }
+JavaLibraryDescriptorObject = {
+    0: [* ResourceRootObject],       ; resource_roots
+    * uint => any,
+}
 ```
 
-Resource roots are searched in `resource_roots` order.
+`metadata` occupies the remainder of the section. Resource roots are searched in array order.
 
 #### Resource Roots
 
-Each `ResourceRoot` contains one anonymous resource tree owned by its descriptor.
+`ResourceRootObject` contains one binary `ResourceRoot` encoding:
+
+```cddl
+ResourceRootObject = bstr
+```
 
 ```rust
 struct ResourceRoot {
@@ -588,8 +589,8 @@ struct ResourceRoot {
 ResourceRootMetadataObject = { * NonemptyText => any }
 ```
 
-`Sized<ResourceRoot>` delimits each root. The metadata map may be empty. Directories form a flat list;
-paths carry the hierarchy.
+The byte string delimits the resource root. The metadata map may be empty. Directories form a flat
+list; paths carry the hierarchy.
 
 ##### `ResourceDirectory`
 
