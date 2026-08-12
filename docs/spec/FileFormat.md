@@ -135,17 +135,17 @@ struct Checksum {
 Checksum algorithms:
 
 ```rust
-#[repr(u16)]
+#[repr(vuint)]
 enum ChecksumAlgorithm {
-    NONE = 0,     // 0 bytes
+    NONE = 0,   // 0 bytes
     
-    XXH64 = 0x0101,  // 8 bytes
+    XXH64 = 1,  // 8 bytes
     
-    SHA256 = 0x8101, // 32 bytes
+    SHA256 = 2, // 32 bytes
 
-    SHA512 = 0x8102, // 64 bytes
+    SHA512 = 3, // 64 bytes
     
-    SM3 = 0x8301,    // 32 bytes
+    SM3 = 4,    // 32 bytes
 }
 ```
 
@@ -156,7 +156,7 @@ In CBOR:
 
 ```cddl
 ChecksumObject = [
-    algorithm: 0..65535,
+    algorithm: uint,
     checksum: bstr,
 ]
 ```
