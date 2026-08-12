@@ -622,8 +622,8 @@ ResourceGroupsMetadataObject = {
 }
 ```
 
-`string_pool` selects the pool used by all `ClassFile` transforms and `RefBody` paths in the section.
-It is required when either occurs. Group names must be unique within the section.
+`string_pool` selects the pool used by all `ClassFile` transforms in the section. It is required when
+such a transform occurs. Group names must be unique within the section.
 
 ```rust
 struct ResourceGroupsSection {
@@ -639,7 +639,8 @@ struct ResourceGroupsSection {
 
 #### `ResourceGroup`
 
-A `ResourceGroup` is a named collection of resources, typically corresponding to a JAR or module.
+A `ResourceGroup` is a named collection of resources, typically corresponding to a JAR or module. Its
+directories form a flat list; paths carry the hierarchy.
 
 ```rust
 struct ResourceGroup {
@@ -656,11 +657,8 @@ struct ResourceGroup {
     /// One deterministic CBOR `ResourceGroupMetadataObject`.
     metadata: Sized<CborMap>, // ResourceGroupMetadataObject
 
-    /// The number of `Resource` entries stored in this group.
-    resources_count: vuint,
-
-    /// The resources in this group.
-    resources: Content<[Resource; resources_count]>
+    /// The directories in path order.
+    directories: Vec<ResourceDirectory>,
 }
 ```
 
@@ -673,39 +671,54 @@ ResourceGroupMetadataObject = { * NonemptyText => any }
 Names follow the extension naming rules. The required map may be empty; unknown entries do not affect
 resource decoding.
 
-#### `Resource`
+#### `ResourceDirectory`
 
-A `Resource` represents a single entry (regular file, directory, or symbolic link) within a resource
-group.
+Each directory record contains its direct non-directory entries. The entry payload may be inline or
+stored in one or more blobs through `Content`.
 
 ```rust
-enum Resource {
+struct ResourceDirectory {
+    /// The directory path relative to the resource-group root.
+    path: String,
+
+    /// One deterministic CBOR resource-metadata map.
+    metadata: Sized<CborMap>, // ResourceMetadataObject
+
+    /// The number of direct entries in this directory.
+    entries_count: vuint,
+
+    /// The direct entries in name order.
+    entries: Content<[DirectoryEntry; entries_count]>,
+}
+```
+
+The empty path identifies the root directory. Other directory paths are UTF-8, `/`-separated, and
+must not start or end with `/` or contain empty, `.` or `..` components. Directory paths are unique
+and sorted by their UTF-8 bytes. Parent directories may be implicit; an empty directory or its
+metadata is preserved by an explicit record with no entries.
+
+`entries` decodes to exactly `entries_count` values and has no content transforms. Inline entry bytes
+can be skipped while scanning the directory list because their length is encoded by `ContentSource`.
+
+#### `DirectoryEntry`
+
+`DirectoryEntry` represents a regular file or symbolic link directly contained by a
+`ResourceDirectory`:
+
+```rust
+enum DirectoryEntry {
     /// Represents a regular file.
     File {
         /// The resource type tag for this variant.
-        /// 
-        /// Always `0x00534552` ("RES\0")
+        ///
+        /// Always `0x00534552` ("RES\0").
         resource_type: u32, // 0x00534552 ("RES\0")
 
-        /// The path of this resource within its resource group.
-        path: ResourcePath,
+        /// The file name within the directory.
+        name: String,
 
-        /// The content of this resource and its logical transforms.
+        /// The content of this file and its logical transforms.
         content: Content<[u8]>,
-
-        /// One deterministic CBOR resource-metadata map.
-        metadata: Sized<CborMap>, // ResourceMetadataObject
-    },
-
-    /// Represents a directory entry.
-    Directory {
-        /// The resource type tag for this variant.
-        ///
-        /// Always 0x00524944 ("DIR\0")
-        resource_type: u32, // 0x00524944 ("DIR\0")
-
-        /// The path of this directory within its resource group.
-        path: ResourcePath,
 
         /// One deterministic CBOR resource-metadata map.
         metadata: Sized<CborMap>, // ResourceMetadataObject
@@ -714,61 +727,34 @@ enum Resource {
     /// Represents a symbolic link.
     SymbolicLink {
         /// The resource type tag for this variant.
-        /// 
-        /// Always 0x4c4d5953 ("SYML")
+        ///
+        /// Always `0x4c4d5953` ("SYML").
         resource_type: u32, // 0x4c4d5953 ("SYML")
 
-        /// The path of this symbolic link within its resource group.
-        path: ResourcePath,
+        /// The symbolic-link name within the directory.
+        name: String,
 
-        /// The target path that this symbolic link points to.
-        target: ResourcePath,
+        /// The relative target path.
+        target: String,
 
         /// One deterministic CBOR resource-metadata map.
         metadata: Sized<CborMap>, // ResourceMetadataObject
-    }
-}
-```
-
-#### `ResourcePath`
-
-`ResourcePath` is a relative `/`-separated path. It must not be empty, start or end with `/`, or
-contain empty, `.` or `..` components. Resource entry paths must be unique within their group.
-
-A nonzero `length` stores the UTF-8 path inline. Zero selects `RefBody`, whose two indices identify the
-directory and file name in the section's `StringPool`.
-
-```rust
-struct ResourcePath {
-    /// The byte length of the inline path string, or `0` to indicate `RefBody` encoding.
-    length: vuint,
-    content: ResourcePathContent,
-}
-
-enum ResourcePathContent {
-    /// Inline path encoding, used when `length != 0`.
-    StringBody {
-        /// The raw UTF-8 bytes of the full resource path (e.g., `"com/example/Foo.class"`).
-        body: [u8; length],
     },
-
-    /// Reference-based path encoding, used when `length == 0`.
-    ///
-    /// Requires the containing `ResourceGroups` section to select a `StringPool`.
-    RefBody {
-        /// The index of the directory path component in the `StringPool`
-        /// (e.g., the index for `"com/example"`).
-        directory_index: vuint,
-        /// The index of the file name component in the `StringPool`
-        /// (e.g., the index for `"Foo.class"`).
-        file_name_index: vuint,
-    }
 }
 ```
+
+Entry names are nonempty UTF-8 strings without `/` and must not be `.` or `..`. They are unique within
+their directory and sorted by their UTF-8 bytes. A full resource path is the entry name for the root
+directory, or `directory_path + "/" + entry_name` otherwise. Directory records and entries must not
+produce conflicting paths.
+
+Symbolic-link targets use normalized relative `/`-separated paths and follow the nonempty path rules
+used for non-root directory paths.
 
 #### Resource Metadata
 
-Every resource contains one `Sized<CborMap>` whose value is a `ResourceMetadataObject`:
+Each `ResourceDirectory` and `DirectoryEntry` contains one `Sized<CborMap>` whose value is a
+`ResourceMetadataObject`:
 
 ```cddl
 ResourceMetadataObject = {
@@ -874,7 +860,7 @@ concatenation. Each result must match `input_size`; the final value must be a va
 An empty transform array means the source already encodes `T`. Unsupported methods are invalid.
 
 `CLASSFILE` is valid only for regular-file `Content<[u8]>`. The transform arrays of
-`ResourceGroup.resources` and `StringPoolSection.data` must therefore be empty.
+`ResourceDirectory.entries` and `StringPoolSection.data` must therefore be empty.
 
 #### Class File Transform
 
@@ -919,8 +905,8 @@ The input must be a valid Java class file. Reversal uses the `StringPool` select
 
 ### `StringPool` Section
 
-A `StringPool` supplies strings for class-file transforms and `RefBody` paths. A file may contain any
-number of pools, and multiple `ResourceGroups` sections may share one.
+A `StringPool` supplies strings for class-file transforms. A file may contain any number of pools, and
+multiple `ResourceGroups` sections may share one.
 
 ```rust
 struct StringPoolSection {
