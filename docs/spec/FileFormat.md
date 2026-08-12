@@ -473,24 +473,17 @@ A file contains zero or more descriptor sections that describe uses of container
 descriptor is identified by section type and ID and owns its resource roots. Descriptors may share
 blob content.
 
-```rust
-struct Descriptor<T> {
-    /// One descriptor-specific deterministic CBOR object.
-    object: Sized<CborMap>, // T
-
-    /// The anonymous resource roots in local-index order.
-    resource_roots: Vec<Sized<ResourceRoot>>,
-}
-```
-
-`object.value` follows schema `T`. Resource roots use zero-based indices within `resource_roots`.
-
 #### `JavaApplicationDescriptor` Section
 
 ```rust
 struct JavaApplicationDescriptorSection {
     magic_number: u64, // 0x2e50_5041_4156_414a ("JAVAAPP.")
-    descriptor: Descriptor<JavaLaunchConfigObject>,
+
+    /// One deterministic CBOR `JavaLaunchConfigObject`.
+    config: Sized<CborMap>, // JavaLaunchConfigObject
+
+    /// The anonymous resource roots in local-index order.
+    resource_roots: Vec<Sized<ResourceRoot>>,
 }
 ```
 
@@ -539,10 +532,11 @@ JavaPathEntryObject =
     }
 ```
 
-Variant `0` selects a resource root from the containing descriptor. An out-of-range index is invalid.
-Variant `1` resolves exactly the package identified by a canonical Package URL and verifies it by
-`checksum`. A `vers` qualifier is not allowed; Maven artifacts use `pkg:maven` and may select a
-repository with `repository_url`.
+Variant `0` selects a resource root by its zero-based index in
+`JavaApplicationDescriptorSection.resource_roots`. An out-of-range index is invalid. Variant `1`
+resolves exactly the package identified by a canonical Package URL and verifies it by `checksum`. A
+`vers` qualifier is not allowed; Maven artifacts use `pkg:maven` and may select a repository with
+`repository_url`.
 
 ##### `JavaAgentObject`
 
@@ -561,7 +555,12 @@ An empty `option` means that no agent option is supplied.
 ```rust
 struct JavaLibraryDescriptorSection {
     magic_number: u64, // 0x2e42_494c_4156_414a ("JAVALIB.")
-    descriptor: Descriptor<JavaLibraryDescriptorObject>,
+
+    /// One deterministic CBOR `JavaLibraryDescriptorObject`.
+    metadata: Sized<CborMap>, // JavaLibraryDescriptorObject
+
+    /// The anonymous resource roots in search order.
+    resource_roots: Vec<Sized<ResourceRoot>>,
 }
 ```
 
@@ -569,7 +568,7 @@ struct JavaLibraryDescriptorSection {
 JavaLibraryDescriptorObject = { * uint => any }
 ```
 
-Resource roots are searched in `descriptor.resource_roots` order.
+Resource roots are searched in `resource_roots` order.
 
 #### Resource Roots
 
