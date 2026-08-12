@@ -1,8 +1,8 @@
 # Janex File Format
 
 Janex is a sectioned, multi-root container format. Its core stores shared content, metadata, and
-verification information. Optional descriptor sections organize content into resource roots and
-define uses such as Java applications, Java libraries, or executables for other runtimes.
+verification information. Optional descriptor sections define uses such as Java applications or
+executables for other runtimes.
 
 ## Data Types
 
@@ -286,8 +286,6 @@ enum SectionType {
     
     JavaApplicationDescriptor = 0x2e50_5041_4156_414a, // "JAVAAPP."
 
-    JavaLibraryDescriptor = 0x2e42_494c_4156_414a, // "JAVALIB."
-
     StringPool = 0x004c_4f4f_5052_5453, // "STRPOOL\0"
 }
 ```
@@ -470,8 +468,8 @@ valid, though writers should omit the section in that case.
 ### Descriptor Sections
 
 A file contains zero or more descriptor sections that describe uses of container contents. Each
-descriptor is identified by section type and ID and owns its resource roots. Descriptors may share
-blob content.
+descriptor is identified by section type and ID. Local resource roots are blobs interpreted as
+`ResourceRoot` values. Descriptors reference those blobs and may share them.
 
 #### `JavaApplicationDescriptor` Section
 
@@ -519,8 +517,8 @@ object contributes as follows:
 ```cddl
 JavaPathEntryObject =
     {
-        0: 0,                    ; embedded
-        1: ResourceRootObject,   ; resource_root
+        0: 0,                    ; local
+        1: BlobRefObject,        ; resource_root
         * uint => any,
     }
   / {
@@ -531,7 +529,9 @@ JavaPathEntryObject =
     }
 ```
 
-Variant `0` contains an embedded resource root. Variant `1` resolves exactly the package identified by
+Variant `0` selects a blob in this file whose decoded representation is one `ResourceRoot`, as
+defined in [Resource Roots](#resource-roots). The blob is named by a `BlobRefObject`, defined in
+[Blob References](#blob-references). Variant `1` resolves exactly the package identified by
 a canonical Package URL and verifies it by `checksum`. A `vers` qualifier is not allowed; Maven
 artifacts use `pkg:maven` and may select a repository with `repository_url`.
 
@@ -547,33 +547,13 @@ JavaAgentObject = {
 
 An empty `option` means that no agent option is supplied.
 
-#### `JavaLibraryDescriptor` Section
-
-```rust
-struct JavaLibraryDescriptorSection {
-    magic_number: u64, // 0x2e42_494c_4156_414a ("JAVALIB.")
-
-    /// One deterministic CBOR `JavaLibraryDescriptorObject`.
-    metadata: CborMap, // JavaLibraryDescriptorObject
-}
-```
-
-```cddl
-JavaLibraryDescriptorObject = {
-    0: [* ResourceRootObject],       ; resource_roots
-    * uint => any,
-}
-```
-
-`metadata` occupies the remainder of the section. Resource roots are searched in array order.
-
 #### Resource Roots
 
-`ResourceRootObject` contains one binary `ResourceRoot` encoding:
-
-```cddl
-ResourceRootObject = bstr
-```
+A local `JavaPathEntryObject` names one blob with a `BlobRefObject`. Decoding that blob must produce
+exactly one `ResourceRoot` and consume every decoded byte. The blob must be referenced as a complete
+blob; `BlobSlices` are invalid. The root blob may use blob filters. It must not use content
+transforms. `Content` values inside the root may refer to other blobs. Those dependencies must be
+finite and acyclic. Multiple path entries may name the same blob.
 
 ```rust
 struct ResourceRoot {
@@ -589,8 +569,7 @@ struct ResourceRoot {
 ResourceRootMetadataObject = { * NonemptyText => any }
 ```
 
-The byte string delimits the resource root. The metadata map may be empty. Directories form a flat
-list; paths carry the hierarchy.
+The metadata map may be empty. Directories form a flat list; paths carry the hierarchy.
 
 ##### `ResourceDirectory`
 
@@ -845,8 +824,8 @@ Strings use UTF-8 and are converted to Modified UTF-8 when restoring a class fil
 
 ### `BlobPool` Section
 
-A `BlobPool` stores independently decoded byte blobs. `Content<T>` assigns their logical types and
-transforms. A file may contain any number of pools.
+A `BlobPool` stores independently decoded byte blobs. Containing structures assign their logical
+types. A file may contain any number of pools.
 
 ```rust
 struct BlobPoolSection {
@@ -930,20 +909,30 @@ blob ranges must fit in `bytes` and must not overlap. Writers may place them in 
 
 #### Blob References
 
-`BlobRef` identifies one complete, independently decoded blob:
+`BlobRef` identifies one complete, independently decoded blob. Binary layouts use:
 
 ```rust
 struct BlobRef {
-    /// A reference to the `BlobPool` section, encoded as a `SectionRef` CBOR item.
-    blob_pool: SectionRef<BlobPoolSection>,
+    /// The file-local ID of a `BlobPool` section.
+    blob_pool: vuint, // SectionRef<BlobPoolSection>
 
-    /// The zero-based index of the blob in the referenced blob pool's `BlobTable`.
+    /// The zero-based index of the blob in the referenced pool's `BlobTable`.
     blob_index: vuint,
 }
 ```
 
-`blob_index` must select an existing entry in the referenced pool's `BlobTable`. Decoding produces
-uninterpreted bytes; the containing structure assigns their meaning.
+CBOR layouts use:
+
+```cddl
+BlobRefObject = [
+    blob_pool: SectionRef,           ; must identify a BlobPool section
+    blob_index: uint                 ; must select an existing blob
+]
+```
+
+A `BlobRef` and a `BlobRefObject` identify the same blob. `blob_pool` must be the file-local ID of a
+`BlobPool` section. `blob_index` must select an existing entry in that pool's `BlobTable`. Decoding
+produces uninterpreted bytes; the containing structure assigns their meaning.
 
 `BlobSlice` identifies a non-empty range in the decoded representation of one blob:
 

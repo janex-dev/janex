@@ -4,8 +4,8 @@ This document is a draft of the Janex command-line interface.
 
 The file format itself is specified in `docs/spec/FileFormat.md`. This document only describes the user-facing CLI behavior.
 
-Application commands require a supported application descriptor. A generic Janex container or a
-library-only container is not directly executable.
+Application commands require a supported application descriptor. A generic Janex container is not
+directly executable.
 
 ## Command Design
 
