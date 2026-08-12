@@ -1,8 +1,8 @@
 # Janex File Format
 
-Janex is a sectioned, multi-root container format. Its core stores resources, shared content, metadata,
-and verification information. Optional descriptor sections define uses such as Java applications,
-Java libraries, or executables for other runtimes.
+Janex is a sectioned, multi-root container format. Its core stores shared content, metadata, and
+verification information. Optional descriptor sections organize content into resource roots and
+define uses such as Java applications, Java libraries, or executables for other runtimes.
 
 ## Data Types
 
@@ -298,8 +298,6 @@ enum SectionType {
 
     JavaLibraryDescriptor = 0x2e42_494c_4156_414a, // "JAVALIB."
 
-    ResourceRoot = 0x0054_4f4f_5253_4552, // "RESROOT\0"
-
     StringPool = 0x004c_4f4f_5052_5453, // "STRPOOL\0"
 }
 ```
@@ -486,18 +484,30 @@ valid, though writers should omit the section in that case.
 
 Descriptor sections give meaning to container contents but do not affect core decoding. A file may
 contain any number, identified by section type and ID. A file without one is a plain container. Other
-descriptor types may be defined independently. Descriptors may share the same resources and blobs.
+descriptor types may be defined independently. Resource roots are local to their descriptor, while
+their contents may share blobs.
+
+```rust
+struct Descriptor<T> {
+    /// One descriptor-specific deterministic CBOR object.
+    object: Sized<CborMap>, // T
+
+    /// The anonymous resource roots in local-index order.
+    resource_roots: Vec<Sized<ResourceRoot>>,
+}
+```
+
+`T` selects the schema of `object.value` and has no binary representation. A resource root is
+identified by its zero-based index within `resource_roots`.
 
 #### `JavaApplicationDescriptor` Section
 
 ```rust
 struct JavaApplicationDescriptorSection {
     magic_number: u64, // 0x2e50_5041_4156_414a ("JAVAAPP.")
-    configuration: CborMap, // JavaLaunchConfigObject
+    descriptor: Descriptor<JavaLaunchConfigObject>,
 }
 ```
-
-`configuration` occupies the remainder of the section.
 
 ##### `JavaLaunchConfigObject`
 
@@ -533,7 +543,7 @@ object contributes as follows:
 JavaPathEntryObject =
     {
         0: 0,                    ; embedded
-        1: SectionRef,           ; resource_root
+        1: uint,                 ; resource_root_index
         * uint => any,
     }
   / {
@@ -544,10 +554,10 @@ JavaPathEntryObject =
     }
 ```
 
-Variant `0` selects an embedded `ResourceRoot` section. Variant `1` identifies one concrete package
-version by canonical Package URL. It is downloaded without transitive dependency resolution and
-verified by `checksum`. A `vers` qualifier is not allowed; Maven artifacts use `pkg:maven` and may
-select a repository with `repository_url`.
+Variant `0` selects a resource root from the containing descriptor. An out-of-range index is invalid.
+Variant `1` identifies one concrete package version by canonical Package URL. It is downloaded without
+transitive dependency resolution and verified by `checksum`. A `vers` qualifier is not allowed; Maven
+artifacts use `pkg:maven` and may select a repository with `repository_url`.
 
 ##### `JavaAgentObject`
 
@@ -566,43 +576,22 @@ An empty `option` means that no agent option is supplied.
 ```rust
 struct JavaLibraryDescriptorSection {
     magic_number: u64, // 0x2e42_494c_4156_414a ("JAVALIB.")
-    descriptor: CborMap, // JavaLibraryDescriptorObject
+    descriptor: Descriptor<JavaLibraryDescriptorObject>,
 }
 ```
 
 ```cddl
-JavaLibraryDescriptorObject = {
-    0: [+ SectionRef],                ; resource_roots
-    * uint => any,
-}
+JavaLibraryDescriptorObject = { * uint => any }
 ```
 
-`descriptor` occupies the remainder of the section. Each reference selects a `ResourceRoot` section;
-roots are searched in array order.
+Resource roots are searched in `descriptor.resource_roots` order.
 
-### `ResourceRoot` Section
+#### Resource Roots
 
-Each `ResourceRoot` section contains one anonymous resource tree. A file may contain any number of
-resource roots.
-
-For a `ResourceRoot` section, `SectionInfoObject` additionally defines this field:
-
-```cddl
-ResourceRootSectionInfoFields = (
-    ? 4: SectionRef,        ; string_pool
-)
-```
-
-`string_pool` selects the pool used by all `ClassFile` transforms in the section. It is required when
-such a transform occurs.
+Each `ResourceRoot` contains one anonymous resource tree owned by its descriptor.
 
 ```rust
-struct ResourceRootSection {
-    /// The magic number identifying this as a resource root.
-    ///
-    /// Always `0x0054_4f4f_5253_4552` ("RESROOT\0").
-    magic_number: u64, // 0x0054_4f4f_5253_4552 ("RESROOT\0")
-
+struct ResourceRoot {
     /// One deterministic CBOR `ResourceRootMetadataObject`.
     metadata: Sized<CborMap>, // ResourceRootMetadataObject
 
@@ -615,10 +604,10 @@ struct ResourceRootSection {
 ResourceRootMetadataObject = { * NonemptyText => any }
 ```
 
-The map may be empty; unknown entries do not affect resource decoding. Directories form a flat list;
-paths carry the hierarchy.
+The enclosing `Sized<ResourceRoot>` allows a root to be skipped without parsing it. The metadata map
+may be empty. Directories form a flat list; paths carry the hierarchy.
 
-#### `ResourceDirectory`
+##### `ResourceDirectory`
 
 ```rust
 struct ResourceDirectory {
@@ -643,7 +632,7 @@ metadata is preserved by an explicit record with no entries.
 
 `entries.transforms` must be empty.
 
-#### `DirectoryEntry`
+##### `DirectoryEntry`
 
 ```rust
 enum DirectoryEntry {
@@ -691,7 +680,7 @@ produce conflicting paths.
 Symbolic-link targets use normalized relative `/`-separated paths and follow the nonempty path rules
 used for non-root directory paths.
 
-#### Resource Metadata
+##### Resource Metadata
 
 ```cddl
 ResourceMetadataObject = {
@@ -779,17 +768,21 @@ struct ContentTransform {
 
 #[repr(u8)]
 enum ContentTransformId {
-    /// A Java class-file transform using the shared `StringPool`.
+    /// A Java class-file transform using a shared `StringPool`.
     CLASSFILE = 1,
 }
 ```
 
 ```cddl
 ContentTransformPropertiesObject = { * uint => any }
-ClassFileTransformPropertiesObject = {}
+ClassFileTransformPropertiesObject = {
+    0: SectionRef,                   ; string_pool
+    * uint => any,
+}
 ```
 
-The schema of `properties.value` is selected by `method`.
+The schema of `properties.value` is selected by `method`. `string_pool` selects the `StringPool`
+section used by the class-file transform.
 
 Transforms are stored in encoding order and reversed from last to first after blob decoding and slice
 concatenation. Each result must match `input_size`; the final value must be a valid encoding of `T`.
@@ -836,13 +829,12 @@ It modifies the class file as follows:
         }
         ```
 
-The input must be a valid Java class file. Reversal uses the `StringPool` selected by the containing
-`ResourceRoot` section. `CLASSFILE` properties must be empty.
+The input must be a valid Java class file.
 
 ### `StringPool` Section
 
 A `StringPool` supplies strings for class-file transforms. A file may contain any number of pools, and
-multiple `ResourceRoot` sections may share one.
+multiple transforms may share one.
 
 ```rust
 struct StringPoolSection {
