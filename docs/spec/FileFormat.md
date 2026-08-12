@@ -953,38 +953,24 @@ A `BlobPool` stores independently decoded byte blobs. Their logical types and tr
 struct BlobPoolSection {
     magic_number: u64, // 0x4c4f_4f50_424f_4c42 ("BLOBPOOL")
 
-    /// Blob representations and the blob table in the layout selected by the writer.
+    /// Stored blobs and blob-table pages.
     bytes: [u8; ...],
 }
 ```
 
 #### Blob Encoding
 
-`BlobEncoding` describes a stored blob and its filters:
+Blob and table-page encodings use these CBOR objects:
 
-```rust
-struct BlobEncoding {
-    /// The number of bytes in the stored representation.
-    stored_size: vuint,
-
-    /// The filters in the order in which the encoder applied them.
-    filters: Vec<BlobFilter>,
-}
-
-struct BlobFilter {
-    /// The number of bytes supplied to this filter by the encoder.
-    input_size: vuint,
-
-    /// Identifies the filter algorithm.
-    method: BlobFilterId,
-
-    /// A byte-sized deterministic CBOR map required to reverse the filter.
-    properties: Sized<CborMap>, // BlobFilterPropertiesObject
-}
+```cddl
+BlobEncodingObject = [stored_size: uint, filters: [* BlobFilterObject]]
+BlobFilterObject = [input_size: uint, method: 0..255, properties: BlobFilterPropertiesObject]
+BlobFilterPropertiesObject = { * uint => any }
 ```
 
-Readers reverse filters from last to first. Each result must match `input_size`. With no filters, the
-decoded size is `stored_size`; otherwise, it is the first filter's `input_size`.
+Filters are stored in encoding order and reversed from last to first. Each result must match
+`input_size`. With no filters, the decoded size is `stored_size`; otherwise, it is the first filter's
+`input_size`.
 
 The supported blob filters are:
 
@@ -998,56 +984,56 @@ enum BlobFilterId {
 }
 ```
 
-Unsupported filters are invalid. `ZSTD` properties must be empty.
+The properties schema is selected by `method`. Unsupported filters are invalid. `ZSTD` properties must
+be empty.
 
 #### Blob Table
 
-`bytes` has length `SectionInfoObject.length - 8`, so the section is at least eight bytes long. The
-corresponding section metadata is required and has this schema:
+The required section metadata contains a one-level page directory:
 
 ```cddl
 BlobPoolMetadataObject = {
-    0: uint,                  ; table_offset
-    1: BlobEncodingObject,    ; table_encoding
-    2: ChecksumObject,        ; table_checksum
-    ? 3: ExtensionMap,        ; extensions
+    0: uint,                           ; blob_count
+    1: 256..4096,                      ; page_capacity
+    2: [* BlobTablePageInfoObject],    ; table_pages
+    ? 3: ExtensionMap,                 ; extensions
     * uint => any,
 }
 
-BlobEncodingObject = [stored_size: uint, filters: [* BlobFilterObject]]
-BlobFilterObject = [input_size: uint, method: 0..255, properties: BlobFilterPropertiesObject]
-BlobFilterPropertiesObject = { * uint => any }
+BlobTablePageInfoObject = [
+    offset: uint,
+    encoding: BlobEncodingObject,
+    checksum: ChecksumObject,
+]
+
+BlobTablePageObject = [* BlobInfoObject]
+
+BlobInfoObject = [
+    offset: uint,
+    encoding: BlobEncodingObject,
+    ? fields: BlobFieldsObject,
+]
+
+BlobFieldsObject = { * uint => any }
 ```
 
-The integer sizes and offsets must fit in `u64`; filter methods must fit in `u8`. Table filters have the
-same order and size rules as `BlobEncoding`. Unsupported filters are invalid.
+`BlobPoolSection.bytes` has length `SectionInfoObject.length - 8`. `blob_count` and all offsets and
+sizes must fit in `u64`. An empty pool has no pages. Otherwise, the page count is
+`1 + (blob_count - 1) / page_capacity`. Every page except the last contains `page_capacity` entries;
+the final page contains the remaining entries.
 
-```rust
-struct BlobTable {
-    /// Blob metadata in blob-index order.
-    blobs: Vec<BlobInfo>,
-}
+For `blob_index`, the page index is `blob_index / page_capacity` and the index within that page is
+`blob_index % page_capacity`. The logical blob table is the concatenation of the pages in directory
+order. `fields` contains optional per-blob metadata and should be omitted when empty.
 
-struct BlobInfo {
-    /// The byte offset of the stored blob relative to the first byte of
-    /// `BlobPoolSection.bytes`.
-    offset: vuint,
+Each page descriptor locates a stored page relative to `BlobPoolSection.bytes`. Decoding the page must
+produce one deterministic CBOR `BlobTablePageObject`. Its checksum covers those decoded CBOR bytes and
+must be verified unless the algorithm is `NONE`. Page filters must be self-contained and pages cannot
+depend on other pages or blobs. Table pages are not blobs and cannot be referenced by `BlobRef`.
+Resolving a blob requires decoding only its selected page.
 
-    /// The encoding metadata for the stored and decoded blob representations.
-    encoding: BlobEncoding,
-
-    /// Optional metadata associated with this blob.
-    fields: Vec<TaggedPayload<u32>>,
-}
-```
-
-The stored blob table starts at `table_offset` and has the declared stored size. Decoding it must
-produce a valid `BlobTable` and satisfy `table_checksum` unless the algorithm is `NONE`. Its filters
-must be self-contained.
-
-Each blob starts at `BlobInfo.offset` and has its declared stored size. The table and blobs must fit in
-`BlobPoolSection.bytes`; their stored ranges must not overlap. Writers may place the table anywhere in
-the section.
+Each `BlobInfoObject.offset` locates a stored blob relative to `BlobPoolSection.bytes`. All page and
+blob ranges must fit in `bytes` and must not overlap. Writers may place them in any order.
 
 #### Blob References
 
