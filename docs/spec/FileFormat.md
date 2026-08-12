@@ -298,7 +298,7 @@ enum SectionType {
 
     JavaLibraryDescriptor = 0x2e42_494c_4156_414a, // "JAVALIB."
 
-    ResourceGroups = 0x0053_5052_4753_4552, // "RESGRPS\0"
+    ResourceRoot = 0x0054_4f4f_5253_4552, // "RESROOT\0"
 
     StringPool = 0x004c_4f4f_5052_5453, // "STRPOOL\0"
 }
@@ -488,12 +488,6 @@ Descriptor sections give meaning to container contents but do not affect core de
 contain any number, identified by section type and ID. A file without one is a plain container. Other
 descriptor types may be defined independently. Descriptors may share the same resources and blobs.
 
-```cddl
-ResourceGroupRefObject = [resource_groups: SectionRef, group_name: tstr]
-```
-
-The reference selects one named group from a `ResourceGroups` section.
-
 #### `JavaApplicationDescriptor` Section
 
 ```rust
@@ -539,8 +533,7 @@ object contributes as follows:
 JavaPathEntryObject =
     {
         0: 0,                    ; embedded
-        1: SectionRef,           ; resource_groups
-        2: tstr,                 ; group_name
+        1: SectionRef,           ; resource_root
         * uint => any,
     }
   / {
@@ -551,10 +544,10 @@ JavaPathEntryObject =
     }
 ```
 
-Variant `0` selects an embedded resource group. Variant `1` identifies one concrete package version
-by canonical Package URL. It is downloaded without transitive dependency resolution and verified by
-`checksum`. A `vers` qualifier is not allowed; Maven artifacts use `pkg:maven` and may select a
-repository with `repository_url`.
+Variant `0` selects an embedded `ResourceRoot` section. Variant `1` identifies one concrete package
+version by canonical Package URL. It is downloaded without transitive dependency resolution and
+verified by `checksum`. A `vers` qualifier is not allowed; Maven artifacts use `pkg:maven` and may
+select a repository with `repository_url`.
 
 ##### `JavaAgentObject`
 
@@ -579,59 +572,39 @@ struct JavaLibraryDescriptorSection {
 
 ```cddl
 JavaLibraryDescriptorObject = {
-    0: [+ ResourceGroupRefObject],    ; roots
+    0: [+ SectionRef],                ; resource_roots
     * uint => any,
 }
 ```
 
-`descriptor` occupies the remainder of the section. Roots are searched in array order.
+`descriptor` occupies the remainder of the section. Each reference selects a `ResourceRoot` section;
+roots are searched in array order.
 
-### `ResourceGroups` Section
+### `ResourceRoot` Section
 
-`ResourceGroups` contains named embedded resource groups. A file may contain any number of these
-sections.
+Each `ResourceRoot` section contains one anonymous resource tree. A file may contain any number of
+resource roots.
 
-For a `ResourceGroups` section, `SectionInfoObject` additionally defines this field:
+For a `ResourceRoot` section, `SectionInfoObject` additionally defines this field:
 
 ```cddl
-ResourceGroupsSectionInfoFields = (
+ResourceRootSectionInfoFields = (
     ? 4: SectionRef,        ; string_pool
 )
 ```
 
 `string_pool` selects the pool used by all `ClassFile` transforms in the section. It is required when
-such a transform occurs. Group names must be unique within the section.
+such a transform occurs.
 
 ```rust
-struct ResourceGroupsSection {
-    /// The magic number identifying this as a resource group.
+struct ResourceRootSection {
+    /// The magic number identifying this as a resource root.
     ///
-    /// Always `0x0053_5052_4753_4552` ("RESGRPS\0").
-    magic_number: u64, // 0x0053_5052_4753_4552 ("RESGRPS\0")
-    
-    /// The resource groups.
-    groups: Vec<ResourceGroup>,
-}
-```
+    /// Always `0x0054_4f4f_5253_4552` ("RESROOT\0").
+    magic_number: u64, // 0x0054_4f4f_5253_4552 ("RESROOT\0")
 
-#### `ResourceGroup`
-
-Directories form a flat list; paths carry the hierarchy.
-
-```rust
-struct ResourceGroup {
-    /// The magic number identifying this as a resource group.
-    ///
-    /// Always `0x47534552` ("RESG").
-    magic_number: u32, // 0x47534552 ("RESG")
-
-    /// The unique name of this resource group within the `ResourceGroups` section.
-    ///
-    /// This name is referenced by `ResourceGroupRefObject` and embedded `JavaPathEntryObject` values.
-    name: String,
-
-    /// One deterministic CBOR `ResourceGroupMetadataObject`.
-    metadata: Sized<CborMap>, // ResourceGroupMetadataObject
+    /// One deterministic CBOR `ResourceRootMetadataObject`.
+    metadata: Sized<CborMap>, // ResourceRootMetadataObject
 
     /// The directories in path order.
     directories: Vec<ResourceDirectory>,
@@ -639,17 +612,17 @@ struct ResourceGroup {
 ```
 
 ```cddl
-ResourceGroupMetadataObject = { * NonemptyText => any }
+ResourceRootMetadataObject = { * NonemptyText => any }
 ```
 
-Names follow the extension naming rules. The map may be empty; unknown entries do not affect resource
-decoding.
+The map may be empty; unknown entries do not affect resource decoding. Directories form a flat list;
+paths carry the hierarchy.
 
 #### `ResourceDirectory`
 
 ```rust
 struct ResourceDirectory {
-    /// The directory path relative to the resource-group root.
+    /// The directory path relative to the resource root.
     path: String,
 
     /// One deterministic CBOR resource-metadata map.
@@ -864,12 +837,12 @@ It modifies the class file as follows:
         ```
 
 The input must be a valid Java class file. Reversal uses the `StringPool` selected by the containing
-`ResourceGroups` section. `CLASSFILE` properties must be empty.
+`ResourceRoot` section. `CLASSFILE` properties must be empty.
 
 ### `StringPool` Section
 
 A `StringPool` supplies strings for class-file transforms. A file may contain any number of pools, and
-multiple `ResourceGroups` sections may share one.
+multiple `ResourceRoot` sections may share one.
 
 ```rust
 struct StringPoolSection {
