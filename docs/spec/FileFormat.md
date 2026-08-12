@@ -236,8 +236,8 @@ map:
 ```cddl
 FileMetadataObject = {
     0: [* SectionInfoObject],          ; section_table
-    1: ExternalRegionObject,           ; external_header
-    2: ExternalRegionObject,           ; external_tail
+    ? 1: ExternalRegionObject,         ; external_header
+    ? 2: ExternalRegionObject,         ; external_tail
     ? 3: [* FeatureIdObject],          ; required_features
     * uint => any,
 }
@@ -246,8 +246,7 @@ FeatureIdObject = uint / NonemptyText
 NonemptyText = tstr .ne ""
 ```
 
-Keys `0` through `2` are required. `section_table` excludes the final `FileMetadata` section and may
-be empty.
+`section_table` excludes the final `FileMetadata` section and may be empty.
 
 #### Metadata Evolution and Extensions
 
@@ -345,18 +344,19 @@ Unknown sections may be skipped. A feature that requires an unknown section type
 
 #### `ExternalRegionObject`
 
-`ExternalRegionObject` optionally constrains bytes outside `JanexFile`:
+`ExternalRegionObject` describes and constrains bytes outside `JanexFile`:
 
 ```cddl
-ExternalRegionObject =
-    [not_described: 0]
-  / [described: 1, size: uint, checksum: ChecksumObject]
+ExternalRegionObject = [
+    size: uint,
+    checksum: ChecksumObject,
+]
 ```
 
-`NotDescribed` imposes no restriction: the region may be absent or contain arbitrary bytes.
-`Described` requires the declared size and checksum. A zero size requires `NONE` and explicitly
-requires absence; a nonzero size requires a non-`NONE` checksum. Readers must compare the actual size
-and verify the non-`NONE` checksum.
+An omitted `external_header` or `external_tail` key imposes no restriction on that region. A present
+key requires the declared size and checksum. A zero size requires `NONE` and explicitly requires
+absence; a nonzero size requires a non-`NONE` checksum. Readers must compare the actual size and verify
+the non-`NONE` checksum.
 
 For a physical file of `physical_file_size` bytes, a reader receives `external_tail_length` from its
 caller and calculates:
@@ -499,8 +499,9 @@ do not affect the primary signature. Caller policy selects the required signers.
 ##### Authenticated Content Scope
 
 Full-container authentication requires a secure checksum for every section and every nonempty external
-region, with both external regions `Described`. Readers must verify all of them. `SHA256`, `SHA512`, and
-`SM3` qualify; `NONE` and `XXH64` do not. `NotDescribed` regions are outside this scope.
+region, with both `external_header` and `external_tail` present. Readers must verify all of them.
+`SHA256`, `SHA512`, and `SM3` qualify; `NONE` and `XXH64` do not. An omitted external-region key places
+that region outside this scope.
 
 The signature binds metadata and the checksums recorded in it. It does not directly sign the
 verification payload, footer, or complete physical file representation.
