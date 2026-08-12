@@ -171,8 +171,8 @@ The Janex container has the following layout:
 struct JanexFile {
     /// The magic number identifying this as a Janex file.
     ///
-    /// Always `0x544d_4658_454e_414a` ("JANEXFMT").
-    magic_number: u64, // 0x544d_4658_454e_414a ("JANEXFMT")
+    /// Always `0x0000_0058_454e_414a` ("JANEX\0\0\0").
+    magic_number: u64, // 0x0000_0058_454e_414a ("JANEX\0\0\0")
 
     /// The sections of the Janex file.
     sections: [Section; ...],
