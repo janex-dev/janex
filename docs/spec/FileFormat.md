@@ -285,8 +285,6 @@ enum SectionType {
     BlobPool = 0x4c4f_4f50_424f_4c42, // "BLOBPOOL"
     
     JavaApplicationDescriptor = 0x2e50_5041_4156_414a, // "JAVAAPP."
-
-    StringPool = 0x004c_4f4f_5052_5453, // "STRPOOL\0"
 }
 ```
 
@@ -740,20 +738,20 @@ enum ContentTransformId {
 ```cddl
 ContentTransformPropertiesObject = { * uint => any }
 ClassFileTransformPropertiesObject = {
-    0: SectionRef,                   ; string_pool
+    0: BlobRefObject,                ; string_pool
     * uint => any,
 }
 ```
 
-The schema of `properties.value` is selected by `method`. `string_pool` selects the `StringPool`
-section used by the class-file transform.
+The schema of `properties.value` is selected by `method`. `string_pool` selects the blob used as the
+string pool, as defined in [String Pools](#string-pools).
 
 Transforms are stored in encoding order and reversed from last to first after blob decoding and slice
 concatenation. Each result must match `input_size`; the final value must be a valid encoding of `T`.
 An empty transform array means the source already encodes `T`. Unsupported methods are invalid.
 
-`CLASSFILE` is valid only for regular-file `Content<[u8]>`. The transform arrays of
-`ResourceDirectory.entries` and `StringPoolSection.data` must therefore be empty.
+`CLASSFILE` is valid only for regular-file `Content<[u8]>`. The transform array of
+`ResourceDirectory.entries` must therefore be empty.
 
 #### Java Class File Transform
 
@@ -795,22 +793,14 @@ It modifies the class file as follows:
 
 The input must be a valid Java class file.
 
-### `StringPool` Section
+##### String Pools
 
-A `StringPool` supplies strings for class-file transforms. A file may contain any number of pools, and
-multiple transforms may share one.
+A `CLASSFILE` transform names one blob with a `BlobRefObject`. Decoding that blob must produce
+exactly one `StringPoolData` and consume every decoded byte. The blob must be referenced as a
+complete blob; `BlobSlices` are invalid. The pool blob may use blob filters. It must not use content
+transforms. Multiple transforms may name the same blob.
 
 ```rust
-struct StringPoolSection {
-    /// The magic number identifying this section as a string pool.
-    /// 
-    /// Always `0x004c_4f4f_5052_5453` ("STRPOOL\0")
-    magic_number: u64, // 0x004c_4f4f_5052_5453 ("STRPOOL\0")
-
-    /// The string-pool data.
-    data: Content<StringPoolData>,
-}
-
 struct StringPoolData {
     /// The strings in pool-index order.
     ///
@@ -820,7 +810,6 @@ struct StringPoolData {
 ```
 
 Strings use UTF-8 and are converted to Modified UTF-8 when restoring a class file.
-`StringPoolSection.data.transforms` must be empty; its source may use any `ContentSource` variant.
 
 ### `BlobPool` Section
 
