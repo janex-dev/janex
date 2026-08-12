@@ -498,8 +498,7 @@ JavaLaunchConfigObject = {
 }
 ```
 
-An omitted `condition` is unconditional. Otherwise, it is described in
-[Java Application Conditions](#java-application-conditions).
+An omitted `condition` is unconditional. `ConditionObject` is defined below.
 
 The launcher visits the root configuration and its `overlays` in depth-first pre-order. Each matching
 object contributes as follows:
@@ -509,6 +508,43 @@ object contributes as follows:
 - arrays append to `module_path`, `class_path`, `agents`, or `jvm_options`, while `null` clears that
   list; and
 - `overlays` preserves array order and must not be `null`.
+
+##### `ConditionObject`
+
+```cddl
+ConditionObject = {
+    ? 0: tstr,                                  ; java
+    ? 1: (tstr / [+ tstr]),                     ; os
+    ? 2: (tstr / [+ tstr]),                     ; arch
+    ? 3: tstr,                                  ; vendor
+    ? 4: int,                                   ; priority
+    * uint => any,
+}
+```
+
+An empty `ConditionObject` is unconditional.
+
+`java` is a VERS whose type is `jep322`, as defined in [Version Ranges](#version-ranges). It is
+matched against the candidate runtime's version string, including Java 8 alias expansion. `vendor` is
+an exact match against the candidate runtime's vendor string. This document does not normalize vendor
+strings. `os` is matched against the host operating system. `arch` is matched against the host CPU.
+The normalized operating-system names are `linux`, `windows`, and `macos`. The normalized CPU names
+are `x86`, `x86-64`, and `aarch64`. Other names match only by exact equality.
+
+A text `os` or `arch` value matches that one name. An array matches if the host name equals any
+element. An omitted key imposes no constraint.
+
+`priority` is consulted only on the descriptor's root configuration. A greater value is preferred.
+An omitted root `priority` is `0`. A `priority` on an overlay is ignored.
+
+A condition matches a candidate Java runtime and the current host when every present constraint
+matches. An invalid `java` VERS makes the descriptor invalid; it is not treated as a non-match.
+
+The launcher considers each candidate runtime against the root condition. A candidate that does not
+match is discarded. Among remaining candidates, the launcher walks the root configuration and its
+`overlays` in depth-first pre-order and applies each overlay whose condition matches. It then selects
+the remaining candidate with the greatest root `priority`. Ties are broken by the implementation's
+runtime selection order.
 
 ##### `JavaPathEntryObject`
 
@@ -1056,41 +1092,3 @@ vers:jep322/>=8.0.402|<9
 ```
 
 This range contains Java 8 starting at update 402. A candidate that reports `1.8.0_402` matches.
-
-## Java Application Conditions
-
-`JavaLaunchConfigObject.condition` is a `ConditionObject`. An omitted condition, or an empty
-`ConditionObject`, is unconditional.
-
-```cddl
-ConditionObject = {
-    ? 0: tstr,                                  ; java
-    ? 1: (tstr / [+ tstr]),                     ; os
-    ? 2: (tstr / [+ tstr]),                     ; arch
-    ? 3: tstr,                                  ; vendor
-    ? 4: int,                                   ; priority
-    * uint => any,
-}
-```
-
-`java` is a VERS whose type is `jep322`. It is matched against the candidate runtime's version
-string, including Java 8 alias expansion. `vendor` is an exact match against the candidate runtime's
-vendor string. This document does not normalize vendor strings. `os` is matched against the host
-operating system. `arch` is matched against the host CPU. The normalized operating-system names are
-`linux`, `windows`, and `macos`. The normalized CPU names are `x86`, `x86-64`, and `aarch64`. Other
-names match only by exact equality.
-
-A text `os` or `arch` value matches that one name. An array matches if the host name equals any
-element. An omitted key imposes no constraint.
-
-`priority` is consulted only on the descriptor's root configuration. A greater value is preferred.
-An omitted root `priority` is `0`. A `priority` on an overlay is ignored.
-
-A condition matches a candidate Java runtime and the current host when every present constraint
-matches. An invalid `java` VERS makes the descriptor invalid; it is not treated as a non-match.
-
-The launcher considers each candidate runtime against the root condition. A candidate that does not
-match is discarded. Among remaining candidates, the launcher walks the root configuration and its
-`overlays` in depth-first pre-order and applies each overlay whose condition matches. It then selects
-the remaining candidate with the greatest root `priority`. Ties are broken by the implementation's
-runtime selection order.
