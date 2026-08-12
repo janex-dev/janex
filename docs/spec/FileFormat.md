@@ -135,7 +135,7 @@ struct Checksum {
 Checksum algorithms:
 
 ```rust
-#[repr(vuint)]
+#[repr(u8)]
 enum ChecksumAlgorithm {
     XXH64 = 1,  // 8 bytes
     
@@ -153,13 +153,11 @@ skipped but cannot satisfy a required validation.
 In CBOR:
 
 ```cddl
-ChecksumObject = [
-    algorithm: uint,
-    checksum: bstr,
-]
+ChecksumObject = bstr .size (1..)
 ```
 
-The same algorithm-specific checksum lengths apply.
+The first byte is the algorithm ID. The remaining bytes are the checksum value and must have the
+algorithm-specific length.
 
 ## Janex File Structure
 
