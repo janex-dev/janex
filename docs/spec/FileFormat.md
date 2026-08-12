@@ -268,11 +268,8 @@ SectionInfoObject = {
     1: uint,                         ; id
     2: uint,                         ; length
     3: ChecksumObject,               ; checksum
-    ? 4: SectionMetadataObject,      ; metadata
     * uint => any,
 }
-
-SectionMetadataObject = { * uint => any }
 ```
 
 For sections with a magic number, `section_type` normally equals that number. `(section_type, id)` must
@@ -282,7 +279,8 @@ meaning. Singleton section types use ID `0`.
 `length` is the exact encoded section length. `checksum` covers those bytes and must be verified unless
 its algorithm is `NONE`.
 
-The optional `metadata` map is defined by `section_type` and should be omitted when empty.
+Keys `0` through `3` are common to all sections. Other keys are defined by `section_type` and belong
+directly to the same map.
 
 #### Section References
 
@@ -601,13 +599,12 @@ An empty `option` means that no agent option is supplied.
 `ResourceGroups` contains named embedded resource groups. A file may contain any number of these
 sections.
 
-Its section metadata, when present, has this schema:
+For a `ResourceGroups` section, `SectionInfoObject` additionally defines this field:
 
 ```cddl
-ResourceGroupsMetadataObject = {
-    ? 0: SectionRef,        ; string_pool
-    * uint => any,
-}
+ResourceGroupsSectionInfoFields = (
+    ? 4: SectionRef,        ; string_pool
+)
 ```
 
 `string_pool` selects the pool used by all `ClassFile` transforms in the section. It is required when
@@ -962,15 +959,14 @@ be empty.
 
 #### Blob Table
 
-The required section metadata contains a one-level page directory:
+For a `BlobPool` section, `SectionInfoObject` additionally contains a one-level page directory:
 
 ```cddl
-BlobPoolMetadataObject = {
-    0: uint,                           ; blob_count
-    1: 256..4096,                      ; page_capacity
-    2: [* BlobTablePageInfoObject],    ; table_pages
-    * uint => any,
-}
+BlobPoolSectionInfoFields = (
+    4: uint,                           ; blob_count
+    5: 256..4096,                      ; page_capacity
+    6: [* BlobTablePageInfoObject],    ; table_pages
+)
 
 BlobTablePageInfoObject = [
     offset: uint,
