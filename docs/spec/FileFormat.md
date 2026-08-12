@@ -235,27 +235,24 @@ map:
 
 ```cddl
 FileMetadataObject = {
-    0: 0,                              ; flags
-    1: [* SectionInfoObject],          ; section_table
-    2: ExternalRegionObject,           ; external_header
-    3: ExternalRegionObject,           ; external_tail
-    ? 4: ExtensionMap,                 ; extensions
-    ? 5: [* FeatureIdObject],          ; required_features
+    0: [* SectionInfoObject],          ; section_table
+    1: ExternalRegionObject,           ; external_header
+    2: ExternalRegionObject,           ; external_tail
+    ? 3: [* FeatureIdObject],          ; required_features
     * uint => any,
 }
 
 FeatureIdObject = uint / NonemptyText
-ExtensionMap = { * NonemptyText => any }
 NonemptyText = tstr .ne ""
 ```
 
-Keys `0` through `3` are required. `flags` must be `0`. `section_table` excludes the final
-`FileMetadata` section and may be empty.
+Keys `0` through `2` are required. `section_table` excludes the final `FileMetadata` section and may
+be empty.
 
 #### Metadata Evolution and Extensions
 
-Core maps use unsigned integer keys; attributes and extension maps use non-empty text keys. `janex.`
-is reserved. Third-party keys should use a reverse-domain prefix such as `org.example.`.
+Core maps use unsigned integer keys. Text-keyed metadata uses non-empty keys; `janex.` is reserved.
+Third-party keys should use a reverse-domain prefix such as `org.example.`.
 
 Unknown optional keys may be ignored. Semantic rewrites must preserve them. A field required to
 interpret existing data must be declared through `required_features`, a new section type, or a new
@@ -564,7 +561,6 @@ ConfigGroupObject = {
     ? 5: ([* JavaAgentObject] / null),          ; agents
     ? 6: ([* tstr] / null),                     ; jvm_options
     ? 7: [* ConfigGroupObject],                 ; subgroups
-    ? 8: ExtensionMap,                          ; extensions
     * uint => any,
 }
 ```
@@ -616,8 +612,7 @@ Its section metadata, when present, has this schema:
 
 ```cddl
 ResourceGroupsMetadataObject = {
-    ? 0: SectionRef,          ; string_pool
-    ? 1: ExtensionMap,        ; extensions
+    ? 0: SectionRef,        ; string_pool
     * uint => any,
 }
 ```
@@ -758,13 +753,12 @@ Each `ResourceDirectory` and `DirectoryEntry` contains one `Sized<CborMap>` whos
 
 ```cddl
 ResourceMetadataObject = {
-    ? 0: ExtensionMap,               ; extensions
-    ? 1: ChecksumObject,             ; checksum
-    ? 2: tstr,                       ; comment
-    ? 3: UnixNanosecondsObject,      ; creation_time
-    ? 4: UnixNanosecondsObject,      ; modification_time
-    ? 5: UnixNanosecondsObject,      ; access_time
-    ? 6: 0..65535,                   ; posix_permissions
+    ? 0: ChecksumObject,             ; checksum
+    ? 1: tstr,                       ; comment
+    ? 2: UnixNanosecondsObject,      ; creation_time
+    ? 3: UnixNanosecondsObject,      ; modification_time
+    ? 4: UnixNanosecondsObject,      ; access_time
+    ? 5: 0..65535,                   ; posix_permissions
     * uint => any,
 }
 
@@ -982,7 +976,6 @@ BlobPoolMetadataObject = {
     0: uint,                           ; blob_count
     1: 256..4096,                      ; page_capacity
     2: [* BlobTablePageInfoObject],    ; table_pages
-    ? 3: ExtensionMap,                 ; extensions
     * uint => any,
 }
 
@@ -997,10 +990,7 @@ BlobTablePageObject = [* BlobInfoObject]
 BlobInfoObject = [
     offset: uint,
     encoding: BlobEncodingObject,
-    ? fields: BlobFieldsObject,
 ]
-
-BlobFieldsObject = { * uint => any }
 ```
 
 `BlobPoolSection.bytes` has length `SectionInfoObject.length - 8`. `blob_count` and all offsets and
@@ -1010,7 +1000,7 @@ the final page contains the remaining entries.
 
 For `blob_index`, the page index is `blob_index / page_capacity` and the index within that page is
 `blob_index % page_capacity`. The logical blob table is the concatenation of the pages in directory
-order. `fields` contains optional per-blob metadata and should be omitted when empty.
+order.
 
 Each page descriptor locates a stored page relative to `BlobPoolSection.bytes`. Decoding the page must
 produce one deterministic CBOR `BlobTablePageObject`. Its checksum covers those decoded CBOR bytes and
