@@ -132,7 +132,7 @@ struct Checksum {
 }
 ```
 
-Currently supported checksum algorithms:
+Checksum algorithms:
 
 ```rust
 #[repr(u16)]
@@ -174,7 +174,7 @@ struct JanexFile {
     /// Always `0x0000_0058_454e_414a` ("JANEX\0\0\0").
     magic_number: u64, // 0x0000_0058_454e_414a ("JANEX\0\0\0")
 
-    /// The ordinary sections of the Janex file.
+    /// The sections of the Janex file.
     sections: [Section; ...],
 
     /// The file-level metadata at the end of the Janex file.
@@ -198,14 +198,10 @@ struct FileMetadata {
     /// The magic number identifying the file metadata.
     magic_number: u64, // 0x4154_4144_4154_454d ("METADATA")
 
-    /// The format major version, currently `0`. Unsupported values are invalid.
+    /// The format major version. Must be `0`.
     major_version: u32,
 
-    /// The format minor version, currently `1`.
-    ///
-    /// With major version `0`, readers accept only explicitly supported minor versions. For later
-    /// major versions, readers should accept higher minor versions where unknown fields are skippable.
-    /// Specification edits do not automatically change this value.
+    /// The format minor version. Must be `1`.
     minor_version: u32,
 
     /// The deterministic CBOR file-metadata map.
@@ -238,8 +234,7 @@ FileMetadataObject = {
 NonemptyText = tstr .ne ""
 ```
 
-`file_metadata` is the final structure within `JanexFile` and has no section type or ID. Its
-`section_table` describes `sections` and may be empty.
+`section_table` describes `JanexFile.sections` and may be empty.
 
 #### Metadata Evolution and Extensions
 
@@ -283,7 +278,7 @@ SectionRef = uint
 A typed `SectionRef<T>` resolves `(T, id)` in the same file. The logical type `T` supplies the required
 `section_type` and has no binary representation.
 
-Currently supported section types:
+Section types:
 
 ```rust
 #[repr(u64)]
