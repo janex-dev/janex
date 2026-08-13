@@ -223,13 +223,20 @@ FileMetadataObject = {
     0: [* SectionInfoObject],          ; section_table
     ? 1: ExternalRegionObject,         ; external_header
     ? 2: ExternalRegionObject,         ; external_tail
+    ? 3: AttributesObject,             ; attributes
     * uint => any,
 }
 
 NonemptyText = tstr .ne ""
+
+AttributesObject = { * NonemptyText => any }
 ```
 
 `section_table` describes `JanexFile.sections` and may be empty.
+
+`attributes` is a file-level name/value map. Attribute names follow the extension naming rules.
+Attributes are descriptive unless their definitions assign operational semantics. Unknown attributes
+may be ignored. Writers should omit an empty map.
 
 #### Metadata Evolution and Extensions
 
@@ -257,7 +264,7 @@ SectionInfoObject = {
 
 For sections with a magic number, `section_type` normally equals that number. `(section_type, id)` must
 be unique within the file. IDs are file-local, may be sparse, and carry no ordering or semantic
-meaning. Singleton section types use ID `0`.
+meaning.
 
 `length` is the exact encoded section length. When present, `checksum` covers those bytes and must be
 verified.
@@ -280,8 +287,6 @@ enum SectionType {
     /// Arbitrary padding bytes; no section magic number is required.
     Padding = 0x0047_4e49_4444_4150, // "PADDING\0"
 
-    Attributes = 0x2e53_4249_5254_5441, // "ATTRIBS."
-    
     BlobPool = 0x4c4f_4f50_424f_4c42, // "BLOBPOOL"
     
     JavaApplicationDescriptor = 0x2e50_5041_4156_414a, // "JAVAAPP."
@@ -438,30 +443,6 @@ checksum algorithms are `SHA256`, `SHA512`, and `SM3`.
 
 The signature authenticates `verification_input`; the recorded secure checksums authenticate section
 and external-region bytes.
-
-### `Attributes` Section
-
-```rust
-struct AttributesSection {
-    /// The magic number identifying this as an attributes section.
-    ///
-    /// Always `0x2e53_4249_5254_5441` ("ATTRIBS.").
-    magic_number: u64, // 0x2e53_4249_5254_5441 ("ATTRIBS.")
-
-    /// One deterministic CBOR `AttributesObject`.
-    attributes: CborMap, // AttributesObject
-}
-```
-
-`attributes` occupies the remainder of the section. A file may contain at most one `Attributes`
-section, with ID `0`. Attributes are descriptive unless their definitions assign operational semantics.
-
-```cddl
-AttributesObject = { * NonemptyText => any }
-```
-
-Attribute names follow the extension naming rules. Unknown attributes may be ignored. An empty map is
-valid, though writers should omit the section in that case.
 
 ### Descriptor Sections
 
