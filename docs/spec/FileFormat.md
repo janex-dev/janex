@@ -590,6 +590,12 @@ transforms. `Content` values inside the root may refer to other blobs. The strin
 those content blobs are dependencies of the root and must be finite and acyclic. Multiple path
 entries may name the same resource-root blob.
 
+A `ResourceRoot` is one logical tree built from ordered layers. Each layer has a `ConditionObject`.
+After a Java runtime is selected, the launcher evaluates every layer against that runtime and the
+host. Matching layers are applied from first to last. Later layers override earlier values at the
+same path. The merged tree is one classpath or module-path entry. It is not a list of separate
+entries.
+
 ```rust
 struct ResourceRoot {
     /// The string pool used by paths in this root and by `CLASSFILE` transforms in this root.
@@ -598,7 +604,15 @@ struct ResourceRoot {
     /// One deterministic CBOR `ResourceRootMetadataObject`.
     metadata: Sized<CborMap>, // ResourceRootMetadataObject
 
-    /// The directories in path order.
+    /// Layers in application order.
+    layers: Vec<ResourceLayer>,
+}
+
+struct ResourceLayer {
+    /// One deterministic CBOR `ConditionObject`. An empty map is unconditional.
+    condition: Sized<CborMap>, // ConditionObject
+
+    /// The directories in this layer, in path order.
     directories: Vec<ResourceDirectory>,
 }
 ```
@@ -607,9 +621,16 @@ struct ResourceRoot {
 ResourceRootMetadataObject = { * NonemptyText => any }
 ```
 
-The metadata map may be empty. Directories form a flat list; paths carry the hierarchy. Readers must
-resolve `string_pool` before interpreting directory paths, entry names, or symbolic-link targets.
-Multiple resource roots may name the same string-pool blob.
+The metadata map may be empty. `priority` in a layer `condition` is ignored. An invalid `java` VERS
+in a layer condition makes the resource root invalid. Readers must resolve `string_pool` before
+interpreting directory paths, entry names, or symbolic-link targets. Multiple resource roots may
+name the same string-pool blob. Directory paths are unique within a layer, not across layers.
+
+A Multi-Release JAR is an import mapping, not the native layout. The base tree becomes an
+unconditional layer. Each `META-INF/versions/N/` tree becomes a layer whose `java` constraint is
+`vers:jep322/>=N`. Those layers must appear in increasing `N` so that a later matching layer
+overrides an earlier one. Export to a JAR may reconstruct `META-INF/versions/` only when every
+layer condition is a Java feature range and does not constrain `os`, `arch`, or `vendor`.
 
 ##### String Pools
 
@@ -641,9 +662,24 @@ file converts selected strings to Modified UTF-8.
 ##### `ResourceDirectory`
 
 ```rust
+#[repr(u8)]
+enum DirectoryOp {
+    /// Merge `entries` into this directory.
+    Merge = 0,
+
+    /// Discard earlier direct entries in this directory, then apply `entries`.
+    Replace = 1,
+
+    /// Discard this directory and all descendant paths. `entries_count` must be `0`.
+    Remove = 2,
+}
+
 struct ResourceDirectory {
     /// The directory path relative to the resource root, as an index into the root's string pool.
     path: StringPoolIndex,
+
+    /// How this record updates the merged tree.
+    op: DirectoryOp,
 
     /// One deterministic CBOR resource-metadata map.
     metadata: Sized<CborMap>, // ResourceMetadataObject
@@ -658,9 +694,16 @@ struct ResourceDirectory {
 
 The empty path identifies the root directory. Other directory paths are UTF-8, `/`-separated, and
 must not start or end with `/` or contain empty, `.` or `..` components.
-Directory paths are unique and sorted by the UTF-8 bytes of the resolved strings. Parent directories
-may be implicit; an empty directory or its metadata is preserved by an explicit record with no
-entries.
+Directory paths are unique within a layer and sorted by the UTF-8 bytes of the resolved strings.
+Parent directories may be implicit; an empty directory or its metadata is preserved by an explicit
+`Merge` or `Replace` record with no entries.
+
+When applying a matching layer, directory records are applied in path order. `Remove` deletes the
+directory path and every descendant path contributed by earlier layers. `Replace` deletes earlier
+direct entries of this directory and does not delete descendant directories. `Merge` keeps earlier
+entries and then applies `entries`. A later file or symbolic link with the same name replaces the
+earlier one. A tombstone removes an earlier file or symbolic link with that name. A tombstone for a
+name that is not present is ignored.
 
 `entries.transforms` must be empty.
 
@@ -701,13 +744,25 @@ enum DirectoryEntry {
         /// One deterministic CBOR resource-metadata map.
         metadata: Sized<CborMap>, // ResourceMetadataObject
     },
+
+    /// Removes an earlier file or symbolic link with this name.
+    Tombstone {
+        /// The resource type tag for this variant.
+        ///
+        /// Always `0x424d4f54` ("TOMB").
+        resource_type: u32, // 0x424d4f54 ("TOMB")
+
+        /// The name to remove within the directory.
+        name: StringPoolIndex,
+    },
 }
 ```
 
 Entry names are nonempty UTF-8 strings without `/` and must not be `.` or `..`. They are unique within
-their directory and sorted by the UTF-8 bytes of the resolved strings. A full resource path is the
-resolved entry name for the root directory, or `directory_path + "/" + entry_name` otherwise, using
-the resolved strings. Directory records and entries must not produce conflicting paths.
+their directory, including tombstones, and sorted by the UTF-8 bytes of the resolved strings. A full
+resource path is the resolved entry name for the root directory, or `directory_path + "/" +
+entry_name` otherwise, using the resolved strings. Directory records and file or symbolic-link
+entries must not produce conflicting paths.
 
 Symbolic-link targets use normalized relative `/`-separated paths and follow the nonempty path rules
 used for non-root directory paths.
