@@ -299,7 +299,7 @@ enum SectionType {
 
     BlobPool = 0x4c4f_4f50_424f_4c42, // "BLOBPOOL"
 
-    Application = 0x5441_4349_4c50_5041, // "APPLICAT"
+    Application = 0x5050_4158_454e_414a, // "JANEXAPP"
 }
 ```
 
@@ -465,7 +465,7 @@ Subcommands interpreted by one program are ordinary application arguments.
 
 ```rust
 struct ApplicationSection {
-    magic_number: u64, // 0x5441_4349_4c50_5041 ("APPLICAT")
+    magic_number: u64, // 0x5050_4158_454e_414a ("JANEXAPP")
 
     /// One deterministic CBOR `ApplicationObject`.
     application: CborMap, // ApplicationObject
