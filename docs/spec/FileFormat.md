@@ -223,7 +223,7 @@ FileMetadataObject = {
     0: [* SectionInfoObject],                    ; section_table
     ? 1: ExternalRegionObject,                   ; external_header
     ? 2: ExternalRegionObject,                   ; external_tail
-    ? 3: [uint, uint],                           ; default_entry: [section_type, id]
+    ? 3: uint,                                  ; default_entry: SectionRef
     * NonemptyText => any,
     * uint => any,
 }
@@ -238,8 +238,8 @@ reserved. Third-party keys should use a reverse-domain prefix such as `org.examp
 descriptive unless their definitions assign operational semantics. Unknown text keys may be ignored.
 Writers should omit unused keys.
 
-`default_entry` is the file's single default entry. It is a `[section_type, id]` pair that must name
-an existing application descriptor section. The only application section type in this document is
+`default_entry` is the file's single default entry. It is a `SectionRef` that must name an existing
+application descriptor section. The only application section type in this document is
 `JavaApplication`. A reference to `Padding`, `BlobPool`, a missing section, or an unknown
 non-application type is invalid.
 
@@ -272,8 +272,8 @@ SectionInfoObject = {
 }
 ```
 
-For sections with a magic number, `section_type` normally equals that number. `(section_type, id)` must
-be unique within the file. IDs are file-local, may be sparse, and carry no ordering or semantic
+For sections with a magic number, `section_type` normally equals that number. `id` must be unique
+within the file across all section types. IDs may be sparse and carry no ordering or semantic
 meaning.
 
 `length` is the exact encoded section length. When present, `checksum` covers those bytes and must be
@@ -287,7 +287,8 @@ Other keys are defined by `section_type`.
 SectionRef = uint
 ```
 
-`SectionRef<T>` encodes the file-local ID of a section of type `T`.
+`SectionRef` is a section `id`. The referenced row must exist. When the context requires a type `T`,
+that row's `section_type` must be `T`.
 
 Section types:
 
@@ -1055,8 +1056,8 @@ blob ranges must fit in `bytes` and must not overlap. Writers may place them in 
 
 ```rust
 struct BlobRef {
-    /// The file-local ID of a `BlobPool` section.
-    blob_pool: vuint, // SectionRef<BlobPoolSection>
+    /// The ID of a `BlobPool` section.
+    blob_pool: vuint, // SectionRef
 
     /// The zero-based index of the blob in the referenced pool's `BlobTable`.
     blob_index: vuint,
@@ -1072,8 +1073,8 @@ BlobRefObject = [
 ]
 ```
 
-A `BlobRef` and a `BlobRefObject` identify the same blob. `blob_pool` must be the file-local ID of a
-`BlobPool` section. `blob_index` must select an existing entry in that pool's `BlobTable`. Decoding
+A `BlobRef` and a `BlobRefObject` identify the same blob. `blob_pool` must be a `SectionRef` whose
+section is a `BlobPool`. `blob_index` must select an existing entry in that pool's `BlobTable`. Decoding
 produces uninterpreted bytes; the containing structure assigns their meaning.
 
 `BlobSlice` identifies a non-empty range in the decoded representation of one blob:
