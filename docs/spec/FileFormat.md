@@ -223,7 +223,7 @@ FileMetadataObject = {
     0: [* SectionInfoObject],                    ; section_table
     ? 1: ExternalRegionObject,                   ; external_header
     ? 2: ExternalRegionObject,                   ; external_tail
-    ? "janex.default-application": [uint, uint], ; [section_type, id]
+    ? 3: [uint, uint],                           ; default_entry: [section_type, id]
     * NonemptyText => any,
     * uint => any,
 }
@@ -233,20 +233,20 @@ NonemptyText = tstr .ne ""
 
 `section_table` describes `JanexFile.sections` and may be empty.
 
-Unsigned integer keys are container mechanics. Text keys are attributes or catalog roles. The
-`janex.` prefix is reserved. Third-party keys should use a reverse-domain prefix such as
-`org.example.`. Other text keys are attributes: they are descriptive unless their definitions assign
-operational semantics. Unknown text keys may be ignored. Writers should omit unused keys.
+Unsigned integer keys are container mechanics. Text keys are attributes. The `janex.` prefix is
+reserved. Third-party keys should use a reverse-domain prefix such as `org.example.`. Attributes are
+descriptive unless their definitions assign operational semantics. Unknown text keys may be ignored.
+Writers should omit unused keys.
 
-`janex.default-application` is the file's single default application entry. It is a
-`[section_type, id]` pair that must name an existing application descriptor section. The only
-application section type in this document is `JavaApplication`. A reference to `Padding`,
-`BlobPool`, a missing section, or an unknown non-application type is invalid.
+`default_entry` is the file's single default entry. It is a `[section_type, id]` pair that must name
+an existing application descriptor section. The only application section type in this document is
+`JavaApplication`. A reference to `Padding`, `BlobPool`, a missing section, or an unknown
+non-application type is invalid.
 
-The caller may select an application by `id`. Otherwise the launcher uses `janex.default-application`
-when that section's root `condition` matches. If the key is omitted and the file contains exactly
-one application section, that section is the default. If several application sections match and none
-is selected, the launcher must reject the ambiguity.
+The caller may select an application by `id`. Otherwise the launcher uses `default_entry` when that
+section's root `condition` matches. If the key is omitted and the file contains exactly one
+application section, that section is the default. If several application sections match and none is
+selected, the launcher must reject the ambiguity.
 
 #### Metadata Evolution and Extensions
 
