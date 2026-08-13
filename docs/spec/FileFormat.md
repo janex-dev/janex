@@ -223,7 +223,7 @@ FileMetadataObject = {
     0: [* SectionInfoObject],                    ; section_table
     ? 1: ExternalRegionObject,                   ; external_header
     ? 2: ExternalRegionObject,                   ; external_tail
-    ? "janex.java-application": [+ JavaLaunchConfigObject],
+    ? "janex.java-application": JavaLaunchConfigObject,
     * NonemptyText => any,
     * uint => any,
 }
@@ -239,14 +239,10 @@ third-party text keys are attributes: they are descriptive unless their definiti
 operational semantics. Third-party keys should use a reverse-domain prefix such as `org.example.`.
 Unknown text keys may be ignored. Writers should omit unused keys.
 
-`janex.java-application` lists Java launch configurations stored in this metadata map. Local resource
-roots are blobs; descriptors reference those blobs and may share them.
+`janex.java-application` is the Java launch configuration for this file. Local resource roots are
+blobs; the configuration references those blobs and may share them.
 
-The caller may select a Java application explicitly by `id`. Otherwise the launcher may select among
-applications whose root `condition` matches the host and a candidate runtime, preferring a greater
-root `priority`. A single listed application needs no explicit selection. Ambiguity may be rejected.
-
-Java launch configurations are defined in [Java Applications](#java-applications).
+The launch configuration is defined in [Java Application](#java-application).
 
 #### Metadata Evolution and Extensions
 
@@ -452,7 +448,7 @@ checksum algorithms are `SHA256`, `SHA512`, and `SM3`.
 The signature authenticates `verification_input`; the recorded secure checksums authenticate section
 and external-region bytes.
 
-### Java Applications
+### Java Application
 
 #### `JavaLaunchConfigObject`
 
@@ -472,7 +468,7 @@ JavaLaunchConfigObject = {
 ```
 
 An omitted `condition` is unconditional. `ConditionObject` is defined below. `id`, when present, is a
-non-empty file-local name. Application `id` values must be unique within `janex.java-application`.
+non-empty application identity.
 
 The launcher visits the root configuration and its `overlays` in depth-first pre-order. Each matching
 object contributes as follows:
