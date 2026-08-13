@@ -223,6 +223,7 @@ FileMetadataObject = {
     0: [* SectionInfoObject],                    ; section_table
     ? 1: ExternalRegionObject,                   ; external_header
     ? 2: ExternalRegionObject,                   ; external_tail
+    ? "janex.default-application": [uint, uint], ; [section_type, id]
     * NonemptyText => any,
     * uint => any,
 }
@@ -232,10 +233,20 @@ NonemptyText = tstr .ne ""
 
 `section_table` describes `JanexFile.sections` and may be empty.
 
-Unsigned integer keys are container mechanics. Text keys are attributes. The `janex.` prefix is
-reserved. Third-party keys should use a reverse-domain prefix such as `org.example.`. Attributes are
-descriptive unless their definitions assign operational semantics. Unknown text keys may be ignored.
-Writers should omit unused keys.
+Unsigned integer keys are container mechanics. Text keys are attributes or catalog roles. The
+`janex.` prefix is reserved. Third-party keys should use a reverse-domain prefix such as
+`org.example.`. Other text keys are attributes: they are descriptive unless their definitions assign
+operational semantics. Unknown text keys may be ignored. Writers should omit unused keys.
+
+`janex.default-application` is the file's single default application entry. It is a
+`[section_type, id]` pair that must name an existing application descriptor section. The only
+application section type in this document is `JavaApplication`. A reference to `Padding`,
+`BlobPool`, a missing section, or an unknown non-application type is invalid.
+
+The caller may select an application by `id`. Otherwise the launcher uses `janex.default-application`
+when that section's root `condition` matches. If the key is omitted and the file contains exactly
+one application section, that section is the default. If several application sections match and none
+is selected, the launcher must reject the ambiguity.
 
 #### Metadata Evolution and Extensions
 
@@ -445,9 +456,10 @@ and external-region bytes.
 
 ### `JavaApplication` Section
 
-A file contains at most one `JavaApplication` section. A file without one is not a Java application.
-The section body after the magic number is one deterministic CBOR `JavaApplicationObject`. Local
-resource roots are blobs; the descriptor references those blobs and may share them.
+A file may contain any number of `JavaApplication` sections. Each section is one application. The
+section body after the magic number is one deterministic CBOR `JavaApplicationObject`. Local resource
+roots are blobs; descriptors reference those blobs and may share them. A file with no application
+section is not executable.
 
 ```rust
 struct JavaApplicationSection {
@@ -474,9 +486,9 @@ JavaApplicationObject = {
 }
 ```
 
-`id` is a non-empty install identity. `name` is a non-empty display name. `version` is the
-application's own version string; it is not a `jep322` value. `comment` is a short description.
-`launch` is required.
+`id` is a non-empty install identity. When present, it must be unique among application sections in
+the file. `name` is a non-empty display name. `version` is the application's own version string; it
+is not a `jep322` value. `comment` is a short description. `launch` is required.
 
 #### `JavaIntegrationObject`
 
@@ -551,6 +563,7 @@ ConditionObject = {
     ? 1: (tstr / [+ tstr]),                     ; os
     ? 2: (tstr / [+ tstr]),                     ; arch
     ? 3: tstr,                                  ; vendor
+    ? 4: (tstr / [+ tstr]),                     ; invocation
     * uint => any,
 }
 ```
@@ -564,12 +577,17 @@ strings. `os` is matched against the host operating system. `arch` is matched ag
 The normalized operating-system names are `linux`, `windows`, and `macos`. The normalized CPU names
 are `x86`, `x86-64`, and `aarch64`. Other names match only by exact equality.
 
-A text `os` or `arch` value matches that one name. An array matches if the host name equals any
-element. An omitted key imposes no constraint.
+`invocation` is the channel that started this launch. The defined values are `run` for
+`janex run` of a Janex file, `open` for a file-association or double-click open, and `command` for
+an installed `PATH` command. It is not a windowing mode: a graphical application started with
+`janex run` still has invocation `run`.
 
-A condition matches a candidate Java runtime and the current host when every present constraint
-matches. An invalid `java` VERS makes the application descriptor invalid; it is not treated as a
-non-match.
+A text `os`, `arch`, or `invocation` value matches that one name. An array matches if the candidate
+equals any element. An omitted key imposes no constraint.
+
+A condition matches a candidate Java runtime, the current host, and the current invocation when every
+present constraint matches. An invalid `java` VERS makes the application descriptor invalid; it is
+not treated as a non-match. An unknown `invocation` token does not match.
 
 The launcher considers each candidate runtime against the root condition. A candidate that does not
 match is discarded. Among remaining candidates, the launcher walks the root configuration and its
