@@ -11,7 +11,7 @@ directly executable.
 
 The CLI should separate software acquisition from software execution:
 
-- `janex install`: acquire a Janex application, validate it, present trust and policy decisions, and record a local installed copy.
+- `janex install`: acquire a Janex application bundle, validate it, present trust and policy decisions, and record a local installed copy.
 - `janex run`: start an installed application or a local Janex file without implicitly treating remote content as trusted software.
 - `janex java`: discover, install, select, and remove Java installations used by Janex.
 
@@ -23,7 +23,7 @@ If no suitable runtime is available, `janex run` should report the missing requi
 
 ## `janex install`
 
-`janex install` installs a Janex application from a URI or a local file.
+`janex install` installs a Janex application bundle from a URI or a local file.
 
 ### Synopsis
 
@@ -40,17 +40,18 @@ At a high level, the command should:
 1. Resolve the target from a URI or local file.
 2. Download or read the Janex file.
 3. Validate the file structure, integrity information, and signatures when available.
-4. Inspect launch-sensitive features such as remote dependencies, Java agents, and embedded JVM options.
+4. Inspect every supported application section for launch-sensitive features such as remote
+   dependencies, Java agents, and embedded JVM options.
 5. Require explicit user consent when policy-sensitive actions are involved.
 6. Record a local installed copy together with its source and trust metadata.
-7. Honor `JavaIntegrationObject` requests when policy allows: expose a `PATH` command and create a
-   Start Menu or equivalent launcher, using the declared icons when present.
+7. Register each supported application section by its `id` and honor its `JavaIntegrationObject`
+   requests when policy allows. Each section may expose its own `PATH` command or graphical launcher.
 
 ### Arguments
 
 #### `<TARGET>`
 
-The Janex application to install.
+The Janex application bundle to install.
 
 This value may be either:
 
@@ -102,13 +103,12 @@ The `run` subcommand is responsible for execution, not software acquisition.
 At a high level, the command should:
 
 1. Locate the installed application or open the local Janex file.
-2. Select a `JavaApplication` section: an explicit application `id`, otherwise
-   `FileMetadata` `default_application` when it matches, otherwise the only application section. Set
-   `invocation` to `run`.
+2. Select a `JavaApplication` section: an explicit application `id`, otherwise FileMetadata
+   `default_application`, otherwise the only application section. Set `invocation` to `run`.
 3. Detect the current platform and available Java runtimes.
 4. Evaluate its launch conditions to select the best runtime.
 5. Build the final JVM invocation, including module path, class path, Java agents, and JVM options.
-6. Start the target application and forward its exit code.
+6. Start the target application using its launch mode and forward its exit code.
 
 Remote URIs should be installed first instead of being executed directly by `janex run`.
 
@@ -136,6 +136,7 @@ Application arguments passed to the target Java program.
 
 The exact option set may evolve, but the `run` subcommand is expected to support the following categories:
 
+- `--application <ID>` selects an application section when a local file contains multiple targets.
 - Java runtime selection override, such as explicitly providing a Java executable or Java home.
 - Offline and policy controls for local-file execution.
 - Diagnostics output, such as printing the selected runtime, resolved configuration, or final JVM command.
@@ -153,6 +154,12 @@ Run a local Janex file:
 
 ```text
 janex run ./app.janex
+```
+
+Select an application from a file containing multiple launch targets:
+
+```text
+janex run --application javac ./jdk-tools.janex --version
 ```
 
 Pass application arguments:

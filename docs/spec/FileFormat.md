@@ -243,10 +243,10 @@ refer to an existing application section. In this document that type is `JavaApp
 application section types may also be used. The reference is invalid if the section is missing or is
 not an application section.
 
-The caller may select an application by `id`. Otherwise the launcher uses `default_application` when
-that section's root `condition` matches. If the key is omitted and the file contains exactly one
-application section, that section is the default. If several application sections match and none is
-selected, the launcher must reject the ambiguity.
+The caller may select an application by `id`. Otherwise the launcher uses `default_application`. If
+the key is omitted and the file contains exactly one application section, that section is the
+default. If the file contains several application sections and none is selected, the launcher must
+reject the ambiguity.
 
 #### Metadata Evolution and Extensions
 
@@ -457,10 +457,13 @@ and external-region bytes.
 
 ### `JavaApplication` Section
 
-A file may contain any number of `JavaApplication` sections. Each section is one application. The
-section body after the magic number is one deterministic CBOR `JavaApplicationObject`. Local resource
-roots are blobs; descriptors reference those blobs and may share them. A file with no application
-section is not executable.
+A file may contain any number of `JavaApplication` sections. Each section is one independently
+launchable Java target. Multiple targets may share resource-root blobs. The section body after the
+magic number is one deterministic CBOR `JavaApplicationObject`. A file with no application section
+has no launch target.
+
+Separate commands with independent launch configurations use separate application sections.
+Subcommands interpreted by one Java program are ordinary application arguments.
 
 ```rust
 struct JavaApplicationSection {
@@ -477,19 +480,25 @@ struct JavaApplicationSection {
 
 ```cddl
 JavaApplicationObject = {
-    ? 0: tstr,                                  ; id
-    ? 1: tstr,                                  ; name
+    0: NonemptyText,                            ; id
+    ? 1: NonemptyText,                          ; name
     ? 2: tstr,                                  ; version
     ? 3: tstr,                                  ; comment
     ? 4: JavaIntegrationObject,                 ; integration
     5: JavaLaunchConfigObject,                  ; launch
+    ? 6: JavaLaunchMode,                        ; launch_mode
     * uint => any,
 }
+
+JavaLaunchMode =
+    0                                           ; console
+  / 1                                           ; windowed
 ```
 
-`id` is a non-empty install identity. When present, it must be unique among application sections in
-the file. `name` is a non-empty display name. `version` is the application's own version string; it
-is not a `jep322` value. `comment` is a short description. `launch` is required.
+`id` identifies the launch target and must be unique among application sections in the file. `name`
+is a display name. `version` is the application's own version string; it is not a `jep322` value.
+`comment` is a short description. `launch_mode` defaults to `console`. `windowed` suppresses console
+window creation on platforms that distinguish the two modes.
 
 #### `JavaIntegrationObject`
 
@@ -502,11 +511,10 @@ JavaIntegrationObject = {
 }
 ```
 
-These fields are author requests. The Host and its policy may ignore them.
+These fields request installation integration. The Host applies them according to local policy.
 
-`path_command` asks the installer to expose a command on `PATH`. An omitted value leaves the choice
-to the implementation. `false` forbids a command. When a command is created, its name is `id` if
-present, otherwise a name derived by the implementation.
+`path_command` set to `true` requests a command on `PATH` named by the application's `id`. An omitted
+value or `false` makes no request.
 
 `start_menu` asks the installer to create a Start Menu entry on Windows, a `.desktop` entry on
 Linux, or an equivalent launcher on other platforms. An omitted value or `false` means no such
@@ -534,13 +542,12 @@ resolved bytes are the image.
 ```cddl
 JavaLaunchConfigObject = {
     ? 0: ConditionObject,                       ; condition
-    ? 1: (tstr / null),                         ; main_class
-    ? 2: (tstr / null),                         ; main_module
-    ? 3: ([* JavaPathEntryObject] / null),       ; module_path
-    ? 4: ([* JavaPathEntryObject] / null),       ; class_path
-    ? 5: ([* JavaAgentObject] / null),           ; agents
-    ? 6: ([* tstr] / null),                     ; jvm_options
-    ? 7: [* JavaLaunchConfigObject],             ; overlays
+    ? 1: (JavaEntryPointObject / null),          ; entry_point
+    ? 2: ([* JavaPathEntryObject] / null),       ; module_path
+    ? 3: ([* JavaPathEntryObject] / null),       ; class_path
+    ? 4: ([* JavaAgentObject] / null),           ; agents
+    ? 5: ([* tstr] / null),                     ; jvm_options
+    ? 6: [* JavaLaunchConfigObject],             ; overlays
     * uint => any,
 }
 ```
@@ -551,10 +558,32 @@ The launcher visits the root configuration and its `overlays` in depth-first pre
 object contributes as follows:
 
 - missing keys make no contribution;
-- `main_class` and `main_module` replace the current value, while `null` clears it;
+- `entry_point` replaces the current value, while `null` clears it;
 - arrays append to `module_path`, `class_path`, `agents`, or `jvm_options`, while `null` clears that
   list; and
 - `overlays` preserves array order and must not be `null`.
+
+The resulting configuration must contain an `entry_point`.
+
+#### `JavaEntryPointObject`
+
+```cddl
+JavaEntryPointObject =
+    {
+        0: 0,                                    ; class
+        1: NonemptyText,                         ; main_class
+        * uint => any,
+    }
+  / {
+        0: 1,                                    ; module
+        1: NonemptyText,                         ; main_module
+        ? 2: NonemptyText,                       ; main_class
+        * uint => any,
+    }
+```
+
+The class variant launches `main_class`. The module variant launches `main_module`; when
+`main_class` is omitted, the module supplies its main class.
 
 #### `ConditionObject`
 
