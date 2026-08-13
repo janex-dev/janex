@@ -40,13 +40,14 @@ At a high level, the command should:
 1. Resolve the target from a URI or local file.
 2. Download or read the Janex file.
 3. Validate the file structure, integrity information, and signatures when available.
-4. Inspect every supported `Application` section for launch-sensitive features such as remote
+4. Require a `bundle_id` and use it to identify a new installation or an update.
+5. Inspect every supported `Application` section for launch-sensitive features such as remote
    dependencies, Java agents, and embedded JVM options.
-5. Require explicit user consent when policy-sensitive actions are involved.
-6. Record a local installed copy together with its source and trust metadata.
-7. Register each supported `Application` section by its `id` and honor its
-   `ApplicationIntegrationObject` requests when policy allows. Each section may expose its own
-   `PATH` command or graphical launcher.
+6. Require explicit user consent when policy-sensitive actions are involved.
+7. Record a local installed copy together with its source and trust metadata.
+8. Register each supported `Application` section by (`bundle_id`, application `id`) and honor its
+   `ApplicationIntegrationObject` requests when policy allows. Each generated command or launcher
+   resolves to that pair.
 
 ### Arguments
 
@@ -64,7 +65,7 @@ This value may be either:
 The exact option set may evolve, but the `install` subcommand is expected to support the following categories:
 
 - Installation location selection.
-- Update or replacement behavior for an already installed application.
+- Update or replacement behavior for an installed bundle with the same `bundle_id`.
 - Trust and policy overrides, such as non-interactive approval flags.
 - Diagnostics output for validation and signature results.
 
@@ -84,7 +85,7 @@ janex install app.janex
 
 ### Exit Status
 
-- `0`: the application was installed successfully.
+- `0`: the bundle was installed successfully.
 - Non-zero: installation failed or was rejected by policy.
 
 ## `janex run`
@@ -103,7 +104,7 @@ The `run` subcommand is responsible for execution, not software acquisition.
 
 At a high level, the command should:
 
-1. Locate the installed application or open the local Janex file.
+1. Locate the installed bundle by `bundle_id` or open the local Janex file.
 2. Select an `Application` section: an explicit application `id`, otherwise FileMetadata
    `default_application`, otherwise the only application section.
 3. Select a launcher for its `application_type`; reject unsupported types.
@@ -121,7 +122,7 @@ The Janex application to run.
 
 This value may be either:
 
-- An installed application identifier.
+- An installed bundle ID.
 - A local file name or path.
 - A local `file:` URI.
 
@@ -131,13 +132,13 @@ This means Janex CLI options for the `run` subcommand must appear before `<TARGE
 
 #### `[ARGS...]`
 
-Application arguments passed to the target Java program.
+Application arguments passed to the selected program.
 
 ### Options
 
 The exact option set may evolve, but the `run` subcommand is expected to support the following categories:
 
-- `--application <ID>` selects an application section when a local file contains multiple targets.
+- `--application <ID>` selects an application section within the bundle or local file.
 - Java runtime selection override, such as explicitly providing a Java executable or Java home.
 - Offline and policy controls for local-file execution.
 - Diagnostics output, such as printing the selected runtime, resolved configuration, or final JVM command.

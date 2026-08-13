@@ -224,6 +224,7 @@ FileMetadataObject = {
     ? 1: ExternalRegionObject,                   ; external_header
     ? 2: ExternalRegionObject,                   ; external_tail
     ? 3: SectionRef,                            ; default_application
+    ? 4: NonemptyText,                          ; bundle_id
     * NonemptyText => any,
     * uint => any,
 }
@@ -242,10 +243,14 @@ Writers should omit unused keys.
 refer to an existing `Application` section. The reference is invalid if the section is missing or has
 a different type.
 
-The caller may select an application by `id`. Otherwise the launcher uses `default_application`. If
-the key is omitted and the file contains exactly one application section, that section is the
-default. If the file contains several application sections and none is selected, the launcher must
-reject the ambiguity.
+The caller may select an application by `ApplicationObject.id`. Otherwise the launcher uses
+`default_application`. If the key is omitted and the file contains exactly one application section,
+that section is the default. If the file contains several application sections and none is selected,
+the launcher must reject the ambiguity.
+
+`bundle_id` is the stable identity of an installable Janex bundle. It must be globally unique and
+should use a reverse-domain name such as `org.example.tools`. Local execution does not require it.
+Installation identifies a launch target by the pair (`bundle_id`, `ApplicationObject.id`).
 
 #### Metadata Evolution and Extensions
 
@@ -496,7 +501,9 @@ ApplicationLaunchMode =
   / 1                                           ; windowed
 ```
 
-`id` identifies the launch target and must be unique among application sections in the file.
+`id` identifies the launch target within the file and must be unique among its application sections.
+The same logical target should retain its `id` across files with the same `bundle_id`.
+`SectionInfoObject.id` locates the section and is not part of the installed target identity.
 `application_type` selects the schema and semantics of `descriptor`; this document defines
 `janex.java`, and reserves the `janex.` prefix. Third-party types use a reverse-domain name.
 `descriptor` must follow the selected schema. `name` is a display name. `version` is the application's
@@ -509,7 +516,7 @@ Unsupported application types may be displayed and preserved but cannot be launc
 
 ```cddl
 ApplicationIntegrationObject = {
-    ? 0: bool,                                  ; path_command
+    ? 0: NonemptyText,                          ; path_command
     ? 1: bool,                                  ; desktop_launcher
     ? 2: [+ ApplicationIconObject],             ; icons
     * uint => any,
@@ -518,8 +525,8 @@ ApplicationIntegrationObject = {
 
 These fields request installation integration. The Host applies them according to local policy.
 
-`path_command` set to `true` requests a command on `PATH` named by the application's `id`. An omitted
-value or `false` makes no request.
+`path_command` requests a command with that name on `PATH`. It is a command name, not a path, and must
+be valid as a single file name on the target platform. An omitted value makes no request.
 
 `desktop_launcher` asks the installer to create a Start Menu entry on Windows, a `.desktop` entry on
 Linux, or an equivalent launcher on other platforms. An omitted value or `false` makes no request.
