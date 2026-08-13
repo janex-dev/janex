@@ -224,7 +224,6 @@ FileMetadataObject = {
     ? 1: ExternalRegionObject,                   ; external_header
     ? 2: ExternalRegionObject,                   ; external_tail
     ? "janex.java-application": [+ JavaLaunchConfigObject],
-    ? "janex.java-application.default": uint,
     * NonemptyText => any,
     * uint => any,
 }
@@ -235,20 +234,17 @@ NonemptyText = tstr .ne ""
 `section_table` describes `JanexFile.sections` and may be empty.
 
 Unsigned integer keys are container mechanics. Text keys are descriptors and attributes. The `janex.`
-prefix is reserved. `janex.java-application` and `janex.java-application.default` have the schemas
-above. Other `janex.` keys and all third-party text keys are attributes: they are descriptive unless
-their definitions assign operational semantics. Third-party keys should use a reverse-domain prefix
-such as `org.example.`. Unknown text keys may be ignored. Writers should omit unused keys.
+prefix is reserved. `janex.java-application` has the schema above. Other `janex.` keys and all
+third-party text keys are attributes: they are descriptive unless their definitions assign
+operational semantics. Third-party keys should use a reverse-domain prefix such as `org.example.`.
+Unknown text keys may be ignored. Writers should omit unused keys.
 
 `janex.java-application` lists Java launch configurations stored in this metadata map. Local resource
-roots are blobs; descriptors reference those blobs and may share them. `janex.java-application.default`
-is a zero-based index into that array and is invalid if it is out of range or if
-`janex.java-application` is omitted.
+roots are blobs; descriptors reference those blobs and may share them.
 
-The caller may select a Java application explicitly. Otherwise the launcher uses
-`janex.java-application.default` when present. If neither is available, it may select among
+The caller may select a Java application explicitly by `id`. Otherwise the launcher may select among
 applications whose root `condition` matches the host and a candidate runtime, preferring a greater
-root `priority`, or it may reject the ambiguity.
+root `priority`. A single listed application needs no explicit selection. Ambiguity may be rejected.
 
 Java launch configurations are defined in [Java Applications](#java-applications).
 
