@@ -1,8 +1,8 @@
 # Janex File Format
 
 Janex is a sectioned, multi-root container format. Its core stores shared content, metadata, and
-verification information. Optional descriptors in `FileMetadata` define uses such as Java
-applications or executables for other runtimes.
+verification information. Optional descriptor sections define uses such as Java applications or
+executables for other runtimes.
 
 ## Data Types
 
@@ -223,7 +223,6 @@ FileMetadataObject = {
     0: [* SectionInfoObject],                    ; section_table
     ? 1: ExternalRegionObject,                   ; external_header
     ? 2: ExternalRegionObject,                   ; external_tail
-    ? "janex.java-application": JavaApplicationObject,
     * NonemptyText => any,
     * uint => any,
 }
@@ -233,17 +232,10 @@ NonemptyText = tstr .ne ""
 
 `section_table` describes `JanexFile.sections` and may be empty.
 
-Unsigned integer keys are container mechanics. Text keys are descriptors and attributes. The `janex.`
-prefix is reserved. `janex.java-application` has the schema above. Other `janex.` keys and all
-third-party text keys are attributes: they are descriptive unless their definitions assign
-operational semantics. Third-party keys should use a reverse-domain prefix such as `org.example.`.
-Unknown text keys may be ignored. Writers should omit unused keys.
-
-`janex.java-application` is the Java application descriptor for this file. It includes presentation
-and install integration as well as the launch plan. Local resource roots are blobs; the descriptor
-references those blobs and may share them.
-
-The descriptor is defined in [Java Application](#java-application).
+Unsigned integer keys are container mechanics. Text keys are attributes. The `janex.` prefix is
+reserved. Third-party keys should use a reverse-domain prefix such as `org.example.`. Attributes are
+descriptive unless their definitions assign operational semantics. Unknown text keys may be ignored.
+Writers should omit unused keys.
 
 #### Metadata Evolution and Extensions
 
@@ -295,6 +287,8 @@ enum SectionType {
     Padding = 0x0047_4e49_4444_4150, // "PADDING\0"
 
     BlobPool = 0x4c4f_4f50_424f_4c42, // "BLOBPOOL"
+
+    JavaApplication = 0x2e50_5041_4156_414a, // "JAVAAPP."
 }
 ```
 
@@ -449,7 +443,22 @@ checksum algorithms are `SHA256`, `SHA512`, and `SM3`.
 The signature authenticates `verification_input`; the recorded secure checksums authenticate section
 and external-region bytes.
 
-### Java Application
+### `JavaApplication` Section
+
+A file contains at most one `JavaApplication` section. A file without one is not a Java application.
+The section body after the magic number is one deterministic CBOR `JavaApplicationObject`. Local
+resource roots are blobs; the descriptor references those blobs and may share them.
+
+```rust
+struct JavaApplicationSection {
+    magic_number: u64, // 0x2e50_5041_4156_414a ("JAVAAPP.")
+
+    /// One deterministic CBOR `JavaApplicationObject`.
+    application: CborMap, // JavaApplicationObject
+}
+```
+
+`application` occupies the remainder of the section.
 
 #### `JavaApplicationObject`
 
