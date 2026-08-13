@@ -1,8 +1,8 @@
 # Janex File Format
 
 Janex is a sectioned, multi-root container format. Its core stores shared content, metadata, and
-verification information. Optional descriptor sections define uses such as Java applications or
-executables for other runtimes.
+verification information. Optional application sections describe launchable targets for supported
+runtimes.
 
 ## Data Types
 
@@ -239,9 +239,8 @@ descriptive unless their definitions assign operational semantics. Unknown text 
 Writers should omit unused keys.
 
 `default_application` is the application section used when the caller does not name one. It must
-refer to an existing application section. In this document that type is `JavaApplication`. Future
-application section types may also be used. The reference is invalid if the section is missing or is
-not an application section.
+refer to an existing `Application` section. The reference is invalid if the section is missing or has
+a different type.
 
 The caller may select an application by `id`. Otherwise the launcher uses `default_application`. If
 the key is omitted and the file contains exactly one application section, that section is the
@@ -300,7 +299,7 @@ enum SectionType {
 
     BlobPool = 0x4c4f_4f50_424f_4c42, // "BLOBPOOL"
 
-    JavaApplication = 0x0050_5041_4156_414a, // "JAVAAPP\0"
+    Application = 0x5441_4349_4c50_5041, // "APPLICAT"
 }
 ```
 
@@ -455,58 +454,64 @@ checksum algorithms are `SHA256`, `SHA512`, and `SM3`.
 The signature authenticates `verification_input`; the recorded secure checksums authenticate section
 and external-region bytes.
 
-### `JavaApplication` Section
+### `Application` Section
 
-A file may contain any number of `JavaApplication` sections. Each section is one independently
-launchable Java target. Multiple targets may share resource-root blobs. The section body after the
-magic number is one deterministic CBOR `JavaApplicationObject`. A file with no application section
-has no launch target.
+A file may contain any number of `Application` sections. Each section is one independently launchable
+target. Multiple targets may share blobs. The section body after the magic number is one deterministic
+CBOR `ApplicationObject`. A file with no application section has no launch target.
 
 Separate commands with independent launch configurations use separate application sections.
-Subcommands interpreted by one Java program are ordinary application arguments.
+Subcommands interpreted by one program are ordinary application arguments.
 
 ```rust
-struct JavaApplicationSection {
-    magic_number: u64, // 0x0050_5041_4156_414a ("JAVAAPP\0")
+struct ApplicationSection {
+    magic_number: u64, // 0x5441_4349_4c50_5041 ("APPLICAT")
 
-    /// One deterministic CBOR `JavaApplicationObject`.
-    application: CborMap, // JavaApplicationObject
+    /// One deterministic CBOR `ApplicationObject`.
+    application: CborMap, // ApplicationObject
 }
 ```
 
 `application` occupies the remainder of the section.
 
-#### `JavaApplicationObject`
+#### `ApplicationObject`
 
 ```cddl
-JavaApplicationObject = {
+ApplicationObject = {
     0: NonemptyText,                            ; id
-    ? 1: NonemptyText,                          ; name
-    ? 2: tstr,                                  ; version
-    ? 3: tstr,                                  ; comment
-    ? 4: JavaIntegrationObject,                 ; integration
-    5: JavaLaunchConfigObject,                  ; launch
-    ? 6: JavaLaunchMode,                        ; launch_mode
+    1: NonemptyText,                            ; application_type
+    2: ApplicationDescriptorObject,            ; descriptor
+    ? 3: NonemptyText,                          ; name
+    ? 4: tstr,                                  ; version
+    ? 5: tstr,                                  ; comment
+    ? 6: ApplicationIntegrationObject,          ; integration
+    ? 7: ApplicationLaunchMode,                 ; launch_mode
     * uint => any,
 }
 
-JavaLaunchMode =
+ApplicationDescriptorObject = { * uint => any }
+
+ApplicationLaunchMode =
     0                                           ; console
   / 1                                           ; windowed
 ```
 
-`id` identifies the launch target and must be unique among application sections in the file. `name`
-is a display name. `version` is the application's own version string; it is not a `jep322` value.
-`comment` is a short description. `launch_mode` defaults to `console`. `windowed` suppresses console
-window creation on platforms that distinguish the two modes.
+`id` identifies the launch target and must be unique among application sections in the file.
+`application_type` selects the schema and semantics of `descriptor`; this document defines
+`janex.java`, and reserves the `janex.` prefix. Third-party types use a reverse-domain name.
+`descriptor` must follow the selected schema. `name` is a display name. `version` is the application's
+own version string. `comment` is a short description. `launch_mode` defaults to `console`. `windowed`
+suppresses console window creation on platforms that distinguish the two modes.
 
-#### `JavaIntegrationObject`
+Unsupported application types may be displayed and preserved but cannot be launched.
+
+#### `ApplicationIntegrationObject`
 
 ```cddl
-JavaIntegrationObject = {
+ApplicationIntegrationObject = {
     ? 0: bool,                                  ; path_command
-    ? 1: bool,                                  ; start_menu
-    ? 2: [+ JavaIconObject],                    ; icons
+    ? 1: bool,                                  ; desktop_launcher
+    ? 2: [+ ApplicationIconObject],             ; icons
     * uint => any,
 }
 ```
@@ -516,17 +521,16 @@ These fields request installation integration. The Host applies them according t
 `path_command` set to `true` requests a command on `PATH` named by the application's `id`. An omitted
 value or `false` makes no request.
 
-`start_menu` asks the installer to create a Start Menu entry on Windows, a `.desktop` entry on
-Linux, or an equivalent launcher on other platforms. An omitted value or `false` means no such
-entry is requested.
+`desktop_launcher` asks the installer to create a Start Menu entry on Windows, a `.desktop` entry on
+Linux, or an equivalent launcher on other platforms. An omitted value or `false` makes no request.
 
 `icons` supplies image blobs for those launchers. The Host selects a suitable image for the
 platform. An empty array should be omitted.
 
-#### `JavaIconObject`
+#### `ApplicationIconObject`
 
 ```cddl
-JavaIconObject = {
+ApplicationIconObject = {
     0: tstr,                                    ; media_type
     1: BlobRefObject,                           ; image
     * uint => any,
@@ -536,6 +540,17 @@ JavaIconObject = {
 `media_type` is a non-empty IANA media type such as `image/png`, `image/jpeg`,
 `image/vnd.microsoft.icon`, or `image/icns`. Unknown types may be ignored. `image` names a blob whose
 resolved bytes are the image.
+
+#### `janex.java` Application Descriptor
+
+For `application_type` `janex.java`, `descriptor` is:
+
+```cddl
+JavaApplicationDescriptorObject = {
+    0: JavaLaunchConfigObject,                  ; launch
+    * uint => any,
+}
+```
 
 #### `JavaLaunchConfigObject`
 

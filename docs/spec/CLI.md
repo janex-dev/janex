@@ -40,12 +40,13 @@ At a high level, the command should:
 1. Resolve the target from a URI or local file.
 2. Download or read the Janex file.
 3. Validate the file structure, integrity information, and signatures when available.
-4. Inspect every supported application section for launch-sensitive features such as remote
+4. Inspect every supported `Application` section for launch-sensitive features such as remote
    dependencies, Java agents, and embedded JVM options.
 5. Require explicit user consent when policy-sensitive actions are involved.
 6. Record a local installed copy together with its source and trust metadata.
-7. Register each supported application section by its `id` and honor its `JavaIntegrationObject`
-   requests when policy allows. Each section may expose its own `PATH` command or graphical launcher.
+7. Register each supported `Application` section by its `id` and honor its
+   `ApplicationIntegrationObject` requests when policy allows. Each section may expose its own
+   `PATH` command or graphical launcher.
 
 ### Arguments
 
@@ -103,12 +104,12 @@ The `run` subcommand is responsible for execution, not software acquisition.
 At a high level, the command should:
 
 1. Locate the installed application or open the local Janex file.
-2. Select a `JavaApplication` section: an explicit application `id`, otherwise FileMetadata
-   `default_application`, otherwise the only application section. Set `invocation` to `run`.
-3. Detect the current platform and available Java runtimes.
-4. Evaluate its launch conditions to select the best runtime.
-5. Build the final JVM invocation, including module path, class path, Java agents, and JVM options.
-6. Start the target application using its launch mode and forward its exit code.
+2. Select an `Application` section: an explicit application `id`, otherwise FileMetadata
+   `default_application`, otherwise the only application section.
+3. Select a launcher for its `application_type`; reject unsupported types.
+4. Resolve its descriptor. For `janex.java`, set `invocation` to `run`, select a compatible Java
+   runtime, and build the JVM invocation.
+5. Start the target application using its launch mode and forward its exit code.
 
 Remote URIs should be installed first instead of being executed directly by `janex run`.
 
@@ -510,8 +511,9 @@ When a command needs a Java runtime, Janex should resolve it in the following or
 4. Compatible managed runtime installed by `janex java install`.
 5. Compatible external runtime discovered from the host system.
 
-`janex run` must still evaluate the selected Java application descriptor. If the selected runtime is
-incompatible, it should continue searching lower-precedence candidates unless the user provided an explicit override.
+For a selected `janex.java` descriptor, `janex run` must evaluate its launch conditions. If the
+selected runtime is incompatible, it should continue searching lower-precedence candidates unless
+the user provided an explicit override.
 
 ### Java Indexes
 
