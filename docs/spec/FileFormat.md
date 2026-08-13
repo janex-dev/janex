@@ -487,7 +487,6 @@ ConditionObject = {
     ? 1: (tstr / [+ tstr]),                     ; os
     ? 2: (tstr / [+ tstr]),                     ; arch
     ? 3: tstr,                                  ; vendor
-    ? 4: int,                                   ; priority
     * uint => any,
 }
 ```
@@ -504,9 +503,6 @@ are `x86`, `x86-64`, and `aarch64`. Other names match only by exact equality.
 A text `os` or `arch` value matches that one name. An array matches if the host name equals any
 element. An omitted key imposes no constraint.
 
-`priority` is consulted only on the application's root configuration. A greater value is preferred.
-An omitted root `priority` is `0`. A `priority` on an overlay is ignored.
-
 A condition matches a candidate Java runtime and the current host when every present constraint
 matches. An invalid `java` VERS makes the application descriptor invalid; it is not treated as a
 non-match.
@@ -514,8 +510,7 @@ non-match.
 The launcher considers each candidate runtime against the root condition. A candidate that does not
 match is discarded. Among remaining candidates, the launcher walks the root configuration and its
 `overlays` in depth-first pre-order and applies each overlay whose condition matches. It then selects
-the remaining candidate with the greatest root `priority`. Ties are broken by the implementation's
-runtime selection order.
+a remaining candidate using the implementation's runtime selection order.
 
 #### `JavaPathEntryObject`
 
@@ -592,7 +587,7 @@ struct ResourceLayer {
 ResourceRootMetadataObject = { * NonemptyText => any }
 ```
 
-The metadata map may be empty. `priority` in a layer `condition` is ignored. An invalid `java` VERS
+The metadata map may be empty. An invalid `java` VERS
 in a layer condition makes the resource root invalid. Readers must resolve `string_pool` before
 interpreting directory paths, entry names, or symbolic-link targets. Multiple resource roots may
 name the same string-pool blob. Directory paths are unique within a layer, not across layers.
