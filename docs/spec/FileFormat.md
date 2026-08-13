@@ -300,7 +300,7 @@ enum SectionType {
 
     BlobPool = 0x4c4f_4f50_424f_4c42, // "BLOBPOOL"
 
-    JavaApplication = 0x2e50_5041_4156_414a, // "JAVAAPP."
+    JavaApplication = 0x0050_5041_4156_414a, // "JAVAAPP\0"
 }
 ```
 
@@ -464,7 +464,7 @@ section is not executable.
 
 ```rust
 struct JavaApplicationSection {
-    magic_number: u64, // 0x2e50_5041_4156_414a ("JAVAAPP.")
+    magic_number: u64, // 0x0050_5041_4156_414a ("JAVAAPP\0")
 
     /// One deterministic CBOR `JavaApplicationObject`.
     application: CborMap, // JavaApplicationObject
