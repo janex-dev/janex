@@ -1,8 +1,8 @@
 # Janex File Format
 
 Janex is a sectioned, multi-root container format. Its core stores shared content, metadata, and
-verification information. Optional descriptor sections define uses such as Java applications or
-executables for other runtimes.
+verification information. Optional descriptors in `FileMetadata` define uses such as Java
+applications or executables for other runtimes.
 
 ## Data Types
 
@@ -224,6 +224,8 @@ FileMetadataObject = {
     ? 1: ExternalRegionObject,         ; external_header
     ? 2: ExternalRegionObject,         ; external_tail
     ? 3: AttributesObject,             ; attributes
+    ? 4: [+ JavaLaunchConfigObject],   ; java_applications
+    ? 5: uint,                         ; default_java_application
     * uint => any,
 }
 
@@ -237,6 +239,18 @@ AttributesObject = { * NonemptyText => any }
 `attributes` is a file-level name/value map. Attribute names follow the extension naming rules.
 Attributes are descriptive unless their definitions assign operational semantics. Unknown attributes
 may be ignored. Writers should omit an empty map.
+
+`java_applications` lists Java launch configurations stored in this metadata map. Local resource
+roots are blobs; descriptors reference those blobs and may share them. Writers should omit an empty
+list. `default_java_application` is a zero-based index into `java_applications` and is invalid if it
+is out of range or if `java_applications` is omitted.
+
+The caller may select a Java application explicitly. Otherwise the launcher uses
+`default_java_application` when present. If neither is available, it may select among applications
+whose root `condition` matches the host and a candidate runtime, preferring a greater root
+`priority`, or it may reject the ambiguity.
+
+Java launch configurations are defined in [Java Applications](#java-applications).
 
 #### Metadata Evolution and Extensions
 
@@ -288,8 +302,6 @@ enum SectionType {
     Padding = 0x0047_4e49_4444_4150, // "PADDING\0"
 
     BlobPool = 0x4c4f_4f50_424f_4c42, // "BLOBPOOL"
-    
-    JavaApplicationDescriptor = 0x2e50_5041_4156_414a, // "JAVAAPP."
 }
 ```
 
@@ -444,26 +456,9 @@ checksum algorithms are `SHA256`, `SHA512`, and `SM3`.
 The signature authenticates `verification_input`; the recorded secure checksums authenticate section
 and external-region bytes.
 
-### Descriptor Sections
+### Java Applications
 
-A file contains zero or more descriptor sections that describe uses of container contents. Each
-descriptor is identified by section type and ID. Local resource roots are blobs interpreted as
-`ResourceRoot` values. Descriptors reference those blobs and may share them.
-
-#### `JavaApplicationDescriptor` Section
-
-```rust
-struct JavaApplicationDescriptorSection {
-    magic_number: u64, // 0x2e50_5041_4156_414a ("JAVAAPP.")
-
-    /// One deterministic CBOR `JavaLaunchConfigObject`.
-    config: CborMap, // JavaLaunchConfigObject
-}
-```
-
-`config` occupies the remainder of the section.
-
-##### `JavaLaunchConfigObject`
+#### `JavaLaunchConfigObject`
 
 ```cddl
 JavaLaunchConfigObject = {
@@ -490,7 +485,7 @@ object contributes as follows:
   list; and
 - `overlays` preserves array order and must not be `null`.
 
-##### `ConditionObject`
+#### `ConditionObject`
 
 ```cddl
 ConditionObject = {
@@ -515,11 +510,12 @@ are `x86`, `x86-64`, and `aarch64`. Other names match only by exact equality.
 A text `os` or `arch` value matches that one name. An array matches if the host name equals any
 element. An omitted key imposes no constraint.
 
-`priority` is consulted only on the descriptor's root configuration. A greater value is preferred.
+`priority` is consulted only on the application's root configuration. A greater value is preferred.
 An omitted root `priority` is `0`. A `priority` on an overlay is ignored.
 
 A condition matches a candidate Java runtime and the current host when every present constraint
-matches. An invalid `java` VERS makes the descriptor invalid; it is not treated as a non-match.
+matches. An invalid `java` VERS makes the application descriptor invalid; it is not treated as a
+non-match.
 
 The launcher considers each candidate runtime against the root condition. A candidate that does not
 match is discarded. Among remaining candidates, the launcher walks the root configuration and its
@@ -527,7 +523,7 @@ match is discarded. Among remaining candidates, the launcher walks the root conf
 the remaining candidate with the greatest root `priority`. Ties are broken by the implementation's
 runtime selection order.
 
-##### `JavaPathEntryObject`
+#### `JavaPathEntryObject`
 
 ```cddl
 JavaPathEntryObject =
@@ -550,7 +546,7 @@ defined in [Resource Roots](#resource-roots). The blob is named by a `BlobRefObj
 a canonical Package URL and verifies it by `checksum`. A `vers` qualifier is not allowed; Maven
 artifacts use `pkg:maven` and may select a repository with `repository_url`.
 
-##### `JavaAgentObject`
+#### `JavaAgentObject`
 
 ```cddl
 JavaAgentObject = {
@@ -562,7 +558,7 @@ JavaAgentObject = {
 
 An empty `option` means that no agent option is supplied.
 
-#### Resource Roots
+### Resource Roots
 
 A local `JavaPathEntryObject` names one blob with a `BlobRefObject`. Decoding that blob must produce
 exactly one `ResourceRoot` and consume every decoded byte. The blob must be referenced as a complete

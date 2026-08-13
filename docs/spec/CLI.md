@@ -100,7 +100,7 @@ The `run` subcommand is responsible for execution, not software acquisition.
 At a high level, the command should:
 
 1. Locate the installed application or open the local Janex file.
-2. Select a `JavaApplicationDescriptor` from the target.
+2. Select a `JavaLaunchConfigObject` from the target file metadata.
 3. Detect the current platform and available Java runtimes.
 4. Evaluate its launch conditions to select the best runtime.
 5. Build the final JVM invocation, including module path, class path, Java agents, and JVM options.
