@@ -220,42 +220,42 @@ struct FileMetadata {
 
 ```cddl
 FileMetadataObject = {
-    0: [* SectionInfoObject],          ; section_table
-    ? 1: ExternalRegionObject,         ; external_header
-    ? 2: ExternalRegionObject,         ; external_tail
-    ? 3: AttributesObject,             ; attributes
-    ? 4: [+ JavaLaunchConfigObject],   ; java_applications
-    ? 5: uint,                         ; default_java_application
+    0: [* SectionInfoObject],                    ; section_table
+    ? 1: ExternalRegionObject,                   ; external_header
+    ? 2: ExternalRegionObject,                   ; external_tail
+    ? "janex.java-application": [+ JavaLaunchConfigObject],
+    ? "janex.java-application.default": uint,
+    * NonemptyText => any,
     * uint => any,
 }
 
 NonemptyText = tstr .ne ""
-
-AttributesObject = { * NonemptyText => any }
 ```
 
 `section_table` describes `JanexFile.sections` and may be empty.
 
-`attributes` is a file-level name/value map. Attribute names follow the extension naming rules.
-Attributes are descriptive unless their definitions assign operational semantics. Unknown attributes
-may be ignored. Writers should omit an empty map.
+Unsigned integer keys are container mechanics. Text keys are descriptors and attributes. The `janex.`
+prefix is reserved. `janex.java-application` and `janex.java-application.default` have the schemas
+above. Other `janex.` keys and all third-party text keys are attributes: they are descriptive unless
+their definitions assign operational semantics. Third-party keys should use a reverse-domain prefix
+such as `org.example.`. Unknown text keys may be ignored. Writers should omit unused keys.
 
-`java_applications` lists Java launch configurations stored in this metadata map. Local resource
-roots are blobs; descriptors reference those blobs and may share them. Writers should omit an empty
-list. `default_java_application` is a zero-based index into `java_applications` and is invalid if it
-is out of range or if `java_applications` is omitted.
+`janex.java-application` lists Java launch configurations stored in this metadata map. Local resource
+roots are blobs; descriptors reference those blobs and may share them. `janex.java-application.default`
+is a zero-based index into that array and is invalid if it is out of range or if
+`janex.java-application` is omitted.
 
 The caller may select a Java application explicitly. Otherwise the launcher uses
-`default_java_application` when present. If neither is available, it may select among applications
-whose root `condition` matches the host and a candidate runtime, preferring a greater root
-`priority`, or it may reject the ambiguity.
+`janex.java-application.default` when present. If neither is available, it may select among
+applications whose root `condition` matches the host and a candidate runtime, preferring a greater
+root `priority`, or it may reject the ambiguity.
 
 Java launch configurations are defined in [Java Applications](#java-applications).
 
 #### Metadata Evolution and Extensions
 
-Core maps use unsigned integer keys. Text-keyed metadata uses non-empty keys; `janex.` is reserved.
-Third-party keys should use a reverse-domain prefix such as `org.example.`.
+Core maps use unsigned integer keys for container mechanics. Text-keyed metadata uses non-empty keys;
+`janex.` is reserved. Third-party keys should use a reverse-domain prefix such as `org.example.`.
 
 Unknown keys and section types may be ignored and must not change the meaning of known data. Semantic
 rewrites must preserve unknown keys. Changes that alter core interpretation require a format version
@@ -470,11 +470,13 @@ JavaLaunchConfigObject = {
     ? 5: ([* JavaAgentObject] / null),           ; agents
     ? 6: ([* tstr] / null),                     ; jvm_options
     ? 7: [* JavaLaunchConfigObject],             ; overlays
+    ? 8: tstr,                                  ; id
     * uint => any,
 }
 ```
 
-An omitted `condition` is unconditional. `ConditionObject` is defined below.
+An omitted `condition` is unconditional. `ConditionObject` is defined below. `id`, when present, is a
+non-empty file-local name. Application `id` values must be unique within `janex.java-application`.
 
 The launcher visits the root configuration and its `overlays` in depth-first pre-order. Each matching
 object contributes as follows:
