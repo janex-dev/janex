@@ -526,8 +526,8 @@ JavaIconObject = {
 ```
 
 `media_type` is a non-empty IANA media type such as `image/png`, `image/jpeg`,
-`image/vnd.microsoft.icon`, or `image/icns`. Unknown types may be ignored. `image` names a complete
-blob whose decoded bytes are the image. `BlobSlices` are invalid.
+`image/vnd.microsoft.icon`, or `image/icns`. Unknown types may be ignored. `image` names a blob whose
+resolved bytes are the image.
 
 #### `JavaLaunchConfigObject`
 
@@ -612,7 +612,7 @@ JavaPathEntryObject =
     }
 ```
 
-Variant `0` selects a blob in this file whose decoded representation is one `ResourceRoot`, as
+Variant `0` selects a blob in this file whose resolved representation is one `ResourceRoot`, as
 defined in [Resource Roots](#resource-roots). The blob is named by a `BlobRefObject`, defined in
 [Blob References](#blob-references). Variant `1` resolves exactly the package identified by
 a canonical Package URL and verifies it by `checksum`. A `vers` qualifier is not allowed; Maven
@@ -632,12 +632,9 @@ An empty `option` means that no agent option is supplied.
 
 ### Resource Roots
 
-A local `JavaPathEntryObject` names one blob with a `BlobRefObject`. Decoding that blob must produce
-exactly one `ResourceRoot` and consume every decoded byte. The blob must be referenced as a complete
-blob; `BlobSlices` are invalid. The root blob may use blob filters. It must not use content
-transforms. `Content` values inside the root may refer to other blobs. The string-pool blob and
-those content blobs are dependencies of the root and must be finite and acyclic. Multiple path
-entries may name the same resource-root blob.
+A local `JavaPathEntryObject` names one blob with a `BlobRefObject`. Resolving that blob must produce
+exactly one `ResourceRoot` and consume every resolved byte. Multiple path entries may name the same
+resource-root blob.
 
 A `ResourceRoot` is one logical tree built from ordered layers. Each layer has a `ConditionObject`.
 After a Java runtime is selected, the launcher evaluates every layer against that runtime and the
@@ -683,9 +680,8 @@ layer condition is a Java feature range and does not constrain `os`, `arch`, or 
 
 ##### String Pools
 
-A `ResourceRoot` names one string-pool blob with a `BlobRef`. Decoding that blob must produce exactly
-one `StringPoolData` and consume every decoded byte. The blob must be referenced as a complete blob;
-`BlobSlices` are invalid. The pool blob may use blob filters. It must not use content transforms.
+A `ResourceRoot` names one string-pool blob with a `BlobRef`. Resolving that blob must produce exactly
+one `StringPoolData` and consume every resolved byte.
 
 ```rust
 /// A zero-based index into `StringPoolData.strings`.
@@ -846,8 +842,8 @@ magnitude; tag `3` encodes `-1 - value`.
 
 ### Content
 
-`Content<T>` stores an encoded value inline, in one blob, or across blob slices. Reversing its
-transforms produces a logical value of type `T`:
+`Content<T>` stores an encoded value inline or in one blob. Reversing its transforms produces a
+logical value of type `T`:
 
 ```rust
 struct Content<T> {
@@ -870,23 +866,16 @@ enum ContentSource {
         bytes: Vec<u8>,
     },
 
-    /// Uses the complete decoded representation of one blob.
+    /// Uses the resolved bytes of one blob.
     Blob {
         source_type: u8, // 1
         blob: BlobRef,
     },
-
-    /// Concatenates decoded blob ranges in array order.
-    BlobSlices {
-        source_type: u8, // 2
-        slices: Vec<BlobSlice>,
-    },
 }
 ```
 
-`Inline` supplies `bytes`, `Blob` supplies one complete decoded blob, and `BlobSlices` concatenates
-decoded ranges in array order. `BlobSlices` must be nonempty and must not represent one complete blob;
-use `Blob` for that case. Slices are nonempty, so empty content uses an empty `Inline` value.
+`Inline` supplies `bytes`, while `Blob` supplies one complete logical blob. Empty content uses an
+empty `Inline` value.
 
 Content transforms are described by the following structures:
 
@@ -917,9 +906,9 @@ ClassFileTransformPropertiesObject = { * uint => any }
 The schema of `properties.value` is selected by `method`. `CLASSFILE` currently defines no
 properties. It uses the string pool named by the containing `ResourceRoot`.
 
-Transforms are stored in encoding order and reversed from last to first after blob decoding and slice
-concatenation. Each result must match `input_size`; the final value must be a valid encoding of `T`.
-An empty transform array means the source already encodes `T`. Unsupported methods are invalid.
+Transforms are stored in encoding order and reversed from last to first after resolving the source.
+Each result must match `input_size`; the final value must be a valid encoding of `T`. An empty
+transform array means the source already encodes `T`. Unsupported methods are invalid.
 
 `CLASSFILE` is valid only for regular-file `Content<[u8]>`. The transform array of
 `ResourceDirectory.entries` must therefore be empty.
@@ -967,21 +956,22 @@ resource root's string pool.
 
 ### `BlobPool` Section
 
-A `BlobPool` stores independently decoded byte blobs. Containing structures assign their logical
-types. A file may contain any number of pools.
+A `BlobPool` stores logical byte blobs. A blob is either independently stored or assembled from
+decoded ranges of independently stored blobs. Containing structures assign their logical types. A
+file may contain any number of pools.
 
 ```rust
 struct BlobPoolSection {
     magic_number: u64, // 0x4c4f_4f50_424f_4c42 ("BLOBPOOL")
 
-    /// Stored blobs and blob-table pages.
+    /// Stored blob bytes and blob-table pages.
     bytes: [u8; ...],
 }
 ```
 
-#### Blob Encoding
+#### Stored Blob Encoding
 
-Blob and table-page encodings use these CBOR objects:
+Stored-blob and table-page encodings use these CBOR objects:
 
 ```cddl
 BlobEncodingObject = [stored_size: uint, filters: [* BlobFilterObject]]
@@ -1027,14 +1017,27 @@ BlobTablePageInfoObject = [
 
 BlobTablePageObject = [* BlobInfoObject]
 
-BlobInfoObject = [
-    offset: uint,
-    encoding: BlobEncodingObject,
+BlobInfoObject =
+    [
+        0,                              ; stored
+        offset: uint,
+        encoding: BlobEncodingObject,
+    ]
+  / [
+        1,                              ; extents
+        extents: [+ BlobExtentObject],
+    ]
+
+BlobExtentObject = [
+    stored_blob_index: uint,
+    decoded_offset: uint,
+    decoded_length: uint,
 ]
 ```
 
 `BlobPoolSection.bytes` has length `SectionInfoObject.length - 8`. `blob_count` and all offsets and
-sizes must fit in `u64`. An empty pool has no pages. Otherwise, the page count is
+sizes must fit in `u64`. `blob_count` includes stored and extents entries. An empty pool has no pages.
+Otherwise, the page count is
 `1 + (blob_count - 1) / page_capacity`. Every page except the last contains `page_capacity` entries;
 the final page contains the remaining entries.
 
@@ -1045,14 +1048,19 @@ order.
 Each page descriptor locates a stored page relative to `BlobPoolSection.bytes`. Decoding the page must
 produce one deterministic CBOR `BlobTablePageObject`. When present, its checksum covers those decoded
 CBOR bytes and must be verified. Each page decodes independently using self-contained filters.
-`BlobRef` addresses stored blobs. Resolving a blob requires decoding only its selected page.
+`BlobRef` addresses logical blobs. Locating a stored blob requires only its selected table page;
+resolving an extents blob may also require the pages containing its stored sources.
 
-Each `BlobInfoObject.offset` locates a stored blob relative to `BlobPoolSection.bytes`. All page and
-blob ranges must fit in `bytes` and must not overlap. Writers may place them in any order.
+For a stored entry, `offset` locates its encoded bytes relative to `BlobPoolSection.bytes`. All page
+and stored-blob ranges must fit in `bytes` and must not overlap. Writers may place them in any order.
+
+An extents entry concatenates its decoded ranges in array order. Each `stored_blob_index` must select
+a stored entry in the same pool. Each range must be nonempty and fit in that entry's decoded bytes.
+Extents cannot refer to other extents entries.
 
 #### Blob References
 
-`BlobRef` identifies one complete, independently decoded blob. Binary layouts use:
+`BlobRef` identifies one complete logical blob. Binary layouts use:
 
 ```rust
 struct BlobRef {
@@ -1074,30 +1082,12 @@ BlobRefObject = [
 ```
 
 A `BlobRef` and a `BlobRefObject` identify the same blob. `blob_pool` must be a `SectionRef` whose
-section is a `BlobPool`. `blob_index` must select an existing entry in that pool's `BlobTable`. Decoding
-produces uninterpreted bytes; the containing structure assigns their meaning.
+section is a `BlobPool`. `blob_index` must select an existing entry in that pool's `BlobTable`.
+Resolving a stored entry decodes its stored bytes. Resolving an extents entry concatenates its ranges.
+The result is uninterpreted bytes whose meaning is assigned by the containing structure.
 
-`BlobSlice` identifies a non-empty range in the decoded representation of one blob:
-
-```rust
-struct BlobSlice {
-    /// The blob containing the decoded byte range.
-    blob: BlobRef,
-
-    /// The byte offset of the range in the decoded blob.
-    decoded_offset: vuint,
-
-    /// The number of bytes in the range. This value must be greater than zero.
-    decoded_length: vuint,
-}
-```
-
-The selected range must be nonempty and contained in the decoded blob. Blob indices are local to one
-pool.
-
-Blob distribution is writer policy; readers must support any valid distribution. Writers may separate
-structural data and file content for locality or incremental updates. Content dependencies must be
-finite and acyclic.
+Whether a blob is stored directly or assembled from extents is writer policy. Readers must support
+both forms. Writers may store frequently accessed structural blobs directly for better locality.
 
 ## Version Ranges
 
