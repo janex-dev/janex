@@ -43,6 +43,8 @@ At a high level, the command should:
 4. Inspect launch-sensitive features such as remote dependencies, Java agents, and embedded JVM options.
 5. Require explicit user consent when policy-sensitive actions are involved.
 6. Record a local installed copy together with its source and trust metadata.
+7. Honor `JavaIntegrationObject` requests when policy allows: expose a `PATH` command and create a
+   Start Menu or equivalent launcher, using the declared icons when present.
 
 ### Arguments
 
@@ -100,7 +102,7 @@ The `run` subcommand is responsible for execution, not software acquisition.
 At a high level, the command should:
 
 1. Locate the installed application or open the local Janex file.
-2. Read `janex.java-application` from the target file metadata.
+2. Read `janex.java-application` from the target file metadata and use its `launch` configuration.
 3. Detect the current platform and available Java runtimes.
 4. Evaluate its launch conditions to select the best runtime.
 5. Build the final JVM invocation, including module path, class path, Java agents, and JVM options.

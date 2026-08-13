@@ -223,7 +223,7 @@ FileMetadataObject = {
     0: [* SectionInfoObject],                    ; section_table
     ? 1: ExternalRegionObject,                   ; external_header
     ? 2: ExternalRegionObject,                   ; external_tail
-    ? "janex.java-application": JavaLaunchConfigObject,
+    ? "janex.java-application": JavaApplicationObject,
     * NonemptyText => any,
     * uint => any,
 }
@@ -239,10 +239,11 @@ third-party text keys are attributes: they are descriptive unless their definiti
 operational semantics. Third-party keys should use a reverse-domain prefix such as `org.example.`.
 Unknown text keys may be ignored. Writers should omit unused keys.
 
-`janex.java-application` is the Java launch configuration for this file. Local resource roots are
-blobs; the configuration references those blobs and may share them.
+`janex.java-application` is the Java application descriptor for this file. It includes presentation
+and install integration as well as the launch plan. Local resource roots are blobs; the descriptor
+references those blobs and may share them.
 
-The launch configuration is defined in [Java Application](#java-application).
+The descriptor is defined in [Java Application](#java-application).
 
 #### Metadata Evolution and Extensions
 
@@ -450,6 +451,62 @@ and external-region bytes.
 
 ### Java Application
 
+#### `JavaApplicationObject`
+
+```cddl
+JavaApplicationObject = {
+    ? 0: tstr,                                  ; id
+    ? 1: tstr,                                  ; name
+    ? 2: tstr,                                  ; version
+    ? 3: tstr,                                  ; comment
+    ? 4: JavaIntegrationObject,                 ; integration
+    5: JavaLaunchConfigObject,                  ; launch
+    * uint => any,
+}
+```
+
+`id` is a non-empty install identity. `name` is a non-empty display name. `version` is the
+application's own version string; it is not a `jep322` value. `comment` is a short description.
+`launch` is required.
+
+#### `JavaIntegrationObject`
+
+```cddl
+JavaIntegrationObject = {
+    ? 0: bool,                                  ; path_command
+    ? 1: bool,                                  ; start_menu
+    ? 2: [+ JavaIconObject],                    ; icons
+    * uint => any,
+}
+```
+
+These fields are author requests. The Host and its policy may ignore them.
+
+`path_command` asks the installer to expose a command on `PATH`. An omitted value leaves the choice
+to the implementation. `false` forbids a command. When a command is created, its name is `id` if
+present, otherwise a name derived by the implementation.
+
+`start_menu` asks the installer to create a Start Menu entry on Windows, a `.desktop` entry on
+Linux, or an equivalent launcher on other platforms. An omitted value or `false` means no such
+entry is requested.
+
+`icons` supplies image blobs for those launchers. The Host selects a suitable image for the
+platform. An empty array should be omitted.
+
+#### `JavaIconObject`
+
+```cddl
+JavaIconObject = {
+    0: tstr,                                    ; media_type
+    1: BlobRefObject,                           ; image
+    * uint => any,
+}
+```
+
+`media_type` is a non-empty IANA media type such as `image/png`, `image/jpeg`,
+`image/vnd.microsoft.icon`, or `image/icns`. Unknown types may be ignored. `image` names a complete
+blob whose decoded bytes are the image. `BlobSlices` are invalid.
+
 #### `JavaLaunchConfigObject`
 
 ```cddl
@@ -462,13 +519,11 @@ JavaLaunchConfigObject = {
     ? 5: ([* JavaAgentObject] / null),           ; agents
     ? 6: ([* tstr] / null),                     ; jvm_options
     ? 7: [* JavaLaunchConfigObject],             ; overlays
-    ? 8: tstr,                                  ; id
     * uint => any,
 }
 ```
 
-An omitted `condition` is unconditional. `ConditionObject` is defined below. `id`, when present, is a
-non-empty application identity.
+An omitted `condition` is unconditional. `ConditionObject` is defined below.
 
 The launcher visits the root configuration and its `overlays` in depth-first pre-order. Each matching
 object contributes as follows:
