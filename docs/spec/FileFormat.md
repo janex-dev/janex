@@ -15,8 +15,6 @@ This document uses `u8`/`u16`/`u32`/`u64` to represent 8/16/32/64-bit unsigned i
 uses `i8`/`i16`/`i32`/`i64` to represent 8/16/32/64-bit signed integers,
 and uses `f32`/`f64` to represent 32/64-bit floating-point numbers.
 
-`bool` is represented by `u8`, where `true` is any non-zero value and `false` is zero.
-
 ### Complex Data Types
 
 Complex layouts use Rust-like pseudocode. `[T; count]` denotes `count` consecutive values of type `T`.
@@ -107,14 +105,7 @@ These aliases denote bare CBOR values; the CDDL schema at each use site defines 
 /// Exactly one deterministic CBOR data item permitted by the applicable schema.
 type CborValue = ...;
 
-type CborBool = CborValue;  // bool
-type CborUint = CborValue;  // uint
-type CborInt = CborValue;   // int
-type CborBytes = CborValue; // bstr
-type CborText = CborValue;  // tstr
-type CborArray = CborValue; // array
 type CborMap = CborValue;   // map
-type CborNull = CborValue;  // null
 ```
 
 All values follow RFC 8949 Section 4.2.1 Core Deterministic Encoding and their applicable schema.
@@ -123,12 +114,12 @@ Binary fields use `Sized<CborValue>` when they need an explicit byte boundary.
 ### `Checksum`
 
 ```rust
-struct Checksum {
+struct ChecksumValue {
     /// The checksum algorithm.
     algorithm: ChecksumAlgorithm,
 
-    /// The length-prefixed checksum value.
-    checksum: Vec<u8>,
+    /// The checksum bytes, occupying the remainder of the containing field.
+    digest: [u8; ...],
 }
 ```
 
@@ -147,8 +138,9 @@ enum ChecksumAlgorithm {
 }
 ```
 
-Algorithm ID `0` is reserved. The checksum length must match the algorithm. Readers may skip unknown
-algorithms; required validation accepts supported algorithms only.
+Algorithm ID `0` is reserved. `digest` has no length prefix; its length must match the algorithm.
+Readers may skip unknown algorithms when the containing field provides a byte boundary. Required
+validation accepts supported algorithms only.
 
 In CBOR:
 
@@ -156,8 +148,8 @@ In CBOR:
 ChecksumObject = bstr .size (1..)
 ```
 
-The first byte is the algorithm ID. The remaining bytes are the checksum value and must have the
-algorithm-specific length.
+The byte string contains the exact encoding of one `ChecksumValue`: the first byte is the algorithm
+ID and the remaining bytes are `digest`.
 
 ## Janex File Structure
 
@@ -361,8 +353,8 @@ enum VerificationInfo {
         /// The exact encoded size of `checksum`.
         payload_bytes: vuint,
 
-        /// The checksum of `verification_input`.
-        checksum: Checksum,
+        /// One `ChecksumValue` covering `verification_input`.
+        checksum: ChecksumValue,
     },
 
     /// Authenticates the metadata using a detached OpenPGP signature.
@@ -398,8 +390,8 @@ file_bytes[file_metadata_start .. verification_type_end]
 The range starts at `FileMetadata.magic_number` and ends immediately after
 `verification_type`. Verification uses these exact bytes.
 
-The payload must consume exactly `payload_bytes`. OpenPGP and CMS payloads must be nonempty. Unknown
-verification types are invalid.
+The payload must consume exactly `payload_bytes`. A checksum payload must be one valid
+`ChecksumValue`. OpenPGP and CMS payloads must be nonempty. Unknown verification types are invalid.
 
 ##### Verification Policy
 
