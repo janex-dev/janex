@@ -103,7 +103,7 @@ At a high level, the command should:
 
 1. Locate the installed application or open the local Janex file.
 2. Select a `JavaApplication` section: an explicit application `id`, otherwise
-   `FileMetadata` `default_entry` when it matches, otherwise the only application section. Set
+   `FileMetadata` `default_application` when it matches, otherwise the only application section. Set
    `invocation` to `run`.
 3. Detect the current platform and available Java runtimes.
 4. Evaluate its launch conditions to select the best runtime.

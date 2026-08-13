@@ -223,7 +223,7 @@ FileMetadataObject = {
     0: [* SectionInfoObject],                    ; section_table
     ? 1: ExternalRegionObject,                   ; external_header
     ? 2: ExternalRegionObject,                   ; external_tail
-    ? 3: uint,                                  ; default_entry: SectionRef
+    ? 3: SectionRef,                            ; default_application
     * NonemptyText => any,
     * uint => any,
 }
@@ -238,13 +238,13 @@ reserved. Third-party keys should use a reverse-domain prefix such as `org.examp
 descriptive unless their definitions assign operational semantics. Unknown text keys may be ignored.
 Writers should omit unused keys.
 
-`default_entry` is the file's single default entry. It is a `SectionRef` that must name an existing
-application descriptor section. The only application section type in this document is
-`JavaApplication`. A reference to `Padding`, `BlobPool`, a missing section, or an unknown
-non-application type is invalid.
+`default_application` is the application section used when the caller does not name one. It must
+refer to an existing application section. In this document that type is `JavaApplication`. Future
+application section types may also be used. The reference is invalid if the section is missing or is
+not an application section.
 
-The caller may select an application by `id`. Otherwise the launcher uses `default_entry` when that
-section's root `condition` matches. If the key is omitted and the file contains exactly one
+The caller may select an application by `id`. Otherwise the launcher uses `default_application` when
+that section's root `condition` matches. If the key is omitted and the file contains exactly one
 application section, that section is the default. If several application sections match and none is
 selected, the launcher must reject the ambiguity.
 
