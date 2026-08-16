@@ -651,7 +651,7 @@ JavaPathEntryObject =
     }
   / {
         0: 1,                    ; external
-        1: tstr,                 ; purl
+        1: tstr,                 ; uri
         ? 2: ChecksumObject,     ; checksum
         * uint => any,
     }
@@ -659,10 +659,9 @@ JavaPathEntryObject =
 
 Variant `0` selects a blob in this file whose resolved representation is one `ResourceRoot`, as
 defined in [Resource Roots](#resource-roots). The blob is named by a `BlobRefObject`, defined in
-[Blob References](#blob-references). Variant `1` contains a canonical Package URL. A `janex` PURL
-must omit `checksum`; other PURLs identify physical packages and must include it. The checksum
-verifies the resolved package. A `vers` qualifier is not allowed. Maven artifacts use `pkg:maven`
-and may select a repository with `repository_url`.
+[Blob References](#blob-references). Variant `1` contains a URI, such as a Package URL or an HTTP(S)
+URL. A `pkg:` URI must be a canonical Package URL. When present, `checksum` verifies the resolved
+content.
 
 In a `JavaPathEntryObject`, a `janex` PURL must use the `java-module` requirement kind and is allowed
 only in `module_path`. Resolving it produces zero or more physical path entries at the same position.
@@ -1181,8 +1180,7 @@ A VERS in a Janex file must be in the canonical form required by VERS. Whitespac
 An invalid or non-canonical VERS is invalid.
 
 This document defines the `jep322` type for Java SE platform versions. Later uses, such as unresolved
-library requirements, may use other registered types such as `maven`. Package URLs in
-`JavaPathEntryObject` must not carry a `vers` qualifier.
+library requirements, may use other registered types such as `maven`.
 
 ### The `jep322` Type
 
