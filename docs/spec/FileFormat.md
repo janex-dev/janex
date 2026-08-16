@@ -264,6 +264,7 @@ SectionInfoObject = {
     1: uint,                         ; id
     2: uint,                         ; length
     ? 3: ChecksumObject,             ; checksum
+    ? 4: { * uint => any },          ; type_info
     * uint => any,
 }
 ```
@@ -275,7 +276,8 @@ meaning.
 `length` is the exact encoded section length. When present, `checksum` covers those bytes and must be
 verified.
 
-Other keys are defined by `section_type`.
+`type_info` follows the schema selected by `section_type` and is omitted when the type defines no
+additional information. Other root keys extend the common section information.
 
 #### Section References
 
@@ -1076,14 +1078,15 @@ be empty.
 
 #### Blob Table
 
-For a `BlobPool` section, `SectionInfoObject` additionally contains a one-level page directory:
+For a `BlobPool` section, `SectionInfoObject.type_info` is a one-level page directory:
 
 ```cddl
-BlobPoolSectionInfoFields = (
-    4: uint,                           ; blob_count
-    5: 8..12,                          ; page_entry_shift
-    6: [* BlobTablePageInfoObject],    ; table_pages
-)
+BlobPoolTypeInfoObject = {
+    0: uint,                           ; blob_count
+    1: 8..12,                          ; page_entry_shift
+    2: [* BlobTablePageInfoObject],    ; table_pages
+    * uint => any,
+}
 
 BlobTablePageInfoObject = [
     offset: uint,
