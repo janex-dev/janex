@@ -235,14 +235,14 @@ Writers should omit unused keys.
 refer to an existing `Application` section. The reference is invalid if the section is missing or has
 a different type.
 
-The caller may select an application by `ApplicationObject.id`. Otherwise the launcher uses
-`default_application`. If the key is omitted and the file contains exactly one application section,
-that section is the default. If the file contains several application sections and none is selected,
-the launcher must reject the ambiguity.
+The caller may select an application by `ApplicationObject.application_id`. Otherwise the launcher
+uses `default_application`. If the key is omitted and the file contains exactly one application
+section, that section is the default. If the file contains several application sections and none is
+selected, the launcher must reject the ambiguity.
 
 `bundle_id` is the stable identity of an installable Janex bundle. It must be globally unique and
 should use a reverse-domain name such as `org.example.tools`. Local execution does not require it.
-Installation identifies a launch target by the pair (`bundle_id`, `ApplicationObject.id`).
+Installation identifies a launch target by the pair (`bundle_id`, `application_id`).
 
 #### Metadata Evolution and Extensions
 
@@ -475,7 +475,7 @@ struct ApplicationSection {
 
 ```cddl
 ApplicationObject = {
-    0: NonemptyText,                            ; id
+    0: NonemptyText,                            ; application_id
     1: NonemptyText,                            ; application_type
     2: ApplicationDescriptorObject,            ; descriptor
     ? 3: NonemptyText,                          ; name
@@ -493,8 +493,9 @@ ApplicationLaunchMode =
   / 1                                           ; windowed
 ```
 
-`id` identifies the launch target within the file and must be unique among its application sections.
-The same logical target should retain its `id` across files with the same `bundle_id`.
+`application_id` identifies the launch target within the file and must be unique among its
+application sections. The same logical target should retain its `application_id` across files with
+the same `bundle_id`.
 `SectionInfoObject.id` locates the section and is not part of the installed target identity.
 `application_type` selects the schema and semantics of `descriptor`; this document defines
 `janex.java`, and reserves the `janex.` prefix. Third-party types use a reverse-domain name.
