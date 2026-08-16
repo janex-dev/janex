@@ -215,7 +215,8 @@ FileMetadataObject = {
     0: [* SectionInfoObject],                    ; section_table
     ? 1: ExternalRegionObject,                   ; external_header
     ? 2: ExternalRegionObject,                   ; external_tail
-    ? 3: NonemptyText,                          ; bundle_id
+    ? 3: NonemptyText,                          ; package_name
+    ? 4: NonemptyText,                          ; package_version
     * NonemptyText => any,
     * uint => any,
 }
@@ -230,9 +231,9 @@ reserved. Third-party keys should use a reverse-domain prefix such as `org.examp
 descriptive unless their definitions assign operational semantics. Unknown text keys may be ignored.
 Writers should omit unused keys.
 
-`bundle_id` is the stable identity of an installable Janex bundle. It must be globally unique and
-should use a reverse-domain name such as `org.example.tools`. Local execution does not require it.
-Installation identifies a launch target by the pair (`bundle_id`, `application_id`).
+`package_name` is the stable name of an installable Janex package within its publisher or source
+scope. `package_version` is that package's version string. Non-installable files may omit both.
+Installation identifies a launch target by (`package_name`, `application_id`) within the same scope.
 
 #### Metadata Evolution and Extensions
 
@@ -496,7 +497,7 @@ ApplicationLaunchMode =
 `application_id` identifies the launch target within the file and must be unique among its
 application sections. A caller may select an application by this ID. Without an explicit selection,
 the only application section is selected; multiple application sections are ambiguous. The same
-logical target should retain its `application_id` across files with the same `bundle_id`.
+logical target should retain its `application_id` across versions of the same package.
 `SectionInfoObject.id` locates the section and is not part of the installed target identity.
 `application_type` selects the schema and semantics of `descriptor`; this document defines
 `janex.java`, and reserves the `janex.` prefix. Third-party types use a reverse-domain name.
