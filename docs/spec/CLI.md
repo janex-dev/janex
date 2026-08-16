@@ -45,7 +45,7 @@ At a high level, the command should:
    dependencies, Java agents, and embedded JVM options.
 6. Require explicit user consent when policy-sensitive actions are involved.
 7. Record a local installed copy together with its source and trust metadata.
-8. Register each supported `Application` section by (`bundle_id`, application `id`) and honor its
+8. Register each supported `Application` section by (`bundle_id`, `application_id`) and honor its
    `ApplicationIntegrationObject` requests when policy allows. Each generated command or launcher
    resolves to that pair.
 
@@ -105,8 +105,8 @@ The `run` subcommand is responsible for execution, not software acquisition.
 At a high level, the command should:
 
 1. Locate the installed bundle by `bundle_id` or open the local Janex file.
-2. Select an `Application` section: an explicit `application_id`, otherwise FileMetadata
-   `default_application`, otherwise the only application section.
+2. Select an `Application` section by an explicit `application_id`, or use the only application
+   section.
 3. Select a launcher for its `application_type`; reject unsupported types.
 4. Resolve its descriptor. For `janex.java`, set `invocation` to `run`, select a compatible Java
    runtime, and build the JVM invocation.
