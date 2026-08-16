@@ -105,7 +105,7 @@ The `run` subcommand is responsible for execution, not software acquisition.
 At a high level, the command should:
 
 1. Locate the installed bundle by `bundle_id` or open the local Janex file.
-2. Select an `Application` section: an explicit application `id`, otherwise FileMetadata
+2. Select an `Application` section: an explicit `application_id`, otherwise FileMetadata
    `default_application`, otherwise the only application section.
 3. Select a launcher for its `application_type`; reject unsupported types.
 4. Resolve its descriptor. For `janex.java`, set `invocation` to `run`, select a compatible Java

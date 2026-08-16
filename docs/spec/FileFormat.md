@@ -235,10 +235,10 @@ Writers should omit unused keys.
 refer to an existing `Application` section. The reference is invalid if the section is missing or has
 a different type.
 
-The caller may select an application by `ApplicationObject.application_id`. Otherwise the launcher
-uses `default_application`. If the key is omitted and the file contains exactly one application
-section, that section is the default. If the file contains several application sections and none is
-selected, the launcher must reject the ambiguity.
+The caller may select an application by `ApplicationTypeInfoObject.application_id`. Otherwise the
+launcher uses `default_application`. If `default_application` is omitted and the file contains
+exactly one application section, that section is the default. If the file contains several
+application sections and none is selected, the launcher must reject the ambiguity.
 
 `bundle_id` is the stable identity of an installable Janex bundle. It must be globally unique and
 should use a reverse-domain name such as `org.example.tools`. Local execution does not require it.
@@ -462,6 +462,16 @@ CBOR `ApplicationObject`. A file with no application section has no launch targe
 Separate commands with independent launch configurations use separate application sections.
 Subcommands interpreted by one program are ordinary application arguments.
 
+For an `Application` section, `SectionInfoObject.type_info` is:
+
+```cddl
+ApplicationTypeInfoObject = {
+    0: NonemptyText,                            ; application_id
+    1: NonemptyText,                            ; application_type
+    * uint => any,
+}
+```
+
 ```rust
 struct ApplicationSection {
     magic_number: u64, // 0x5050_4158_454e_414a ("JANEXAPP")
@@ -477,14 +487,12 @@ struct ApplicationSection {
 
 ```cddl
 ApplicationObject = {
-    0: NonemptyText,                            ; application_id
-    1: NonemptyText,                            ; application_type
-    2: ApplicationDescriptorObject,            ; descriptor
-    ? 3: NonemptyText,                          ; name
-    ? 4: tstr,                                  ; version
-    ? 5: tstr,                                  ; comment
-    ? 6: ApplicationIntegrationObject,          ; integration
-    ? 7: ApplicationLaunchMode,                 ; launch_mode
+    0: ApplicationDescriptorObject,             ; descriptor
+    ? 1: NonemptyText,                          ; name
+    ? 2: tstr,                                  ; version
+    ? 3: tstr,                                  ; comment
+    ? 4: ApplicationIntegrationObject,          ; integration
+    ? 5: ApplicationLaunchMode,                 ; launch_mode
     * uint => any,
 }
 
