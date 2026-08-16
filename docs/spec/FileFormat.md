@@ -557,7 +557,7 @@ JavaApplicationDescriptorObject = {
 JavaLaunchConfigObject = {
     ? 0: ConditionObject,                       ; condition
     ? 1: (JavaEntryPointObject / null),          ; entry_point
-    ? 2: ([* JavaModulePathEntryObject] / null), ; module_path
+    ? 2: ([* JavaPathEntryObject] / null),       ; module_path
     ? 3: ([* JavaPathEntryObject] / null),       ; class_path
     ? 4: ([* JavaAgentObject] / null),           ; agents
     ? 5: ([* tstr] / null),                     ; jvm_options
@@ -650,36 +650,25 @@ JavaPathEntryObject =
         * uint => any,
     }
   / {
-        0: 1,                    ; remote
+        0: 1,                    ; external
         1: tstr,                 ; purl
-        2: ChecksumObject,       ; checksum
+        ? 2: ChecksumObject,     ; checksum
         * uint => any,
     }
 ```
 
 Variant `0` selects a blob in this file whose resolved representation is one `ResourceRoot`, as
 defined in [Resource Roots](#resource-roots). The blob is named by a `BlobRefObject`, defined in
-[Blob References](#blob-references). Variant `1` resolves exactly the package identified by
-a canonical Package URL and verifies it by `checksum`. A `vers` qualifier is not allowed; Maven
-artifacts use `pkg:maven` and may select a repository with `repository_url`. The `janex` PURL type
-does not identify a physical path entry and is not allowed in this variant.
+[Blob References](#blob-references). Variant `1` contains a canonical Package URL. A `janex` PURL
+must omit `checksum`; other PURLs identify physical packages and must include it. The checksum
+verifies the resolved package. A `vers` qualifier is not allowed. Maven artifacts use `pkg:maven`
+and may select a repository with `repository_url`.
 
-#### `JavaModulePathEntryObject`
-
-```cddl
-JavaModulePathEntryObject =
-    JavaPathEntryObject
-  / {
-        0: 2,                    ; requirement
-        1: tstr,                 ; purl
-        * uint => any,
-    }
-```
-
-Variant `2` contains a `pkg:janex/java-module/...` requirement. Resolving it produces zero or more
-physical `JavaPathEntryObject` values at the same position. No path entry is needed when the selected
-runtime already provides the module. The selected runtime and resulting module path must together
-provide the named module and, when present in the PURL, its exact version.
+In a `JavaPathEntryObject`, a `janex` PURL must use the `java-module` requirement kind and is allowed
+only in `module_path`. Resolving it produces zero or more physical path entries at the same position.
+No path entry is needed when the selected runtime already provides the module. The selected runtime
+and resulting module path must together provide the named module and, when present in the PURL, its
+exact version.
 
 #### `JavaAgentObject`
 
@@ -1192,8 +1181,8 @@ A VERS in a Janex file must be in the canonical form required by VERS. Whitespac
 An invalid or non-canonical VERS is invalid.
 
 This document defines the `jep322` type for Java SE platform versions. Later uses, such as unresolved
-library requirements, may use other registered types such as `maven`. Remote `JavaPathEntryObject`
-values remain exact Package URLs and must not carry a `vers` qualifier.
+library requirements, may use other registered types such as `maven`. Package URLs in
+`JavaPathEntryObject` must not carry a `vers` qualifier.
 
 ### The `jep322` Type
 
