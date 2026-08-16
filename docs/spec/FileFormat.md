@@ -1020,15 +1020,39 @@ struct BlobPoolSection {
 }
 ```
 
-#### Stored Blob Encoding
+#### Blob Encoding
 
-Stored-blob and table-page encodings use these CBOR objects:
+Stored blobs and blob-table pages use the same encoding description:
+
+```rust
+struct BlobEncoding {
+    /// The number of encoded bytes.
+    stored_size: vuint,
+
+    /// Filters in encoding order.
+    filters: Vec<BlobFilter>,
+}
+
+struct BlobFilter {
+    /// The number of bytes supplied to this filter by the encoder.
+    input_size: vuint,
+
+    /// The filter method.
+    method: BlobFilterId,
+
+    /// Method-specific properties.
+    properties: Sized<CborMap>, // BlobFilterPropertiesObject
+}
+```
+
+CBOR layouts carry the binary `BlobEncoding` in a byte string:
 
 ```cddl
-BlobEncodingObject = [stored_size: uint, filters: [* BlobFilterObject]]
-BlobFilterObject = [input_size: uint, method: 0..255, properties: BlobFilterPropertiesObject]
+BlobEncodingObject = bstr .size (1..)
 BlobFilterPropertiesObject = { * uint => any }
 ```
+
+`BlobEncodingObject` must contain exactly one `BlobEncoding`.
 
 Filters are stored in encoding order and reversed from last to first. Each result must match
 `input_size`. With no filters, the decoded size is `stored_size`; otherwise, it is the first filter's
@@ -1065,42 +1089,64 @@ BlobTablePageInfoObject = [
     encoding: BlobEncodingObject,
     ? checksum: ChecksumObject,
 ]
+```
 
-BlobTablePageObject = [* BlobInfoObject]
+The decoded table pages use a binary layout:
 
-BlobInfoObject =
-    [
-        0,                              ; stored
-        offset: uint,
-        encoding: BlobEncodingObject,
-    ]
-  / [
-        1,                              ; extents
-        extents: [+ BlobExtentObject],
-    ]
+```rust
+struct BlobTablePage {
+    /// Entries in blob-index order. The count is determined by the page directory.
+    entries: [BlobTableEntry; page_entry_count],
+}
 
-BlobExtentObject = [
-    stored_blob_index: uint,
-    decoded_offset: uint,
-    decoded_length: uint,
-]
+#[repr(TaggedPayload<u8>)]
+enum BlobTableEntry {
+    /// An independently stored blob.
+    Stored {
+        entry_type: u8, // 0
+        payload_bytes: vuint,
+
+        /// The offset of the encoded bytes in `BlobPoolSection.bytes`.
+        offset: vuint,
+
+        encoding: BlobEncoding,
+    },
+
+    /// A blob assembled from decoded ranges of stored blobs.
+    Extents {
+        entry_type: u8, // 1
+        payload_bytes: vuint,
+
+        extents: Vec<BlobExtent>,
+    },
+}
+
+struct BlobExtent {
+    stored_blob_index: vuint,
+    decoded_offset: vuint,
+    decoded_length: vuint,
+}
 ```
 
 `BlobPoolSection.bytes` has length `SectionInfoObject.length - 8`. `blob_count` and all offsets and
-sizes must fit in `u64`. `blob_count` includes stored and extents entries. An empty pool has no pages.
+sizes must fit in `u64`. `blob_count` includes every table entry. An empty pool has no pages.
 Otherwise, the page count is
 `1 + (blob_count - 1) / page_capacity`. Every page except the last contains `page_capacity` entries;
-the final page contains the remaining entries.
+the final page contains the remaining entries. `table_pages` must contain that many descriptors.
 
 For `blob_index`, the page index is `blob_index / page_capacity` and the index within that page is
 `blob_index % page_capacity`. The logical blob table is the concatenation of the pages in directory
 order.
 
-Each page descriptor locates a stored page relative to `BlobPoolSection.bytes`. Decoding the page must
-produce one deterministic CBOR `BlobTablePageObject`. When present, its checksum covers those decoded
-CBOR bytes and must be verified. Each page decodes independently using self-contained filters.
-`BlobRef` addresses logical blobs. Locating a stored blob requires only its selected table page;
-resolving an extents blob may also require the pages containing its stored sources.
+Each page descriptor locates an encoded page relative to `BlobPoolSection.bytes`. Decoding it must
+produce exactly one `BlobTablePage` and consume every decoded byte. When present, the checksum covers
+the decoded page bytes and must be verified. Each page decodes independently using self-contained
+filters. `BlobRef` addresses logical blobs. Locating a stored blob requires only its selected table
+page; resolving an extents blob may also require the pages containing its stored sources.
+
+Each `BlobTableEntry` payload must consume exactly `payload_bytes`. Unknown entry types may be skipped
+but cannot be resolved. A reader may use `payload_bytes` to skip preceding entries when locating one
+entry within a decoded page. An `Extents` entry must contain at least one extent.
 
 For a stored entry, `offset` locates its encoded bytes relative to `BlobPoolSection.bytes`. All page
 and stored-blob ranges must fit in `bytes` and must not overlap. Writers may place them in any order.
