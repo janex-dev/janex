@@ -557,7 +557,7 @@ JavaApplicationDescriptorObject = {
 JavaLaunchConfigObject = {
     ? 0: ConditionObject,                       ; condition
     ? 1: (JavaEntryPointObject / null),          ; entry_point
-    ? 2: ([* JavaPathEntryObject] / null),       ; module_path
+    ? 2: ([* JavaModulePathEntryObject] / null), ; module_path
     ? 3: ([* JavaPathEntryObject] / null),       ; class_path
     ? 4: ([* JavaAgentObject] / null),           ; agents
     ? 5: ([* tstr] / null),                     ; jvm_options
@@ -634,9 +634,11 @@ present constraint matches. An invalid `java` VERS makes the application descrip
 not treated as a non-match. An unknown `invocation` token does not match.
 
 The launcher considers each candidate runtime against the root condition. A candidate that does not
-match is discarded. Among remaining candidates, the launcher walks the root configuration and its
-`overlays` in depth-first pre-order and applies each overlay whose condition matches. It then selects
-a remaining candidate using the implementation's runtime selection order.
+match is discarded. For each remaining candidate, the launcher walks the root configuration and its
+`overlays` in depth-first pre-order and applies each overlay whose condition matches. A candidate is
+discarded if any module requirement cannot be satisfied by the runtime, another module-path entry,
+or an allowed provider. The launcher then selects a remaining candidate using the implementation's
+runtime selection order, which may prefer runtimes that provide required modules directly.
 
 #### `JavaPathEntryObject`
 
@@ -659,7 +661,25 @@ Variant `0` selects a blob in this file whose resolved representation is one `Re
 defined in [Resource Roots](#resource-roots). The blob is named by a `BlobRefObject`, defined in
 [Blob References](#blob-references). Variant `1` resolves exactly the package identified by
 a canonical Package URL and verifies it by `checksum`. A `vers` qualifier is not allowed; Maven
-artifacts use `pkg:maven` and may select a repository with `repository_url`.
+artifacts use `pkg:maven` and may select a repository with `repository_url`. The `janex` PURL type
+does not identify a physical path entry and is not allowed in this variant.
+
+#### `JavaModulePathEntryObject`
+
+```cddl
+JavaModulePathEntryObject =
+    JavaPathEntryObject
+  / {
+        0: 2,                    ; requirement
+        1: tstr,                 ; purl
+        * uint => any,
+    }
+```
+
+Variant `2` contains a `pkg:janex/java-module/...` requirement. Resolving it produces zero or more
+physical `JavaPathEntryObject` values at the same position. No path entry is needed when the selected
+runtime already provides the module. The selected runtime and resulting module path must together
+provide the named module and, when present in the PURL, its exact version.
 
 #### `JavaAgentObject`
 
@@ -1131,6 +1151,28 @@ The result is uninterpreted bytes whose meaning is assigned by the containing st
 
 Whether a blob is stored directly or assembled from extents is writer policy. Readers must support
 both forms. Writers may store frequently accessed structural blobs directly for better locality.
+
+## Package URLs
+
+Janex uses canonical [Package URLs](https://github.com/package-url/purl-spec) to name packages and
+resolvable requirements.
+
+### The `janex` Type
+
+The `janex` type identifies a virtual package resolved by the Host:
+
+```text
+pkg:janex/<requirement-kind>/<name>@<version>
+```
+
+The namespace is one case-sensitive requirement-kind segment. The name is case-sensitive. The
+optional version identifies one exact version. Qualifiers and subpaths are not allowed, and the type
+has no package repository. A selected provider keeps its own Package URL.
+
+The `java-module` requirement kind names a JPMS module. Its name is the exact module name, and its
+version is the exact module descriptor version. A Host may satisfy it with the selected Java runtime
+or another provider. For example, `pkg:janex/java-module/javafx.controls` requires the
+`javafx.controls` module.
 
 ## Version Ranges
 
