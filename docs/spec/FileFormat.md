@@ -1081,7 +1081,7 @@ For a `BlobPool` section, `SectionInfoObject` additionally contains a one-level 
 ```cddl
 BlobPoolSectionInfoFields = (
     4: uint,                           ; blob_count
-    5: 256..4096,                      ; page_capacity
+    5: 8..12,                          ; page_entry_shift
     6: [* BlobTablePageInfoObject],    ; table_pages
 )
 
@@ -1096,7 +1096,7 @@ The decoded table pages use a binary layout:
 
 ```rust
 struct BlobTablePage {
-    /// Entries in blob-index order. The count is determined by the page directory.
+    /// Entries in blob-index order.
     entries: [BlobTableEntry; page_entry_count],
 }
 
@@ -1130,14 +1130,15 @@ struct BlobExtent {
 ```
 
 `BlobPoolSection.bytes` has length `SectionInfoObject.length - 8`. `blob_count` and all offsets and
-sizes must fit in `u64`. `blob_count` includes every table entry. An empty pool has no pages.
-Otherwise, the page count is
-`1 + (blob_count - 1) / page_capacity`. Every page except the last contains `page_capacity` entries;
-the final page contains the remaining entries. `table_pages` must contain that many descriptors.
+sizes must fit in `u64`. `blob_count` includes every table entry. `entries_per_page` is
+`1 << page_entry_shift`. An empty pool has no pages. Otherwise, the page count is
+`1 + ((blob_count - 1) >> page_entry_shift)`. Every page except the last contains
+`entries_per_page` entries; the final page contains the remaining entries. `table_pages` must contain
+that many descriptors. Each page's stored and decoded byte lengths are determined by its encoding.
 
-For `blob_index`, the page index is `blob_index / page_capacity` and the index within that page is
-`blob_index % page_capacity`. The logical blob table is the concatenation of the pages in directory
-order.
+For `blob_index`, the page index is `blob_index >> page_entry_shift` and the index within that page is
+`blob_index & (entries_per_page - 1)`. The logical blob table is the concatenation of the pages in
+directory order.
 
 Each page descriptor locates an encoded page relative to `BlobPoolSection.bytes`. Decoding it must
 produce exactly one `BlobTablePage` and consume every decoded byte. When present, the checksum covers
