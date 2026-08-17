@@ -715,16 +715,16 @@ struct ResourceLayer {
 ResourceRootMetadataObject = { * NonemptyText => any }
 ```
 
-The metadata map may be empty. An invalid `java` VERS
-in a layer condition makes the resource root invalid. Readers must resolve `string_pool` before
+The metadata map may be empty. A resource root is invalid if a layer contains an invalid `java`
+version constraint. Readers must resolve `string_pool` before
 interpreting directory paths, entry names, or symbolic-link targets. Multiple resource roots may
 name the same string-pool blob. Directory paths are unique within a layer, not across layers.
 
-A Multi-Release JAR is an import mapping, not the native layout. The base tree becomes an
-unconditional layer. Each `META-INF/versions/N/` tree becomes a layer whose `java` constraint is
-`vers:jep322/>=N`. Those layers must appear in increasing `N` so that a later matching layer
-overrides an earlier one. Export to a JAR may reconstruct `META-INF/versions/` only when every
-layer condition is a Java feature range and does not constrain `os`, `arch`, or `vendor`.
+When importing a Multi-Release JAR, the base tree becomes an unconditional layer. Each
+`META-INF/versions/N/` tree becomes a layer with the `java` condition `vers:jep322/>=N`. These layers
+must appear in increasing `N`, so a later matching layer overrides an earlier one. A resource root
+can be exported back to a Multi-Release JAR when its first layer is unconditional and every remaining
+layer uses one of these conditions in increasing `N`.
 
 ##### String Pools
 
