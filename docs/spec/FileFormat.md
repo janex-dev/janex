@@ -585,22 +585,16 @@ The resulting configuration must contain an `entry_point`.
 #### `JavaEntryPointObject`
 
 ```cddl
-JavaEntryPointObject =
-    {
-        0: 0,                                    ; class
-        1: NonemptyText,                         ; main_class
-        * uint => any,
-    }
-  / {
-        0: 1,                                    ; module
-        1: NonemptyText,                         ; main_module
-        ? 2: NonemptyText,                       ; main_class
-        * uint => any,
-    }
+JavaEntryPointObject = {
+    ? 0: NonemptyText,                          ; main_class
+    ? 1: NonemptyText,                          ; main_module
+    * uint => any,
+}
 ```
 
-The class variant launches `main_class`. The module variant launches `main_module`; when
-`main_class` is omitted, the module supplies its main class.
+At least one of `main_class` and `main_module` must be present. Without `main_module`, the launcher
+launches `main_class` from the class path. With `main_module`, `main_class` selects a class in that
+module; when omitted, the module supplies its main class.
 
 #### `ConditionObject`
 
