@@ -755,24 +755,9 @@ file converts selected strings to Modified UTF-8.
 ##### `ResourceDirectory`
 
 ```rust
-#[repr(u8)]
-enum DirectoryOp {
-    /// Merge `entries` into this directory.
-    Merge = 0,
-
-    /// Discard earlier direct entries in this directory, then apply `entries`.
-    Replace = 1,
-
-    /// Discard this directory and all descendant paths. `entries_count` must be `0`.
-    Remove = 2,
-}
-
 struct ResourceDirectory {
     /// The directory path relative to the resource root, as an index into the root's string pool.
     path: StringPoolIndex,
-
-    /// How this record updates the merged tree.
-    op: DirectoryOp,
 
     /// One deterministic CBOR resource-metadata map.
     metadata: Sized<CborMap>, // ResourceMetadataObject
@@ -788,15 +773,13 @@ struct ResourceDirectory {
 The empty path identifies the root directory. Other directory paths are UTF-8, `/`-separated, and
 must not start or end with `/` or contain empty, `.` or `..` components.
 Directory paths are unique within a layer and sorted by the UTF-8 bytes of the resolved strings.
-Parent directories may be implicit; an empty directory or its metadata is preserved by an explicit
-`Merge` or `Replace` record with no entries.
+Parent directories may be implicit. An explicit record with no entries preserves an empty directory
+or its metadata.
 
-When applying a matching layer, directory records are applied in path order. `Remove` deletes the
-directory path and every descendant path contributed by earlier layers. `Replace` deletes earlier
-direct entries of this directory and does not delete descendant directories. `Merge` keeps earlier
-entries and then applies `entries`. A later file or symbolic link with the same name replaces the
-earlier one. A tombstone removes an earlier file or symbolic link with that name. A tombstone for a
-name that is not present is ignored.
+When a later matching layer contains the same directory path, its metadata replaces the earlier
+metadata and its entries are merged into the directory. A later file or symbolic link with the same
+name replaces the earlier one. A tombstone removes an earlier file or symbolic link with that name.
+A tombstone for a name that is not present is ignored.
 
 `entries.transforms` must be empty.
 
