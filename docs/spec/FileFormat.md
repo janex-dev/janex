@@ -88,26 +88,23 @@ Locale = tstr .ne ""
 
 LocalizedText =
     NonemptyText
-  / {
-        0: NonemptyText,                 ; default
-        * Locale => NonemptyText,
-    }
+  / [+ [locale: Locale, text: NonemptyText]]
 ```
 
-A bare `NonemptyText` is the string for every locale. The map form stores a
-required default at key `0` and optional translations under locale keys. Locale
-keys are [BCP 47](https://www.rfc-editor.org/rfc/rfc5646.html) language tags
-such as `en`, `zh-Hans`, or `pt-BR`. They are not attribute names and do not
-use the `janex.` or reverse-domain conventions. Writers should use the shortest
-well-formed tag that distinguishes the translation and should omit the map form
-when there is only a default.
+A bare `NonemptyText` declares no language and is used for every locale. The
+array form gives every string a [BCP 47](https://www.rfc-editor.org/rfc/rfc5646.html)
+language tag such as `en`, `zh-Hans`, or `pt-BR`. The first entry is the default.
+Later entries are translations. Locales must be unique. Writers should use the
+shortest well-formed tag that distinguishes a translation, put the source
+language first, and use the bare string only when they do not declare a language.
 
 A Host selects a string for a user-interface locale as follows. A bare
 `NonemptyText` is used for every locale. Otherwise the Host looks up the locale
-in the map using BCP 47 language priority lookup
+among the entries using BCP 47 language priority lookup
 ([RFC 4647](https://www.rfc-editor.org/rfc/rfc4647.html) Lookup). Tags are
-compared case-insensitively. Keys that are not well-formed BCP 47 language tags
-are ignored. If lookup matches no key, the Host uses the default.
+compared case-insensitively. Entries whose locale is not a well-formed BCP 47
+language tag are ignored. If lookup matches no entry, the Host uses the first
+entry.
 
 ### Tagged Payload
 
