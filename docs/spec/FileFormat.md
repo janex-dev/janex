@@ -75,6 +75,40 @@ struct Sized<T> {
 type String = Vec<u8>;
 ```
 
+```cddl
+NonemptyText = tstr .ne ""
+```
+
+### Localized Text
+
+`LocalizedText` is a display string, optionally with translations:
+
+```cddl
+Locale = tstr .ne ""
+
+LocalizedText =
+    NonemptyText
+  / {
+        0: NonemptyText,                 ; default
+        * Locale => NonemptyText,
+    }
+```
+
+A bare `NonemptyText` is the string for every locale. The map form stores a
+required default at key `0` and optional translations under locale keys. Locale
+keys are [BCP 47](https://www.rfc-editor.org/rfc/rfc5646.html) language tags
+such as `en`, `zh-Hans`, or `pt-BR`. They are not attribute names and do not
+use the `janex.` or reverse-domain conventions. Writers should use the shortest
+well-formed tag that distinguishes the translation and should omit the map form
+when there is only a default.
+
+A Host selects a string for a user-interface locale as follows. A bare
+`NonemptyText` is used for every locale. Otherwise the Host looks up the locale
+in the map using BCP 47 language priority lookup
+([RFC 4647](https://www.rfc-editor.org/rfc/rfc4647.html) Lookup). Tags are
+compared case-insensitively. Keys that are not well-formed BCP 47 language tags
+are ignored. If lookup matches no key, the Host uses the default.
+
 ### Tagged Payload
 
 `TaggedPayload<T>` prefixes a payload with a tag and its byte length:
@@ -220,8 +254,6 @@ FileMetadataObject = {
     * NonemptyText => any,
     * uint => any,
 }
-
-NonemptyText = tstr .ne ""
 ```
 
 `section_table` describes `JanexFile.sections` and may be empty.
@@ -479,9 +511,9 @@ struct ApplicationSection {
 ```cddl
 ApplicationObject = {
     0: ApplicationDescriptorObject,             ; descriptor
-    ? 1: NonemptyText,                          ; name
+    ? 1: LocalizedText,                         ; name
     ? 2: tstr,                                  ; version
-    ? 3: tstr,                                  ; comment
+    ? 3: LocalizedText,                         ; comment
     ? 4: ApplicationIntegrationObject,          ; integration
     ? 5: ApplicationLaunchMode,                 ; launch_mode
     * uint => any,
@@ -501,9 +533,15 @@ logical target should retain its `application_id` across versions of the same pa
 `SectionInfoObject.id` locates the section and is not part of the installed target identity.
 `application_type` selects the schema and semantics of `descriptor`; this document defines
 `janex.java`, and reserves the `janex.` prefix. Third-party types use a reverse-domain name.
-`descriptor` must follow the selected schema. `name` is a display name. `version` is the application's
-own version string. `comment` is a short description. `launch_mode` defaults to `console`. `windowed`
-suppresses console window creation on platforms that distinguish the two modes.
+`descriptor` must follow the selected schema. `name` is a display name and may be localized.
+`version` is the application's own version string. `comment` is a short description and may be
+localized. `launch_mode` defaults to `console`. `windowed` suppresses console window creation on
+platforms that distinguish the two modes.
+
+`name` and `comment` are for presentation. They are not command names and are not part of the
+installed target identity. When presenting this application, including a desktop launcher, the Host
+selects `name` and `comment` for the current user-interface locale. If `name` is omitted, the
+desktop title is `command` if present, otherwise `application_id`.
 
 Unsupported application types may be displayed and preserved but cannot be launched.
 
@@ -521,11 +559,12 @@ ApplicationIntegrationObject = {
 These fields request installation integration. The Host applies them according to local policy.
 
 `command` is the name of a command to install for this application. It must be a single file name
-valid on the target platform, not a path. The Host typically makes it available on `PATH`. An omitted
-value makes no request.
+valid on the target platform, not a path. It is never localized. The Host typically makes it
+available on `PATH`. An omitted value makes no request.
 
 `desktop_launcher` asks the installer to create a Start Menu entry on Windows, a `.desktop` entry on
 Linux, or an equivalent launcher on other platforms. An omitted value or `false` makes no request.
+The launcher's visible title is the localized `name` as specified above, not `command`.
 
 `icons` supplies image blobs for those launchers. The Host selects a suitable image for the
 platform. An empty array should be omitted.
