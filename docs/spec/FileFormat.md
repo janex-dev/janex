@@ -511,7 +511,7 @@ Unsupported application types may be displayed and preserved but cannot be launc
 
 ```cddl
 ApplicationIntegrationObject = {
-    ? 0: NonemptyText,                          ; path_command
+    ? 0: NonemptyText,                          ; command
     ? 1: bool,                                  ; desktop_launcher
     ? 2: [+ ApplicationIconObject],             ; icons
     * uint => any,
@@ -520,8 +520,9 @@ ApplicationIntegrationObject = {
 
 These fields request installation integration. The Host applies them according to local policy.
 
-`path_command` requests a command with that name on `PATH`. It is a command name, not a path, and must
-be valid as a single file name on the target platform. An omitted value makes no request.
+`command` is the name of a command to install for this application. It must be a single file name
+valid on the target platform, not a path. The Host typically makes it available on `PATH`. An omitted
+value makes no request.
 
 `desktop_launcher` asks the installer to create a Start Menu entry on Windows, a `.desktop` entry on
 Linux, or an equivalent launcher on other platforms. An omitted value or `false` makes no request.
@@ -620,7 +621,7 @@ are `x86`, `x86-64`, and `aarch64`. Other names match only by exact equality.
 
 `invocation` is the channel that started this launch. The defined values are `run` for
 `janex run` of a Janex file, `open` for a file-association or double-click open, and `command` for
-an installed `PATH` command. It is not a windowing mode: a graphical application started with
+an installed command of this application. It is not a windowing mode: a graphical application started with
 `janex run` still has invocation `run`.
 
 A text `os`, `arch`, or `invocation` value matches that one name. An array matches if the candidate
