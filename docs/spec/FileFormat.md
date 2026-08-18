@@ -88,23 +88,25 @@ Locale = tstr .ne ""
 
 LocalizedText =
     NonemptyText
-  / [+ [locale: Locale, text: NonemptyText]]
+  / { + Locale => NonemptyText }
 ```
 
 A bare `NonemptyText` declares no language and is used for every locale. The
-array form gives every string a [BCP 47](https://www.rfc-editor.org/rfc/rfc5646.html)
-language tag such as `en`, `zh-Hans`, or `pt-BR`. The first entry is the default.
-Later entries are translations. Locales must be unique. Writers should use the
-shortest well-formed tag that distinguishes a translation, put the source
-language first, and use the bare string only when they do not declare a language.
+map form gives every string a [BCP 47](https://www.rfc-editor.org/rfc/rfc5646.html)
+language tag such as `en`, `zh-Hans`, or `pt-BR`. There is no distinguished
+default entry. Writers should use the shortest well-formed tag that
+distinguishes a translation and should include `und` when they want an
+explicit language-neutral fallback. The bare string is only for values that
+do not declare a language.
 
 A Host selects a string for a user-interface locale as follows. A bare
 `NonemptyText` is used for every locale. Otherwise the Host looks up the locale
-among the entries using BCP 47 language priority lookup
+in the map using BCP 47 language priority lookup
 ([RFC 4647](https://www.rfc-editor.org/rfc/rfc4647.html) Lookup). Tags are
-compared case-insensitively. Entries whose locale is not a well-formed BCP 47
-language tag are ignored. If lookup matches no entry, the Host uses the first
-entry.
+compared case-insensitively. Keys that are not well-formed BCP 47 language tags
+are ignored. If lookup matches no key, the Host uses `und` when present;
+otherwise it uses the remaining well-formed key that is first in core
+deterministic map order.
 
 ### Tagged Payload
 
