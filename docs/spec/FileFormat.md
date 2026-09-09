@@ -815,8 +815,7 @@ ResourceRootMetadataObject = { * NonemptyText => any }
 ```
 
 The metadata map may be empty. Readers must resolve `string_pool` before using references to it.
-Multiple resource roots may name the same string-pool blob. Directory paths are unique within a
-layer, not across layers.
+Multiple resource roots may name the same string-pool blob.
 
 ##### String Pools
 
@@ -832,26 +831,8 @@ struct StringPoolData {
 }
 ```
 
-The pool must contain the empty string at index `0`. All strings are unique, so every other entry
-is nonempty. A `StringPoolIndex` must select an existing element.
-
-Directory paths use `StringPoolIndex`; index `0` identifies the root directory. Entry names and
-symbolic-link targets use `NonemptyStringValue`. Path and name rules apply to the resolved strings.
-
-`CLASSFILE` transforms use the root's pool by default and may override it in their properties.
-Strings are UTF-8. Restoring a class file converts selected strings to Modified UTF-8.
-
-##### Nonempty Strings
-
-`NonemptyStringValue` starts with a `vuint`:
-
-| Value | Encoding |
-| --- | --- |
-| `0` | Followed by an inline `String`, which must be nonempty. |
-| `1..` | The index of an existing entry in the root's string pool; no additional bytes. |
-
-For example, `05` references pool entry `5`; `00 03 66 6F 6F` encodes inline `"foo"`.
-Both forms may be mixed, and comparisons use the resolved UTF-8 bytes.
+The pool contains unique UTF-8 strings, with the empty string at index `0`.
+A `StringPoolIndex` must select an existing element.
 
 ##### `ResourceDirectory`
 
@@ -871,7 +852,7 @@ struct ResourceDirectory {
 }
 ```
 
-The empty path identifies the root directory. Other directory paths are UTF-8, `/`-separated, and
+`path` index `0` identifies the root directory. Other resolved paths are UTF-8, `/`-separated, and
 must not start or end with `/` or contain empty, `.` or `..` components.
 Directory paths are unique within a layer and sorted by the UTF-8 bytes of the resolved strings.
 Parent directories may be implicit. An explicit record with no entries preserves an empty directory
@@ -934,6 +915,16 @@ enum DirectoryEntry {
     },
 }
 ```
+
+Entry names and symbolic-link targets use `NonemptyStringValue`, which starts with a `vuint`:
+
+| Value | Encoding |
+| --- | --- |
+| `0` | Followed by an inline `String`, which must be nonempty. |
+| `1..` | The index of an existing entry in the root's string pool; no additional bytes. |
+
+For example, `05` references pool entry `5`; `00 03 66 6F 6F` encodes inline `"foo"`.
+Both forms may be mixed, and comparisons use the resolved UTF-8 bytes.
 
 Entry names are nonempty UTF-8 strings without `/` and must not be `.` or `..`. They are unique within
 their directory, including tombstones, and sorted by the UTF-8 bytes of the resolved strings. A full
@@ -1032,17 +1023,9 @@ enum ContentTransformId {
 
 ```cddl
 ContentTransformPropertiesObject = { * uint => any }
-
-ClassFileTransformPropertiesObject = {
-    ? 0: BlobRefObject,                         ; string_pool
-    * uint => any,
-}
 ```
 
-The schema of `properties.value` is selected by `method`. `CLASSFILE` uses
-`ClassFileTransformPropertiesObject`: `string_pool` selects the pool when present; otherwise,
-the containing `ResourceRoot.string_pool` is used. An invalid explicit pool is an error, with no
-fallback to the root's pool.
+The schema of `properties.value` is selected by `method`.
 
 Transforms are stored in encoding order and reversed from last to first after resolving the source.
 Each result must match `input_size`; the final value must be a valid encoding of `T`. An empty
@@ -1054,6 +1037,17 @@ transform array means the source already encodes `T`. Unsupported methods are in
 #### Java Class File Transform
 
 The class-file transform moves selected constant-pool strings into a shared `StringPool`.
+
+```cddl
+ClassFileTransformPropertiesObject = {
+    ? 0: BlobRefObject,                         ; string_pool
+    * uint => any,
+}
+```
+
+`string_pool` selects the pool when present; otherwise, the containing `ResourceRoot.string_pool`
+is used. An invalid explicit pool is an error, with no fallback. Restoring a class file converts
+selected strings to Modified UTF-8.
 
 It modifies the class file as follows:
 
