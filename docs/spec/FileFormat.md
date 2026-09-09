@@ -1,8 +1,35 @@
 # Janex File Format
 
+## Overview
+
 Janex is a sectioned, multi-root container format. Its core stores shared content, metadata, and
 verification information. Optional application sections describe launchable targets for supported
 runtimes.
+
+The Janex container has the following layout:
+
+```rust
+struct JanexFile {
+    /// The magic number identifying this as a Janex file.
+    ///
+    /// Always `0x0000_0058_454e_414a` ("JANEX\0\0\0").
+    magic_number: u64, // 0x0000_0058_454e_414a ("JANEX\0\0\0")
+
+    /// The sections of the Janex file.
+    sections: [Section; ...],
+
+    /// The file-level metadata at the end of the Janex file.
+    file_metadata: FileMetadata,
+}
+```
+
+The complete physical file may contain data outside `JanexFile`:
+
+```text
+[external header] [JanexFile] [external tail]
+```
+
+`FileMetadataObject` records optional size and checksum constraints for the external regions.
 
 ## Data Types
 
@@ -19,7 +46,7 @@ and uses `f32`/`f64` to represent 32/64-bit floating-point numbers.
 
 Complex layouts use Rust-like pseudocode. `[T; count]` denotes `count` consecutive values of type `T`.
 
-### Variable-length integers
+### Variable-Length Integers
 
 Janex calls a 64-bit unsigned integer encoded as ULEB128 a `vuint`:
 
@@ -184,103 +211,7 @@ ChecksumObject = bstr .size (1..)
 The byte string contains the exact encoding of one `ChecksumValue`: the first byte is the algorithm
 ID and the remaining bytes are `digest`.
 
-## Conditions
-
-Launch configurations and resource layers use conditions to select data for a supplied environment.
-
-### `ConditionObject`
-
-```cddl
-NameSelector = tstr / [+ tstr]
-
-ConditionObject = {
-    ? 1: NameSelector,                          ; os
-    ? 2: NameSelector,                          ; arch
-    ? 4: NameSelector,                          ; invocation
-    ? 5: RuntimeConditionObject,                ; runtime
-    * uint => any,
-}
-```
-
-Keys `0` and `3` are reserved and must not occur. All present constraints must match; omitted keys
-impose no constraint. An empty map is unconditional.
-
-The consumer supplies the host OS and CPU architecture, an optional invocation channel, and an
-optional runtime with its type and properties. Conditions do not select a runtime.
-
-`os` uses `linux`, `windows`, or `macos`; `arch` uses `x86`, `x86-64`, or `aarch64`.
-Other names match by exact equality.
-
-`invocation` uses `run` for `janex run`, `open` for file-association or double-click launch, and
-`command` for an installed command. It identifies the launch channel, not the windowing mode.
-Unknown tokens or a missing context channel do not match.
-
-A `NameSelector` matches one name or any name in its array. Comparisons are case-sensitive.
-
-### `RuntimeConditionObject`
-
-```cddl
-RuntimeConditionObject = {
-    0: NonemptyText,                            ; runtime_type
-    1: { * uint => any },                       ; requirements
-    * uint => any,
-}
-```
-
-`runtime_type` selects the schema and matching rules of `requirements`. Names are case-sensitive;
-`janex.` is reserved, and third-party types use reverse-domain names.
-
-A missing context runtime or a different type does not match. Otherwise, all requirements must
-match. The required `requirements` map may be empty to accept any runtime of that type.
-
-Unknown types may be preserved as opaque data and need not be understood to reject a type mismatch.
-If the type matches but the requirements cannot be interpreted, report an unsupported condition.
-
-Readers must validate condition structure and requirements for supported types, even in unmatched
-conditions. Invalid conditions invalidate the containing application descriptor or resource root.
-
-### `janex.java` Runtime Requirements
-
-For `runtime_type` `janex.java`, `requirements` is:
-
-```cddl
-JavaRuntimeRequirementsObject = {
-    ? 0: tstr,                                  ; version
-    ? 1: tstr,                                  ; vendor
-    * uint => any,
-}
-```
-
-`version` is a `jep322` [VERS](#version-ranges), matched against the runtime's Java version with
-Java 8 alias expansion. An invalid VERS invalidates the condition. `vendor` matches the runtime's
-vendor string exactly, without normalization.
-
-## Janex File Structure
-
-The Janex container has the following layout:
-
-```rust
-struct JanexFile {
-    /// The magic number identifying this as a Janex file.
-    ///
-    /// Always `0x0000_0058_454e_414a` ("JANEX\0\0\0").
-    magic_number: u64, // 0x0000_0058_454e_414a ("JANEX\0\0\0")
-
-    /// The sections of the Janex file.
-    sections: [Section; ...],
-
-    /// The file-level metadata at the end of the Janex file.
-    file_metadata: FileMetadata,
-}
-```
-
-The complete physical file may contain data outside `JanexFile`:
-
-```text
-[external header] [JanexFile] [external tail]
-```
-
-`FileMetadataObject` records optional size and checksum constraints for the external regions.
+## File Structure
 
 ### `FileMetadata`
 
@@ -340,7 +271,7 @@ Writers should omit unused keys.
 scope. `package_version` is that package's version string. Non-installable files may omit both.
 Installation identifies a launch target by (`package_name`, `application_id`) within the same scope.
 
-#### Metadata Evolution and Extensions
+### Metadata Evolution and Extensions
 
 Core maps use unsigned integer keys for container mechanics. Text-keyed metadata uses non-empty keys;
 `janex.` is reserved. Third-party keys should use a reverse-domain prefix such as `org.example.`.
@@ -352,7 +283,7 @@ that older readers reject.
 Empty collections are valid where allowed by the schema. Optional empty maps should be omitted. `null`
 is valid only where the schema defines it and is distinct from an omitted key.
 
-#### `SectionInfoObject` Map
+### `SectionInfoObject` Map
 
 ```cddl
 SectionInfoObject = {
@@ -375,7 +306,7 @@ verified.
 `type_info` follows the schema selected by `section_type` and is omitted when the type defines no
 additional information. Other root keys extend the common section information.
 
-#### Section References
+### Section References
 
 ```cddl
 SectionRef = uint
@@ -402,7 +333,7 @@ The table describes consecutive sections. Use `Padding` for bytes between them.
 
 Unknown sections may be skipped.
 
-#### `ExternalRegionObject`
+### `ExternalRegionObject`
 
 ```cddl
 ExternalRegionObject = {
@@ -428,7 +359,7 @@ All arithmetic is checked. The external header precedes `janex_start`, and the t
 `janex_end`. The 24-byte footer before `janex_end` provides `metadata_length` and `file_length`;
 `end_mark` must match, and `metadata_length` must equal the encoded `FileMetadata` length.
 
-#### `VerificationInfo` Structure
+### `VerificationInfo` Structure
 
 `VerificationInfo` is a tagged payload. `verification_input` ends after `verification_type` and before
 the payload.
@@ -491,65 +422,555 @@ The range starts at `FileMetadata.magic_number` and ends immediately after
 The payload must consume exactly `payload_bytes`. A checksum payload must be one valid
 `ChecksumValue`. OpenPGP and CMS payloads must be nonempty. Unknown verification types are invalid.
 
-##### Verification Policy
+See [Verification](#verification) for signature profiles and authenticated content scope.
 
-Authentication requires OpenPGP or CMS and successful validation under the declared type. These
-variants use caller-provided signer, trust, algorithm, time, and revocation policies.
+## Blob Pools
 
-OpenPGP and CMS implementations must support SHA-256 for content digests. Janex signatures must not
-use MD5, SHA-1, or RIPEMD-160. Other algorithms are subject to caller policy.
+A `BlobPool` stores logical byte blobs. A blob is either independently stored or assembled from
+decoded ranges of independently stored blobs. Containing structures assign their logical types. A
+file may contain any number of pools.
 
-##### OpenPGP Profile
+```rust
+struct BlobPoolSection {
+    magic_number: u64, // 0x4c4f_4f50_424f_4c42 ("BLOBPOOL")
 
-The OpenPGP payload uses the binary packet format defined by
-[RFC 9580](https://www.rfc-editor.org/rfc/rfc9580.html). It must contain exactly one Signature packet
-and no Marker, Padding, Literal Data, One-Pass Signature, compressed, encrypted, or ASCII-armored
-representation. The Signature packet must:
+    /// Stored blob bytes and blob-table pages.
+    bytes: [u8; ...],
+}
+```
 
-- use packet version 4 or 6;
-- use signature type `0x00` (Binary Signature of a Document), with `verification_input` as the exact
-  document bytes;
-- contain the Signature Creation Time subpacket in its hashed subpacket area;
-- contain exactly one Issuer Fingerprint subpacket in its hashed subpacket area, matching the key that
-  verifies the signature; and
-- satisfy the caller's algorithm, key-strength, key-usage, expiration, and revocation policies.
+### Blob Encoding
 
-Unhashed issuer information is advisory. Unsupported critical subpackets are invalid. Keys and trust
-data come from the caller or an external key store.
+Stored blobs and blob-table pages use the same encoding description:
 
-##### CMS Profile
+```rust
+struct BlobEncoding {
+    /// The number of encoded bytes.
+    stored_size: vuint,
 
-The CMS payload uses the syntax defined by
-[RFC 5652](https://www.rfc-editor.org/rfc/rfc5652.html), with the algorithm-protection updates in
-[RFC 8933](https://www.rfc-editor.org/rfc/rfc8933.html). It must be exactly one DER-encoded
-`ContentInfo` value satisfying all of the following requirements:
+    /// Filters in encoding order.
+    filters: Vec<BlobFilter>,
+}
 
-- `ContentInfo.contentType` is `id-signedData` and its content is one `SignedData` value;
-- `SignedData.encapContentInfo.eContentType` is `id-data` and `eContent` is absent, making the
-  signature detached;
-- `signerInfos` is non-empty;
-- every `SignerInfo` considered by the caller's policy contains signed attributes;
-- those signed attributes contain exactly one `content-type` attribute whose value is `id-data`,
-  exactly one `message-digest` attribute equal to the digest of `verification_input`, and exactly one
-  `CMSAlgorithmProtection` attribute matching that `SignerInfo`'s digest and signature algorithms;
-  and
-- the same digest algorithm is used for the content digest and the signed attributes, as required by
-  RFC 8933.
+struct BlobFilter {
+    /// The number of bytes supplied to this filter by the encoder.
+    input_size: vuint,
 
-Each required signer must pass digest, signature, identity, and caller-policy validation. Caller policy
-establishes trust for embedded certificates and revocation data and selects the required signers. Only
-signed attributes contribute to primary signature validation.
+    /// The filter method.
+    method: BlobFilterId,
 
-##### Authenticated Content Scope
+    /// Method-specific properties.
+    properties: Sized<CborMap>, // BlobFilterPropertiesObject
+}
+```
 
-Full-container authentication includes both `external_header` and `external_tail` and records a secure
-checksum for every section and every nonempty external region. Readers must verify all of them. Secure
-checksum algorithms are `SHA256`, `SHA512`, and `SM3`.
+CBOR layouts carry the binary `BlobEncoding` in a byte string:
 
-The signature authenticates `verification_input`; the recorded secure checksums authenticate section
-and external-region bytes.
+```cddl
+BlobEncodingObject = bstr .size (1..)
+BlobFilterPropertiesObject = { * uint => any }
+```
 
-### `Application` Section
+`BlobEncodingObject` must contain exactly one `BlobEncoding`.
+
+Filters are stored in encoding order and reversed from last to first. Each result must match
+`input_size`. With no filters, the decoded size is `stored_size`; otherwise, it is the first filter's
+`input_size`.
+
+The supported blob filters are:
+
+```rust
+#[repr(u8)]
+enum BlobFilterId {
+    /// Zstandard (zstd) compression.
+    ///
+    /// See https://github.com/facebook/zstd for details.
+    ZSTD = 1,
+}
+```
+
+The properties schema is selected by `method`. Unsupported filters are invalid. `ZSTD` properties must
+be empty.
+
+### Blob Table
+
+For a `BlobPool` section, `SectionInfoObject.type_info` is a one-level page directory:
+
+```cddl
+BlobPoolTypeInfoObject = {
+    0: uint,                           ; blob_count
+    1: 8..12,                          ; page_entry_shift
+    2: [* BlobTablePageInfoObject],    ; table_pages
+    * uint => any,
+}
+
+BlobTablePageInfoObject = [
+    offset: uint,
+    encoding: BlobEncodingObject,
+    ? checksum: ChecksumObject,
+]
+```
+
+The decoded table pages use a binary layout:
+
+```rust
+struct BlobTablePage {
+    /// Entries in blob-index order.
+    entries: [BlobTableEntry; page_entry_count],
+}
+
+#[repr(TaggedPayload<u8>)]
+enum BlobTableEntry {
+    /// An independently stored blob.
+    Stored {
+        entry_type: u8, // 0
+        payload_bytes: vuint,
+
+        /// The offset of the encoded bytes in `BlobPoolSection.bytes`.
+        offset: vuint,
+
+        encoding: BlobEncoding,
+    },
+
+    /// A blob assembled from decoded ranges of stored blobs.
+    Extents {
+        entry_type: u8, // 1
+        payload_bytes: vuint,
+
+        extents: Vec<BlobExtent>,
+    },
+}
+
+struct BlobExtent {
+    stored_blob_index: vuint,
+    decoded_offset: vuint,
+    decoded_length: vuint,
+}
+```
+
+`BlobPoolSection.bytes` has length `SectionInfoObject.length - 8`. `blob_count` and all offsets and
+sizes must fit in `u64`. `blob_count` includes every table entry. `entries_per_page` is
+`1 << page_entry_shift`. An empty pool has no pages. Otherwise, the page count is
+`1 + ((blob_count - 1) >> page_entry_shift)`. Every page except the last contains
+`entries_per_page` entries; the final page contains the remaining entries. `table_pages` must contain
+that many descriptors. Each page's stored and decoded byte lengths are determined by its encoding.
+
+For `blob_index`, the page index is `blob_index >> page_entry_shift` and the index within that page is
+`blob_index & (entries_per_page - 1)`. The logical blob table is the concatenation of the pages in
+directory order.
+
+Each page descriptor locates an encoded page relative to `BlobPoolSection.bytes`. Decoding it must
+produce exactly one `BlobTablePage` and consume every decoded byte. When present, the checksum covers
+the decoded page bytes and must be verified. Each page decodes independently using self-contained
+filters. `BlobRef` addresses logical blobs. Locating a stored blob requires only its selected table
+page; resolving an extents blob may also require the pages containing its stored sources.
+
+Each `BlobTableEntry` payload must consume exactly `payload_bytes`. Unknown entry types may be skipped
+but cannot be resolved. A reader may use `payload_bytes` to skip preceding entries when locating one
+entry within a decoded page. An `Extents` entry must contain at least one extent.
+
+For a stored entry, `offset` locates its encoded bytes relative to `BlobPoolSection.bytes`. All page
+and stored-blob ranges must fit in `bytes` and must not overlap. Writers may place them in any order.
+
+An extents entry concatenates its decoded ranges in array order. Each `stored_blob_index` must select
+a stored entry in the same pool. Each range must be nonempty and fit in that entry's decoded bytes.
+Extents cannot refer to other extents entries.
+
+### Blob References
+
+`BlobRef` identifies one complete logical blob. Binary layouts use:
+
+```rust
+struct BlobRef {
+    /// The ID of a `BlobPool` section.
+    blob_pool: vuint, // SectionRef
+
+    /// The zero-based index of the blob in the referenced pool's `BlobTable`.
+    blob_index: vuint,
+}
+```
+
+CBOR layouts use:
+
+```cddl
+BlobRefObject = [
+    blob_pool: SectionRef,           ; must identify a BlobPool section
+    blob_index: uint                 ; must select an existing blob
+]
+```
+
+A `BlobRef` and a `BlobRefObject` identify the same blob. `blob_pool` must be a `SectionRef` whose
+section is a `BlobPool`. `blob_index` must select an existing entry in that pool's `BlobTable`.
+Resolving a stored entry decodes its stored bytes. Resolving an extents entry concatenates its ranges.
+The result is uninterpreted bytes whose meaning is assigned by the containing structure.
+
+Whether a blob is stored directly or assembled from extents is writer policy. Readers must support
+both forms. Writers may store frequently accessed structural blobs directly for better locality.
+
+## Content and Transforms
+
+`Content<T>` stores an encoded value inline or in one blob. Reversing its transforms produces a
+logical value of type `T`:
+
+```rust
+struct Content<T> {
+    /// The bytes produced after applying all content transforms.
+    source: ContentSource,
+
+    /// The transforms in the order in which the encoder applied them.
+    transforms: Vec<ContentTransform>,
+}
+```
+
+`ContentSource` locates the transformed bytes:
+
+```rust
+#[repr(u8)]
+enum ContentSource {
+    /// Stores the complete transformed byte sequence inline.
+    Inline {
+        source_type: u8, // 0
+        bytes: Vec<u8>,
+    },
+
+    /// Uses the resolved bytes of one blob.
+    Blob {
+        source_type: u8, // 1
+        blob: BlobRef,
+    },
+}
+```
+
+`Inline` supplies `bytes`, while `Blob` supplies one complete logical blob. Empty content uses an
+empty `Inline` value.
+
+Content transforms are described by the following structures:
+
+```rust
+struct ContentTransform {
+    /// The number of bytes supplied to this transform by the encoder.
+    input_size: vuint,
+
+    /// Identifies the content transform.
+    method: ContentTransformId,
+
+    /// A byte-sized deterministic CBOR map required to reverse the transform.
+    properties: Sized<CborMap>, // ContentTransformPropertiesObject
+}
+
+#[repr(u8)]
+enum ContentTransformId {
+    /// A Java class-file transform using a shared `StringPool`.
+    CLASSFILE = 1,
+}
+```
+
+```cddl
+ContentTransformPropertiesObject = { * uint => any }
+```
+
+The schema of `properties.value` is selected by `method`.
+
+Transforms are stored in encoding order and reversed from last to first after resolving the source.
+Each result must match `input_size`; the final value must be a valid encoding of `T`. An empty
+transform array means the source already encodes `T`. Unsupported methods are invalid.
+
+`CLASSFILE` is valid only for regular-file `Content<[u8]>`. The transform array of
+`ResourceDirectory.entries` must therefore be empty.
+
+### Java Class File Transform
+
+The class-file transform moves selected constant-pool strings into a shared `StringPool`.
+
+```cddl
+ClassFileTransformPropertiesObject = {
+    ? 0: BlobRefObject,                         ; string_pool
+    * uint => any,
+}
+```
+
+`string_pool` selects the pool when present; otherwise, the containing `ResourceRoot.string_pool`
+is used. An invalid explicit pool is an error, with no fallback. Restoring a class file converts
+selected strings to Modified UTF-8.
+
+It modifies the class file as follows:
+
+1. The magic number of the transformed class file is rewritten to `0x70CAFECA`
+   (`0xCA 0xFE 0xCA 0x70` in file order) to distinguish it from an unmodified class file.
+2. The transformed class file may contain new constant types that reference entries in the shared
+   `StringPool` by index, replacing the original `CONSTANT_Utf8` entries.
+
+    New constant pool entries include:
+
+    1. `CONSTANT_External_String`:
+
+        ```rust
+        struct CONSTANT_External_Utf8 {
+            tag: u8, // 0xFF
+
+            /// The index of the string in the selected string pool.
+            string_pool_index: StringPoolIndex,
+        }
+        ```
+
+    2. `CONSTANT_External_String_Class`:
+
+        ```rust
+        struct CONSTANT_External_String {
+            tag: u8, // 0xFE
+
+            /// The index of the package name in the selected string pool.
+            package_name_index: StringPoolIndex,
+
+            /// The index of the class name in the selected string pool.
+            class_name_index: StringPoolIndex,
+        }
+        ```
+
+The input must be a valid Java class file. External string indices select entries in the pool
+selected by the transform's properties or the root default.
+
+## Resource Roots
+
+A `ResourceRoot` is a resource tree built from ordered layers. Using the consumer's
+[evaluation context](#conditionobject), matching layers are merged from first to last; later values
+override earlier ones at the same path. No application section or Java runtime is required.
+
+A blob reference naming a resource root must resolve to exactly one `ResourceRoot` and consume every
+resolved byte. Consumers may share a root; different contexts may produce different merged trees.
+
+```rust
+struct ResourceRoot {
+    /// The path string pool and default pool for `CLASSFILE` transforms.
+    string_pool: BlobRef,
+
+    /// One deterministic CBOR `ResourceRootMetadataObject`.
+    metadata: Sized<CborMap>, // ResourceRootMetadataObject
+
+    /// Layers in application order.
+    layers: Vec<ResourceLayer>,
+}
+
+struct ResourceLayer {
+    /// One deterministic CBOR `ConditionObject`. An empty map is unconditional.
+    condition: Sized<CborMap>, // ConditionObject
+
+    /// The directories in this layer, in path order.
+    directories: Vec<ResourceDirectory>,
+}
+```
+
+```cddl
+ResourceRootMetadataObject = { * NonemptyText => any }
+```
+
+The metadata map may be empty. Readers must resolve `string_pool` before using references to it.
+Multiple resource roots may name the same string-pool blob.
+
+### String Pools
+
+A string-pool blob must resolve to exactly one `StringPoolData` and consume every resolved byte.
+
+```rust
+/// A zero-based index into `StringPoolData.strings`.
+type StringPoolIndex = vuint;
+
+struct StringPoolData {
+    /// Distinct interned strings in pool-index order.
+    strings: Vec<String>,
+}
+```
+
+The pool contains unique UTF-8 strings, with the empty string at index `0`.
+A `StringPoolIndex` must select an existing element.
+
+### `ResourceDirectory`
+
+```rust
+struct ResourceDirectory {
+    /// The directory path relative to the resource root, as an index into the root's string pool.
+    path: StringPoolIndex,
+
+    /// One deterministic CBOR resource-metadata map.
+    metadata: Sized<CborMap>, // ResourceMetadataObject
+
+    /// The number of direct entries in this directory.
+    entries_count: vuint,
+
+    /// The direct entries in name order.
+    entries: Content<[DirectoryEntry; entries_count]>,
+}
+```
+
+`path` index `0` identifies the root directory. Other resolved paths are UTF-8, `/`-separated, and
+must not start or end with `/` or contain empty, `.` or `..` components.
+Directory paths are unique within a layer and sorted by the UTF-8 bytes of the resolved strings.
+Parent directories may be implicit. An explicit record with no entries preserves an empty directory
+or its metadata.
+
+When a later matching layer contains the same directory path, its metadata replaces the earlier
+metadata and its entries are merged into the directory. A later file or symbolic link with the same
+name replaces the earlier one. A tombstone removes an earlier file or symbolic link with that name.
+A tombstone for a name that is not present is ignored.
+
+`entries.transforms` must be empty.
+
+### `DirectoryEntry`
+
+```rust
+enum DirectoryEntry {
+    /// Represents a regular file.
+    File {
+        /// The resource type tag for this variant.
+        ///
+        /// Always `0x00534552` ("RES\0").
+        resource_type: u32, // 0x00534552 ("RES\0")
+
+        /// The file name within the directory.
+        name: NonemptyStringValue,
+
+        /// The content of this file and its logical transforms.
+        content: Content<[u8]>,
+
+        /// One deterministic CBOR resource-metadata map.
+        metadata: Sized<CborMap>, // ResourceMetadataObject
+    },
+
+    /// Represents a symbolic link.
+    SymbolicLink {
+        /// The resource type tag for this variant.
+        ///
+        /// Always `0x4c4d5953` ("SYML").
+        resource_type: u32, // 0x4c4d5953 ("SYML")
+
+        /// The symbolic-link name within the directory.
+        name: NonemptyStringValue,
+
+        /// The relative target path.
+        target: NonemptyStringValue,
+
+        /// One deterministic CBOR resource-metadata map.
+        metadata: Sized<CborMap>, // ResourceMetadataObject
+    },
+
+    /// Removes an earlier file or symbolic link with this name.
+    Tombstone {
+        /// The resource type tag for this variant.
+        ///
+        /// Always `0x424d4f54` ("TOMB").
+        resource_type: u32, // 0x424d4f54 ("TOMB")
+
+        /// The name to remove within the directory.
+        name: NonemptyStringValue,
+    },
+}
+```
+
+Entry names and symbolic-link targets use `NonemptyStringValue`, which starts with a `vuint`:
+
+| Value | Encoding |
+| --- | --- |
+| `0` | Followed by an inline `String`, which must be nonempty. |
+| `1..` | The index of an existing entry in the root's string pool; no additional bytes. |
+
+For example, `05` references pool entry `5`; `00 03 66 6F 6F` encodes inline `"foo"`.
+Both forms may be mixed, and comparisons use the resolved UTF-8 bytes.
+
+Entry names are nonempty UTF-8 strings without `/` and must not be `.` or `..`. They are unique within
+their directory, including tombstones, and sorted by the UTF-8 bytes of the resolved strings. A full
+resource path is the resolved entry name for the root directory, or `directory_path + "/" +
+entry_name` otherwise, using the resolved strings. Directory records and file or symbolic-link
+entries must not produce conflicting paths.
+
+Symbolic-link targets use normalized relative `/`-separated paths and follow the nonempty path rules
+used for non-root directory paths.
+
+### Resource Metadata
+
+```cddl
+ResourceMetadataObject = {
+    ? 0: ChecksumObject,             ; checksum
+    ? 1: tstr,                       ; comment
+    ? 2: UnixNanosecondsObject,      ; creation_time
+    ? 3: UnixNanosecondsObject,      ; modification_time
+    ? 4: UnixNanosecondsObject,      ; access_time
+    ? 5: 0..65535,                   ; posix_permissions
+    * uint => any,
+}
+
+UnixNanosecondsObject =
+    int
+  / #6.2(bstr .size (9..16))
+  / #6.3(bstr .size (9..16))
+```
+
+An empty map represents no metadata.
+
+`checksum` is valid only for regular files and covers the logical content after transforms are
+reversed. `posix_permissions` contains the POSIX permission bits.
+
+Time values are signed `i128` POSIX timestamps in nanoseconds. Values in CBOR's basic integer range use
+major type `0` or `1`. Larger values use tag `2` or `3` with a minimal 9-to-16-byte big-endian
+magnitude; tag `3` encodes `-1 - value`.
+
+## Conditions
+
+Launch configurations and resource layers use conditions to select data for a supplied environment.
+
+### `ConditionObject`
+
+```cddl
+NameSelector = tstr / [+ tstr]
+
+ConditionObject = {
+    ? 1: NameSelector,                          ; os
+    ? 2: NameSelector,                          ; arch
+    ? 4: NameSelector,                          ; invocation
+    ? 5: RuntimeConditionObject,                ; runtime
+    * uint => any,
+}
+```
+
+Keys `0` and `3` are reserved and must not occur. All present constraints must match; omitted keys
+impose no constraint. An empty map is unconditional.
+
+The consumer supplies the host OS and CPU architecture, an optional invocation channel, and an
+optional runtime with its type and properties. Conditions do not select a runtime.
+
+`os` uses `linux`, `windows`, or `macos`; `arch` uses `x86`, `x86-64`, or `aarch64`.
+Other names match by exact equality.
+
+`invocation` uses `run` for `janex run`, `open` for file-association or double-click launch, and
+`command` for an installed command. It identifies the launch channel, not the windowing mode.
+Unknown tokens or a missing context channel do not match.
+
+A `NameSelector` matches one name or any name in its array. Comparisons are case-sensitive.
+
+### `RuntimeConditionObject`
+
+```cddl
+RuntimeConditionObject = {
+    0: NonemptyText,                            ; runtime_type
+    1: { * uint => any },                       ; requirements
+    * uint => any,
+}
+```
+
+`runtime_type` selects the schema and matching rules of `requirements`. Names are case-sensitive;
+`janex.` is reserved, and third-party types use reverse-domain names.
+
+A missing context runtime or a different type does not match. Otherwise, all requirements must
+match. The required `requirements` map may be empty to accept any runtime of that type.
+
+Unknown types may be preserved as opaque data and need not be understood to reject a type mismatch.
+If the type matches but the requirements cannot be interpreted, report an unsupported condition.
+
+Readers must validate condition structure and requirements for supported types, even in unmatched
+conditions. Invalid conditions invalidate the containing application descriptor or resource root.
+
+See [Java Runtime Requirements](#janexjava-runtime-requirements) for `janex.java`.
+
+## Applications
 
 A file may contain any number of `Application` sections. Each section is one independently launchable
 target. Multiple targets may share blobs. The section body after the magic number is one deterministic
@@ -579,7 +1000,7 @@ struct ApplicationSection {
 
 `application` occupies the remainder of the section.
 
-#### `ApplicationObject`
+### `ApplicationObject`
 
 ```cddl
 ApplicationObject = {
@@ -618,7 +1039,7 @@ desktop title is `command` if present, otherwise `application_id`.
 
 Unsupported application types may be displayed and preserved but cannot be launched.
 
-#### `ApplicationIntegrationObject`
+### `ApplicationIntegrationObject`
 
 ```cddl
 ApplicationIntegrationObject = {
@@ -642,7 +1063,7 @@ The launcher's visible title is the localized `name` as specified above, not `co
 `icons` supplies image blobs for those launchers. The Host selects a suitable image for the
 platform. An empty array should be omitted.
 
-#### `ApplicationIconObject`
+### `ApplicationIconObject`
 
 ```cddl
 ApplicationIconObject = {
@@ -656,7 +1077,25 @@ ApplicationIconObject = {
 `image/vnd.microsoft.icon`, or `image/icns`. Unknown types may be ignored. `image` names a blob whose
 resolved bytes are the image.
 
-#### `janex.java` Application Descriptor
+## Java Applications
+
+### `janex.java` Runtime Requirements
+
+For `runtime_type` `janex.java`, `requirements` is:
+
+```cddl
+JavaRuntimeRequirementsObject = {
+    ? 0: tstr,                                  ; version
+    ? 1: tstr,                                  ; vendor
+    * uint => any,
+}
+```
+
+`version` is a `jep322` [VERS](#version-ranges), matched against the runtime's Java version with
+Java 8 alias expansion. An invalid VERS invalidates the condition. `vendor` matches the runtime's
+vendor string exactly, without normalization.
+
+### `janex.java` Application Descriptor
 
 For `application_type` `janex.java`, `descriptor` is:
 
@@ -765,7 +1204,7 @@ JavaAgentObject = {
 
 An empty `option` means that no agent option is supplied.
 
-#### Multi-Release JAR Mapping
+### Multi-Release JAR Mapping
 
 When importing a Multi-Release JAR, the base tree becomes an unconditional layer. Each
 `META-INF/versions/N/` tree becomes a layer constrained only by `janex.java` version
@@ -780,494 +1219,65 @@ For Java 21, the condition in CBOR diagnostic notation is:
 A resource root can be exported back to a Multi-Release JAR when its first layer is unconditional
 and every remaining layer has only one of these Java version constraints in increasing `N`.
 
-### Resource Roots
-
-A `ResourceRoot` is a resource tree built from ordered layers. Using the consumer's
-[evaluation context](#conditionobject), matching layers are merged from first to last; later values
-override earlier ones at the same path. No application section or Java runtime is required.
-
-A blob reference naming a resource root must resolve to exactly one `ResourceRoot` and consume every
-resolved byte. Consumers may share a root; different contexts may produce different merged trees.
-
-```rust
-struct ResourceRoot {
-    /// The path string pool and default pool for `CLASSFILE` transforms.
-    string_pool: BlobRef,
-
-    /// One deterministic CBOR `ResourceRootMetadataObject`.
-    metadata: Sized<CborMap>, // ResourceRootMetadataObject
-
-    /// Layers in application order.
-    layers: Vec<ResourceLayer>,
-}
-
-struct ResourceLayer {
-    /// One deterministic CBOR `ConditionObject`. An empty map is unconditional.
-    condition: Sized<CborMap>, // ConditionObject
-
-    /// The directories in this layer, in path order.
-    directories: Vec<ResourceDirectory>,
-}
-```
-
-```cddl
-ResourceRootMetadataObject = { * NonemptyText => any }
-```
-
-The metadata map may be empty. Readers must resolve `string_pool` before using references to it.
-Multiple resource roots may name the same string-pool blob.
-
-##### String Pools
-
-A string-pool blob must resolve to exactly one `StringPoolData` and consume every resolved byte.
-
-```rust
-/// A zero-based index into `StringPoolData.strings`.
-type StringPoolIndex = vuint;
-
-struct StringPoolData {
-    /// Distinct interned strings in pool-index order.
-    strings: Vec<String>,
-}
-```
-
-The pool contains unique UTF-8 strings, with the empty string at index `0`.
-A `StringPoolIndex` must select an existing element.
-
-##### `ResourceDirectory`
-
-```rust
-struct ResourceDirectory {
-    /// The directory path relative to the resource root, as an index into the root's string pool.
-    path: StringPoolIndex,
-
-    /// One deterministic CBOR resource-metadata map.
-    metadata: Sized<CborMap>, // ResourceMetadataObject
-
-    /// The number of direct entries in this directory.
-    entries_count: vuint,
-
-    /// The direct entries in name order.
-    entries: Content<[DirectoryEntry; entries_count]>,
-}
-```
-
-`path` index `0` identifies the root directory. Other resolved paths are UTF-8, `/`-separated, and
-must not start or end with `/` or contain empty, `.` or `..` components.
-Directory paths are unique within a layer and sorted by the UTF-8 bytes of the resolved strings.
-Parent directories may be implicit. An explicit record with no entries preserves an empty directory
-or its metadata.
-
-When a later matching layer contains the same directory path, its metadata replaces the earlier
-metadata and its entries are merged into the directory. A later file or symbolic link with the same
-name replaces the earlier one. A tombstone removes an earlier file or symbolic link with that name.
-A tombstone for a name that is not present is ignored.
-
-`entries.transforms` must be empty.
-
-##### `DirectoryEntry`
-
-```rust
-enum DirectoryEntry {
-    /// Represents a regular file.
-    File {
-        /// The resource type tag for this variant.
-        ///
-        /// Always `0x00534552` ("RES\0").
-        resource_type: u32, // 0x00534552 ("RES\0")
-
-        /// The file name within the directory.
-        name: NonemptyStringValue,
-
-        /// The content of this file and its logical transforms.
-        content: Content<[u8]>,
-
-        /// One deterministic CBOR resource-metadata map.
-        metadata: Sized<CborMap>, // ResourceMetadataObject
-    },
-
-    /// Represents a symbolic link.
-    SymbolicLink {
-        /// The resource type tag for this variant.
-        ///
-        /// Always `0x4c4d5953` ("SYML").
-        resource_type: u32, // 0x4c4d5953 ("SYML")
-
-        /// The symbolic-link name within the directory.
-        name: NonemptyStringValue,
-
-        /// The relative target path.
-        target: NonemptyStringValue,
-
-        /// One deterministic CBOR resource-metadata map.
-        metadata: Sized<CborMap>, // ResourceMetadataObject
-    },
-
-    /// Removes an earlier file or symbolic link with this name.
-    Tombstone {
-        /// The resource type tag for this variant.
-        ///
-        /// Always `0x424d4f54` ("TOMB").
-        resource_type: u32, // 0x424d4f54 ("TOMB")
-
-        /// The name to remove within the directory.
-        name: NonemptyStringValue,
-    },
-}
-```
-
-Entry names and symbolic-link targets use `NonemptyStringValue`, which starts with a `vuint`:
-
-| Value | Encoding |
-| --- | --- |
-| `0` | Followed by an inline `String`, which must be nonempty. |
-| `1..` | The index of an existing entry in the root's string pool; no additional bytes. |
-
-For example, `05` references pool entry `5`; `00 03 66 6F 6F` encodes inline `"foo"`.
-Both forms may be mixed, and comparisons use the resolved UTF-8 bytes.
-
-Entry names are nonempty UTF-8 strings without `/` and must not be `.` or `..`. They are unique within
-their directory, including tombstones, and sorted by the UTF-8 bytes of the resolved strings. A full
-resource path is the resolved entry name for the root directory, or `directory_path + "/" +
-entry_name` otherwise, using the resolved strings. Directory records and file or symbolic-link
-entries must not produce conflicting paths.
-
-Symbolic-link targets use normalized relative `/`-separated paths and follow the nonempty path rules
-used for non-root directory paths.
-
-##### Resource Metadata
-
-```cddl
-ResourceMetadataObject = {
-    ? 0: ChecksumObject,             ; checksum
-    ? 1: tstr,                       ; comment
-    ? 2: UnixNanosecondsObject,      ; creation_time
-    ? 3: UnixNanosecondsObject,      ; modification_time
-    ? 4: UnixNanosecondsObject,      ; access_time
-    ? 5: 0..65535,                   ; posix_permissions
-    * uint => any,
-}
-
-UnixNanosecondsObject =
-    int
-  / #6.2(bstr .size (9..16))
-  / #6.3(bstr .size (9..16))
-```
-
-An empty map represents no metadata.
-
-`checksum` is valid only for regular files and covers the logical content after transforms are
-reversed. `posix_permissions` contains the POSIX permission bits.
-
-Time values are signed `i128` POSIX timestamps in nanoseconds. Values in CBOR's basic integer range use
-major type `0` or `1`. Larger values use tag `2` or `3` with a minimal 9-to-16-byte big-endian
-magnitude; tag `3` encodes `-1 - value`.
-
-### Content
-
-`Content<T>` stores an encoded value inline or in one blob. Reversing its transforms produces a
-logical value of type `T`:
-
-```rust
-struct Content<T> {
-    /// The bytes produced after applying all content transforms.
-    source: ContentSource,
-
-    /// The transforms in the order in which the encoder applied them.
-    transforms: Vec<ContentTransform>,
-}
-```
-
-`ContentSource` locates the transformed bytes:
-
-```rust
-#[repr(u8)]
-enum ContentSource {
-    /// Stores the complete transformed byte sequence inline.
-    Inline {
-        source_type: u8, // 0
-        bytes: Vec<u8>,
-    },
-
-    /// Uses the resolved bytes of one blob.
-    Blob {
-        source_type: u8, // 1
-        blob: BlobRef,
-    },
-}
-```
-
-`Inline` supplies `bytes`, while `Blob` supplies one complete logical blob. Empty content uses an
-empty `Inline` value.
-
-Content transforms are described by the following structures:
-
-```rust
-struct ContentTransform {
-    /// The number of bytes supplied to this transform by the encoder.
-    input_size: vuint,
-
-    /// Identifies the content transform.
-    method: ContentTransformId,
-
-    /// A byte-sized deterministic CBOR map required to reverse the transform.
-    properties: Sized<CborMap>, // ContentTransformPropertiesObject
-}
-
-#[repr(u8)]
-enum ContentTransformId {
-    /// A Java class-file transform using a shared `StringPool`.
-    CLASSFILE = 1,
-}
-```
-
-```cddl
-ContentTransformPropertiesObject = { * uint => any }
-```
-
-The schema of `properties.value` is selected by `method`.
-
-Transforms are stored in encoding order and reversed from last to first after resolving the source.
-Each result must match `input_size`; the final value must be a valid encoding of `T`. An empty
-transform array means the source already encodes `T`. Unsupported methods are invalid.
-
-`CLASSFILE` is valid only for regular-file `Content<[u8]>`. The transform array of
-`ResourceDirectory.entries` must therefore be empty.
-
-#### Java Class File Transform
-
-The class-file transform moves selected constant-pool strings into a shared `StringPool`.
-
-```cddl
-ClassFileTransformPropertiesObject = {
-    ? 0: BlobRefObject,                         ; string_pool
-    * uint => any,
-}
-```
-
-`string_pool` selects the pool when present; otherwise, the containing `ResourceRoot.string_pool`
-is used. An invalid explicit pool is an error, with no fallback. Restoring a class file converts
-selected strings to Modified UTF-8.
-
-It modifies the class file as follows:
-
-1. The magic number of the transformed class file is rewritten to `0x70CAFECA`
-   (`0xCA 0xFE 0xCA 0x70` in file order) to distinguish it from an unmodified class file.
-2. The transformed class file may contain new constant types that reference entries in the shared
-   `StringPool` by index, replacing the original `CONSTANT_Utf8` entries.
-
-    New constant pool entries include:
-
-    1. `CONSTANT_External_String`:
-
-        ```rust
-        struct CONSTANT_External_Utf8 {
-            tag: u8, // 0xFF
-
-            /// The index of the string in the selected string pool.
-            string_pool_index: StringPoolIndex,
-        }
-        ```
-
-    2. `CONSTANT_External_String_Class`:
-
-        ```rust
-        struct CONSTANT_External_String {
-            tag: u8, // 0xFE
-
-            /// The index of the package name in the selected string pool.
-            package_name_index: StringPoolIndex,
-
-            /// The index of the class name in the selected string pool.
-            class_name_index: StringPoolIndex,
-        }
-        ```
-
-The input must be a valid Java class file. External string indices select entries in the pool
-selected by the transform's properties or the root default.
-
-### `BlobPool` Section
-
-A `BlobPool` stores logical byte blobs. A blob is either independently stored or assembled from
-decoded ranges of independently stored blobs. Containing structures assign their logical types. A
-file may contain any number of pools.
-
-```rust
-struct BlobPoolSection {
-    magic_number: u64, // 0x4c4f_4f50_424f_4c42 ("BLOBPOOL")
-
-    /// Stored blob bytes and blob-table pages.
-    bytes: [u8; ...],
-}
-```
-
-#### Blob Encoding
-
-Stored blobs and blob-table pages use the same encoding description:
-
-```rust
-struct BlobEncoding {
-    /// The number of encoded bytes.
-    stored_size: vuint,
-
-    /// Filters in encoding order.
-    filters: Vec<BlobFilter>,
-}
-
-struct BlobFilter {
-    /// The number of bytes supplied to this filter by the encoder.
-    input_size: vuint,
-
-    /// The filter method.
-    method: BlobFilterId,
-
-    /// Method-specific properties.
-    properties: Sized<CborMap>, // BlobFilterPropertiesObject
-}
-```
-
-CBOR layouts carry the binary `BlobEncoding` in a byte string:
-
-```cddl
-BlobEncodingObject = bstr .size (1..)
-BlobFilterPropertiesObject = { * uint => any }
-```
-
-`BlobEncodingObject` must contain exactly one `BlobEncoding`.
-
-Filters are stored in encoding order and reversed from last to first. Each result must match
-`input_size`. With no filters, the decoded size is `stored_size`; otherwise, it is the first filter's
-`input_size`.
-
-The supported blob filters are:
-
-```rust
-#[repr(u8)]
-enum BlobFilterId {
-    /// Zstandard (zstd) compression.
-    ///
-    /// See https://github.com/facebook/zstd for details.
-    ZSTD = 1,
-}
-```
-
-The properties schema is selected by `method`. Unsupported filters are invalid. `ZSTD` properties must
-be empty.
-
-#### Blob Table
-
-For a `BlobPool` section, `SectionInfoObject.type_info` is a one-level page directory:
-
-```cddl
-BlobPoolTypeInfoObject = {
-    0: uint,                           ; blob_count
-    1: 8..12,                          ; page_entry_shift
-    2: [* BlobTablePageInfoObject],    ; table_pages
-    * uint => any,
-}
-
-BlobTablePageInfoObject = [
-    offset: uint,
-    encoding: BlobEncodingObject,
-    ? checksum: ChecksumObject,
-]
-```
-
-The decoded table pages use a binary layout:
-
-```rust
-struct BlobTablePage {
-    /// Entries in blob-index order.
-    entries: [BlobTableEntry; page_entry_count],
-}
-
-#[repr(TaggedPayload<u8>)]
-enum BlobTableEntry {
-    /// An independently stored blob.
-    Stored {
-        entry_type: u8, // 0
-        payload_bytes: vuint,
-
-        /// The offset of the encoded bytes in `BlobPoolSection.bytes`.
-        offset: vuint,
-
-        encoding: BlobEncoding,
-    },
-
-    /// A blob assembled from decoded ranges of stored blobs.
-    Extents {
-        entry_type: u8, // 1
-        payload_bytes: vuint,
-
-        extents: Vec<BlobExtent>,
-    },
-}
-
-struct BlobExtent {
-    stored_blob_index: vuint,
-    decoded_offset: vuint,
-    decoded_length: vuint,
-}
-```
-
-`BlobPoolSection.bytes` has length `SectionInfoObject.length - 8`. `blob_count` and all offsets and
-sizes must fit in `u64`. `blob_count` includes every table entry. `entries_per_page` is
-`1 << page_entry_shift`. An empty pool has no pages. Otherwise, the page count is
-`1 + ((blob_count - 1) >> page_entry_shift)`. Every page except the last contains
-`entries_per_page` entries; the final page contains the remaining entries. `table_pages` must contain
-that many descriptors. Each page's stored and decoded byte lengths are determined by its encoding.
-
-For `blob_index`, the page index is `blob_index >> page_entry_shift` and the index within that page is
-`blob_index & (entries_per_page - 1)`. The logical blob table is the concatenation of the pages in
-directory order.
-
-Each page descriptor locates an encoded page relative to `BlobPoolSection.bytes`. Decoding it must
-produce exactly one `BlobTablePage` and consume every decoded byte. When present, the checksum covers
-the decoded page bytes and must be verified. Each page decodes independently using self-contained
-filters. `BlobRef` addresses logical blobs. Locating a stored blob requires only its selected table
-page; resolving an extents blob may also require the pages containing its stored sources.
-
-Each `BlobTableEntry` payload must consume exactly `payload_bytes`. Unknown entry types may be skipped
-but cannot be resolved. A reader may use `payload_bytes` to skip preceding entries when locating one
-entry within a decoded page. An `Extents` entry must contain at least one extent.
-
-For a stored entry, `offset` locates its encoded bytes relative to `BlobPoolSection.bytes`. All page
-and stored-blob ranges must fit in `bytes` and must not overlap. Writers may place them in any order.
-
-An extents entry concatenates its decoded ranges in array order. Each `stored_blob_index` must select
-a stored entry in the same pool. Each range must be nonempty and fit in that entry's decoded bytes.
-Extents cannot refer to other extents entries.
-
-#### Blob References
-
-`BlobRef` identifies one complete logical blob. Binary layouts use:
-
-```rust
-struct BlobRef {
-    /// The ID of a `BlobPool` section.
-    blob_pool: vuint, // SectionRef
-
-    /// The zero-based index of the blob in the referenced pool's `BlobTable`.
-    blob_index: vuint,
-}
-```
-
-CBOR layouts use:
-
-```cddl
-BlobRefObject = [
-    blob_pool: SectionRef,           ; must identify a BlobPool section
-    blob_index: uint                 ; must select an existing blob
-]
-```
-
-A `BlobRef` and a `BlobRefObject` identify the same blob. `blob_pool` must be a `SectionRef` whose
-section is a `BlobPool`. `blob_index` must select an existing entry in that pool's `BlobTable`.
-Resolving a stored entry decodes its stored bytes. Resolving an extents entry concatenates its ranges.
-The result is uninterpreted bytes whose meaning is assigned by the containing structure.
-
-Whether a blob is stored directly or assembled from extents is writer policy. Readers must support
-both forms. Writers may store frequently accessed structural blobs directly for better locality.
+## Verification
+
+### Verification Policy
+
+Authentication requires OpenPGP or CMS and successful validation under the declared type. These
+variants use caller-provided signer, trust, algorithm, time, and revocation policies.
+
+OpenPGP and CMS implementations must support SHA-256 for content digests. Janex signatures must not
+use MD5, SHA-1, or RIPEMD-160. Other algorithms are subject to caller policy.
+
+### OpenPGP Profile
+
+The OpenPGP payload uses the binary packet format defined by
+[RFC 9580](https://www.rfc-editor.org/rfc/rfc9580.html). It must contain exactly one Signature packet
+and no Marker, Padding, Literal Data, One-Pass Signature, compressed, encrypted, or ASCII-armored
+representation. The Signature packet must:
+
+- use packet version 4 or 6;
+- use signature type `0x00` (Binary Signature of a Document), with `verification_input` as the exact
+  document bytes;
+- contain the Signature Creation Time subpacket in its hashed subpacket area;
+- contain exactly one Issuer Fingerprint subpacket in its hashed subpacket area, matching the key that
+  verifies the signature; and
+- satisfy the caller's algorithm, key-strength, key-usage, expiration, and revocation policies.
+
+Unhashed issuer information is advisory. Unsupported critical subpackets are invalid. Keys and trust
+data come from the caller or an external key store.
+
+### CMS Profile
+
+The CMS payload uses the syntax defined by
+[RFC 5652](https://www.rfc-editor.org/rfc/rfc5652.html), with the algorithm-protection updates in
+[RFC 8933](https://www.rfc-editor.org/rfc/rfc8933.html). It must be exactly one DER-encoded
+`ContentInfo` value satisfying all of the following requirements:
+
+- `ContentInfo.contentType` is `id-signedData` and its content is one `SignedData` value;
+- `SignedData.encapContentInfo.eContentType` is `id-data` and `eContent` is absent, making the
+  signature detached;
+- `signerInfos` is non-empty;
+- every `SignerInfo` considered by the caller's policy contains signed attributes;
+- those signed attributes contain exactly one `content-type` attribute whose value is `id-data`,
+  exactly one `message-digest` attribute equal to the digest of `verification_input`, and exactly one
+  `CMSAlgorithmProtection` attribute matching that `SignerInfo`'s digest and signature algorithms;
+  and
+- the same digest algorithm is used for the content digest and the signed attributes, as required by
+  RFC 8933.
+
+Each required signer must pass digest, signature, identity, and caller-policy validation. Caller policy
+establishes trust for embedded certificates and revocation data and selects the required signers. Only
+signed attributes contribute to primary signature validation.
+
+### Authenticated Content Scope
+
+Full-container authentication includes both `external_header` and `external_tail` and records a secure
+checksum for every section and every nonempty external region. Readers must verify all of them. Secure
+checksum algorithms are `SHA256`, `SHA512`, and `SM3`.
+
+The signature authenticates `verification_input`; the recorded secure checksums authenticate section
+and external-region bytes.
 
 ## Package URLs
 
