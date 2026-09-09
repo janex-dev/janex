@@ -184,6 +184,97 @@ ChecksumObject = bstr .size (1..)
 The byte string contains the exact encoding of one `ChecksumValue`: the first byte is the algorithm
 ID and the remaining bytes are `digest`.
 
+## Conditions
+
+Conditions select data for a consumer-supplied evaluation context. They do not discover or select a
+runtime. Application launch configurations and resource layers use the same condition model.
+
+### `ConditionObject`
+
+```cddl
+NameSelector = tstr / [+ tstr]
+
+ConditionObject = {
+    ? 1: NameSelector,                          ; os
+    ? 2: NameSelector,                          ; arch
+    ? 4: NameSelector,                          ; invocation
+    ? 5: RuntimeConditionObject,                ; runtime
+    * uint => any,
+}
+```
+
+Keys `0` and `3` are reserved and must not occur. An empty `ConditionObject` is unconditional.
+An omitted key imposes no constraint. Every present constraint must match.
+
+The evaluation context contains the host operating system and CPU architecture, an optional
+invocation channel, and an optional runtime. A runtime has a type and the properties defined for
+that type. The context is supplied by the consumer; it is not stored in the condition. The same
+condition may match one context and not another.
+
+`os` is matched against the host operating system. `arch` is matched against the host CPU. The
+normalized operating-system names are `linux`, `windows`, and `macos`. The normalized CPU names are
+`x86`, `x86-64`, and `aarch64`. Other names match only by exact equality.
+
+`invocation` is the channel that started a launch. The defined values are `run` for `janex run` of a
+Janex file, `open` for a file-association or double-click open, and `command` for an installed command
+of the application. It is not a windowing mode: a graphical application started with `janex run`
+still has invocation `run`. A consumer outside a launch may omit the invocation channel from its
+context. An `invocation` constraint does not match a context without that channel. An unknown
+`invocation` token does not match.
+
+A text `os`, `arch`, or `invocation` value matches that one name. An array matches if any element
+matches. Name comparisons are case-sensitive.
+
+### `RuntimeConditionObject`
+
+```cddl
+RuntimeConditionObject = {
+    0: NonemptyText,                            ; runtime_type
+    1: { * uint => any },                       ; requirements
+    * uint => any,
+}
+```
+
+`runtime_type` selects the schema and matching rules of `requirements`. This document defines
+`janex.java` and reserves the `janex.` prefix. Third-party runtime types use a reverse-domain name.
+Runtime type names are case-sensitive. Runtime types and application types are defined separately;
+an application type does not implicitly determine the meaning of a runtime condition.
+
+An omitted `ConditionObject.runtime` imposes no runtime constraint and does not require a runtime in
+the context. A present runtime condition does not match if the context has no runtime or its runtime
+type differs from `runtime_type`. For matching types, every requirement must match. An empty
+`requirements` map matches any runtime of that type and must still be present.
+
+A reader may retain requirements for an unknown runtime type as opaque data. A runtime type mismatch
+is a non-match even when the reader does not understand that type's requirements. When the context
+type matches, a reader unable to interpret the required semantics must report an unsupported
+condition; it must not treat the requirements as empty or the condition as a non-match.
+
+Condition structure must be valid regardless of whether the condition matches. Readers that support
+a runtime type must validate that type's requirements in every condition of an application
+descriptor or resource root they interpret, including conditions excluded by other constraints.
+Invalid requirements make the containing descriptor or resource root invalid. Unknown metadata keys
+follow [Metadata Evolution and Extensions](#metadata-evolution-and-extensions); they must not change
+the meaning of known conditions.
+
+### `janex.java` Runtime Requirements
+
+For `runtime_type` `janex.java`, `requirements` is:
+
+```cddl
+JavaRuntimeRequirementsObject = {
+    ? 0: tstr,                                  ; version
+    ? 1: tstr,                                  ; vendor
+    * uint => any,
+}
+```
+
+The context runtime supplies its Java version and vendor strings. `version` is a VERS whose type
+must be `jep322`, as defined in [Version Ranges](#version-ranges). It is matched against the runtime's
+version string, including Java 8 alias expansion. An invalid `version` VERS makes the condition
+invalid; it is not treated as a non-match. `vendor` is an exact, case-sensitive match against the
+runtime's vendor string. This document does not normalize vendor strings.
+
 ## Janex File Structure
 
 The Janex container has the following layout:
@@ -221,7 +312,7 @@ struct FileMetadata {
     /// The format major version. Must be `0`.
     major_version: u32,
 
-    /// The format minor version. Must be `1`.
+    /// The format minor version. Must be `2`.
     minor_version: u32,
 
     /// The deterministic CBOR file-metadata map.
@@ -240,6 +331,9 @@ struct FileMetadata {
     file_length: u64,
 }
 ```
+
+This document defines format version `0.2`. Readers must reject unsupported major or minor versions
+before interpreting the metadata or sections.
 
 `metadata.value` is a `FileMetadataObject`:
 
@@ -608,7 +702,7 @@ JavaLaunchConfigObject = {
 }
 ```
 
-An omitted `condition` is unconditional. `ConditionObject` is defined below.
+An omitted `condition` is unconditional. See [Conditions](#conditions) for the condition model.
 
 The launcher visits the root configuration and its `overlays` in depth-first pre-order. Each matching
 object contributes as follows:
@@ -635,42 +729,15 @@ At least one of `main_class` and `main_module` must be present. Without `main_mo
 launches `main_class` from the class path. With `main_module`, `main_class` selects a class in that
 module; when omitted, the module supplies its main class.
 
-#### `ConditionObject`
+#### Java Runtime Selection
 
-```cddl
-ConditionObject = {
-    ? 0: tstr,                                  ; java
-    ? 1: (tstr / [+ tstr]),                     ; os
-    ? 2: (tstr / [+ tstr]),                     ; arch
-    ? 3: tstr,                                  ; vendor
-    ? 4: (tstr / [+ tstr]),                     ; invocation
-    * uint => any,
-}
-```
+For each candidate Java runtime, the launcher supplies an evaluation context containing the current
+host, the current invocation channel, and a runtime of type `janex.java` with that candidate's Java
+version and vendor strings. The same context is used for the root configuration and all its
+`overlays`.
 
-An empty `ConditionObject` is unconditional.
-
-`java` is a VERS whose type is `jep322`, as defined in [Version Ranges](#version-ranges). It is
-matched against the candidate runtime's version string, including Java 8 alias expansion. `vendor` is
-an exact match against the candidate runtime's vendor string. This document does not normalize vendor
-strings. `os` is matched against the host operating system. `arch` is matched against the host CPU.
-The normalized operating-system names are `linux`, `windows`, and `macos`. The normalized CPU names
-are `x86`, `x86-64`, and `aarch64`. Other names match only by exact equality.
-
-`invocation` is the channel that started this launch. The defined values are `run` for
-`janex run` of a Janex file, `open` for a file-association or double-click open, and `command` for
-an installed command of this application. It is not a windowing mode: a graphical application started with
-`janex run` still has invocation `run`.
-
-A text `os`, `arch`, or `invocation` value matches that one name. An array matches if the candidate
-equals any element. An omitted key imposes no constraint.
-
-A condition matches a candidate Java runtime, the current host, and the current invocation when every
-present constraint matches. An invalid `java` VERS makes the application descriptor invalid; it is
-not treated as a non-match. An unknown `invocation` token does not match.
-
-The launcher considers each candidate runtime against the root condition. A candidate that does not
-match is discarded. For each remaining candidate, the launcher walks the root configuration and its
+The launcher considers each candidate against the root condition. A candidate that does not match
+is discarded. For each remaining candidate, the launcher walks the root configuration and its
 `overlays` in depth-first pre-order and applies each overlay whose condition matches. A candidate is
 discarded if any module requirement cannot be satisfied by the runtime, another module-path entry,
 or an allowed provider. The launcher then selects a remaining candidate using the implementation's
@@ -699,6 +766,12 @@ defined in [Resource Roots](#resource-roots). The blob is named by a `BlobRefObj
 URL. A `pkg:` URI must be a canonical Package URL. When present, `checksum` verifies the resolved
 content.
 
+After selecting a Java runtime, the launcher evaluates each local resource root with that runtime's
+evaluation context, including the same host and invocation channel used for launch configuration
+evaluation. The resulting merged tree is one classpath or module-path entry, not a list of entries
+for its individual layers. Resource-layer evaluation does not select another runtime. Multiple path
+entries may name the same resource-root blob.
+
 In a `JavaPathEntryObject`, a `janex` PURL must use the `java-module` requirement kind and is allowed
 only in `module_path`. Resolving it produces zero or more physical path entries at the same position.
 No path entry is needed when the selected runtime already provides the module. The selected runtime
@@ -717,17 +790,37 @@ JavaAgentObject = {
 
 An empty `option` means that no agent option is supplied.
 
+#### Multi-Release JAR Mapping
+
+When importing a Multi-Release JAR, the base tree becomes an unconditional resource layer. Each
+`META-INF/versions/N/` tree becomes a layer whose only constraint is a `janex.java` runtime condition
+with the version requirement `vers:jep322/>=N`. These layers must appear in increasing `N`, so a later
+matching layer overrides an earlier one.
+
+For example, the Java 21 layer uses the following `ConditionObject`, shown in CBOR diagnostic
+notation:
+
+```cbor-diag
+{5: {0: "janex.java", 1: {0: "vers:jep322/>=21"}}}
+```
+
+A resource root can be exported back to a Multi-Release JAR when its first layer is unconditional
+and every remaining layer has only one of these Java version constraints in increasing `N`.
+Additional operating-system, architecture, invocation, vendor, or other matching constraints are
+not representable by this mapping.
+
 ### Resource Roots
 
-A local `JavaPathEntryObject` names one blob with a `BlobRefObject`. Resolving that blob must produce
-exactly one `ResourceRoot` and consume every resolved byte. Multiple path entries may name the same
-resource-root blob.
-
 A `ResourceRoot` is one logical tree built from ordered layers. Each layer has a `ConditionObject`.
-After a Java runtime is selected, the launcher evaluates every layer against that runtime and the
-host. Matching layers are applied from first to last. Later layers override earlier values at the
-same path. The merged tree is one classpath or module-path entry. It is not a list of separate
-entries.
+The consumer supplies one [evaluation context](#conditionobject) for the root. Matching layers are
+applied from first to last. Later layers override earlier values at the same path. The result is
+one merged resource tree. The consumer determines its use; a resource root does not require an
+application section or a Java runtime.
+
+A blob reference naming a resource root must resolve to exactly one `ResourceRoot` and consume every
+resolved byte. Multiple consumers may name the same resource-root blob. Different evaluation
+contexts, including different runtimes or invocation channels, may produce different merged trees
+from that blob. Evaluating a resource root does not discover or select a runtime.
 
 ```rust
 struct ResourceRoot {
@@ -754,16 +847,10 @@ struct ResourceLayer {
 ResourceRootMetadataObject = { * NonemptyText => any }
 ```
 
-The metadata map may be empty. A resource root is invalid if a layer contains an invalid `java`
-version constraint. Readers must resolve `string_pool` before
+The metadata map may be empty. Layer conditions follow the validation and matching rules in
+[Conditions](#conditions). Readers must resolve `string_pool` before
 interpreting directory paths, entry names, or symbolic-link targets. Multiple resource roots may
 name the same string-pool blob. Directory paths are unique within a layer, not across layers.
-
-When importing a Multi-Release JAR, the base tree becomes an unconditional layer. Each
-`META-INF/versions/N/` tree becomes a layer with the `java` condition `vers:jep322/>=N`. These layers
-must appear in increasing `N`, so a later matching layer overrides an earlier one. A resource root
-can be exported back to a Multi-Release JAR when its first layer is unconditional and every remaining
-layer uses one of these conditions in increasing `N`.
 
 ##### String Pools
 
@@ -1310,8 +1397,8 @@ Therefore `21-ea` is less than `21`, and `>=21` does not contain `21-ea`. `>=21-
 `21-ea` and `21`.
 
 A candidate version satisfies a `jep322` VERS when it lies in one of the intervals defined by the
-constraint timeline, using this comparison. The VERS `type` in a Java launch condition must be
-`jep322`.
+constraint timeline, using this comparison. The VERS `type` in
+`JavaRuntimeRequirementsObject.version` must be `jep322`.
 
 ```text
 vers:jep322/>=17.0.10|<18|>=21.0.2|<22
