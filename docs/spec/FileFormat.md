@@ -292,7 +292,7 @@ struct FileMetadata {
     /// The format major version. Must be `0`.
     major_version: u32,
 
-    /// The format minor version. Must be `2`.
+    /// The format minor version. Must be `3`.
     minor_version: u32,
 
     /// The deterministic CBOR file-metadata map.
@@ -312,7 +312,7 @@ struct FileMetadata {
 }
 ```
 
-This document defines format version `0.2`. Readers must reject unsupported major or minor versions
+This document defines format version `0.3`. Readers must reject unsupported major or minor versions
 before interpreting the metadata or sections.
 
 `metadata.value` is a `FileMetadataObject`:
@@ -791,7 +791,7 @@ resolved byte. Consumers may share a root; different contexts may produce differ
 
 ```rust
 struct ResourceRoot {
-    /// The string pool used by paths in this root and by `CLASSFILE` transforms in this root.
+    /// The path string pool and default pool for `CLASSFILE` transforms.
     string_pool: BlobRef,
 
     /// One deterministic CBOR `ResourceRootMetadataObject`.
@@ -820,8 +820,7 @@ name the same string-pool blob. Directory paths are unique within a layer, not a
 
 ##### String Pools
 
-A `ResourceRoot` names one string-pool blob with a `BlobRef`. Resolving that blob must produce exactly
-one `StringPoolData` and consume every resolved byte.
+A string-pool blob must resolve to exactly one `StringPoolData` and consume every resolved byte.
 
 ```rust
 /// A zero-based index into `StringPoolData.strings`.
@@ -841,8 +840,8 @@ Directory paths, entry names, and symbolic-link targets are `StringPoolIndex` va
 directory is the record whose resolved path is empty. All other path and name rules apply to the
 resolved UTF-8 strings.
 
-`CLASSFILE` transforms in the resource root use this same pool. Strings are UTF-8. Restoring a class
-file converts selected strings to Modified UTF-8.
+`CLASSFILE` transforms use the root's pool by default and may override it in their properties.
+Strings are UTF-8. Restoring a class file converts selected strings to Modified UTF-8.
 
 ##### `ResourceDirectory`
 
@@ -1023,11 +1022,17 @@ enum ContentTransformId {
 
 ```cddl
 ContentTransformPropertiesObject = { * uint => any }
-ClassFileTransformPropertiesObject = { * uint => any }
+
+ClassFileTransformPropertiesObject = {
+    ? 0: BlobRefObject,                         ; string_pool
+    * uint => any,
+}
 ```
 
-The schema of `properties.value` is selected by `method`. `CLASSFILE` currently defines no
-properties. It uses the string pool named by the containing `ResourceRoot`.
+The schema of `properties.value` is selected by `method`. `CLASSFILE` uses
+`ClassFileTransformPropertiesObject`: `string_pool` selects the pool when present; otherwise,
+the containing `ResourceRoot.string_pool` is used. An invalid explicit pool is an error, with no
+fallback to the root's pool.
 
 Transforms are stored in encoding order and reversed from last to first after resolving the source.
 Each result must match `input_size`; the final value must be a valid encoding of `T`. An empty
@@ -1055,7 +1060,7 @@ It modifies the class file as follows:
         struct CONSTANT_External_Utf8 {
             tag: u8, // 0xFF
 
-            /// The index of the string in the containing resource root's string pool.
+            /// The index of the string in the selected string pool.
             string_pool_index: StringPoolIndex,
         }
         ```
@@ -1066,16 +1071,16 @@ It modifies the class file as follows:
         struct CONSTANT_External_String {
             tag: u8, // 0xFE
 
-            /// The index of the package name in the containing resource root's string pool.
+            /// The index of the package name in the selected string pool.
             package_name_index: StringPoolIndex,
 
-            /// The index of the class name in the containing resource root's string pool.
+            /// The index of the class name in the selected string pool.
             class_name_index: StringPoolIndex,
         }
         ```
 
-The input must be a valid Java class file. External string indices select entries in the containing
-resource root's string pool.
+The input must be a valid Java class file. External string indices select entries in the pool
+selected by the transform's properties or the root default.
 
 ### `BlobPool` Section
 
