@@ -513,12 +513,9 @@ When a command needs a Java runtime, Janex should resolve it in the following or
 4. Compatible managed runtime installed by `janex java install`.
 5. Compatible external runtime discovered from the host system.
 
-For a selected `janex.java` descriptor, `janex run` must evaluate its launch conditions using the
-evaluation context defined in [the file format](FileFormat.md#conditions): the current host,
-invocation `run`, and each candidate's `janex.java` runtime properties. If a candidate is incompatible,
-it should continue searching lower-precedence candidates unless the user provided an explicit
-override. Local resource layers use the selected runtime with the same host and invocation channel;
-evaluating those layers does not select another runtime.
+For a `janex.java` descriptor, evaluate [conditions](FileFormat.md#conditions) with the current host,
+invocation `run`, and each candidate runtime. On mismatch, try lower-precedence candidates unless
+the user explicitly selected the runtime. Resource layers use the selected runtime and launch context.
 
 ### Java Indexes
 
