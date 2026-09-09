@@ -292,7 +292,7 @@ struct FileMetadata {
     /// The format major version. Must be `0`.
     major_version: u32,
 
-    /// The format minor version. Must be `4`.
+    /// The format minor version. Must be `1`.
     minor_version: u32,
 
     /// The deterministic CBOR file-metadata map.
@@ -312,7 +312,7 @@ struct FileMetadata {
 }
 ```
 
-This document defines format version `0.4`. Readers must reject unsupported major or minor versions
+This document defines format version `0.1`. Readers must reject unsupported major or minor versions
 before interpreting the metadata or sections.
 
 `metadata.value` is a `FileMetadataObject`:
