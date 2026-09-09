@@ -292,7 +292,7 @@ struct FileMetadata {
     /// The format major version. Must be `0`.
     major_version: u32,
 
-    /// The format minor version. Must be `3`.
+    /// The format minor version. Must be `4`.
     minor_version: u32,
 
     /// The deterministic CBOR file-metadata map.
@@ -312,7 +312,7 @@ struct FileMetadata {
 }
 ```
 
-This document defines format version `0.3`. Readers must reject unsupported major or minor versions
+This document defines format version `0.4`. Readers must reject unsupported major or minor versions
 before interpreting the metadata or sections.
 
 `metadata.value` is a `FileMetadataObject`:
@@ -814,9 +814,9 @@ struct ResourceLayer {
 ResourceRootMetadataObject = { * NonemptyText => any }
 ```
 
-The metadata map may be empty. Readers must resolve `string_pool` before
-interpreting directory paths, entry names, or symbolic-link targets. Multiple resource roots may
-name the same string-pool blob. Directory paths are unique within a layer, not across layers.
+The metadata map may be empty. Readers must resolve `string_pool` before using references to it.
+Multiple resource roots may name the same string-pool blob. Directory paths are unique within a
+layer, not across layers.
 
 ##### String Pools
 
@@ -832,16 +832,26 @@ struct StringPoolData {
 }
 ```
 
-The pool is an intern table. Each string must appear at most once. A `StringPoolIndex` must select an
-existing element. Index `0` has no special meaning. The empty string appears only when something
-refers to it.
+The pool must contain the empty string at index `0`. All strings are unique, so every other entry
+is nonempty. A `StringPoolIndex` must select an existing element.
 
-Directory paths, entry names, and symbolic-link targets are `StringPoolIndex` values. The root
-directory is the record whose resolved path is empty. All other path and name rules apply to the
-resolved UTF-8 strings.
+Directory paths use `StringPoolIndex`; index `0` identifies the root directory. Entry names and
+symbolic-link targets use `NonemptyStringValue`. Path and name rules apply to the resolved strings.
 
 `CLASSFILE` transforms use the root's pool by default and may override it in their properties.
 Strings are UTF-8. Restoring a class file converts selected strings to Modified UTF-8.
+
+##### Nonempty Strings
+
+`NonemptyStringValue` starts with a `vuint`:
+
+| Value | Encoding |
+| --- | --- |
+| `0` | Followed by an inline `String`, which must be nonempty. |
+| `1..` | The index of an existing entry in the root's string pool; no additional bytes. |
+
+For example, `05` references pool entry `5`; `00 03 66 6F 6F` encodes inline `"foo"`.
+Both forms may be mixed, and comparisons use the resolved UTF-8 bytes.
 
 ##### `ResourceDirectory`
 
@@ -885,8 +895,8 @@ enum DirectoryEntry {
         /// Always `0x00534552` ("RES\0").
         resource_type: u32, // 0x00534552 ("RES\0")
 
-        /// The file name within the directory, as an index into the root's string pool.
-        name: StringPoolIndex,
+        /// The file name within the directory.
+        name: NonemptyStringValue,
 
         /// The content of this file and its logical transforms.
         content: Content<[u8]>,
@@ -902,11 +912,11 @@ enum DirectoryEntry {
         /// Always `0x4c4d5953` ("SYML").
         resource_type: u32, // 0x4c4d5953 ("SYML")
 
-        /// The symbolic-link name within the directory, as an index into the root's string pool.
-        name: StringPoolIndex,
+        /// The symbolic-link name within the directory.
+        name: NonemptyStringValue,
 
-        /// The relative target path, as an index into the root's string pool.
-        target: StringPoolIndex,
+        /// The relative target path.
+        target: NonemptyStringValue,
 
         /// One deterministic CBOR resource-metadata map.
         metadata: Sized<CborMap>, // ResourceMetadataObject
@@ -920,7 +930,7 @@ enum DirectoryEntry {
         resource_type: u32, // 0x424d4f54 ("TOMB")
 
         /// The name to remove within the directory.
-        name: StringPoolIndex,
+        name: NonemptyStringValue,
     },
 }
 ```
