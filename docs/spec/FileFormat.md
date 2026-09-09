@@ -6,34 +6,7 @@ Janex is a sectioned, multi-root container format. Its core stores shared conten
 verification information. Optional application sections describe launchable targets for supported
 runtimes.
 
-The Janex container has the following layout:
-
-```rust
-struct JanexFile {
-    /// The magic number identifying this as a Janex file.
-    ///
-    /// Always `0x0000_0058_454e_414a` ("JANEX\0\0\0").
-    magic_number: u64, // 0x0000_0058_454e_414a ("JANEX\0\0\0")
-
-    /// The sections of the Janex file.
-    sections: [Section; ...],
-
-    /// The file-level metadata at the end of the Janex file.
-    file_metadata: FileMetadata,
-}
-```
-
-The complete physical file may contain data outside `JanexFile`:
-
-```text
-[external header] [JanexFile] [external tail]
-```
-
-`FileMetadataObject` records optional size and checksum constraints for the external regions.
-
-## Data Types
-
-### Basic Data Types
+## Notation and Encoding
 
 Janex uses little-endian encoding for fixed-width binary integer and floating-point fields. `vuint`
 and values inside CBOR objects use the encodings defined in their respective sections below.
@@ -42,9 +15,14 @@ This document uses `u8`/`u16`/`u32`/`u64` to represent 8/16/32/64-bit unsigned i
 uses `i8`/`i16`/`i32`/`i64` to represent 8/16/32/64-bit signed integers,
 and uses `f32`/`f64` to represent 32/64-bit floating-point numbers.
 
-### Complex Data Types
-
 Complex layouts use Rust-like pseudocode. `[T; count]` denotes `count` consecutive values of type `T`.
+
+Janex uses [CBOR](https://www.rfc-editor.org/rfc/rfc8949.html) for extensible metadata. Schemas are
+written in [CDDL](https://www.rfc-editor.org/rfc/rfc8610.html).
+
+All CBOR values follow RFC 8949 Section 4.2.1 Core Deterministic Encoding and their applicable schema.
+
+## Data Types
 
 ### Variable-Length Integers
 
@@ -154,10 +132,7 @@ struct TaggedPayload<T> {
 
 This document uses `#[repr(TaggedPayload<T>)]` to denote this layout.
 
-### CBOR
-
-Janex uses [CBOR](https://www.rfc-editor.org/rfc/rfc8949.html) for extensible metadata. Schemas are
-written in [CDDL](https://www.rfc-editor.org/rfc/rfc8610.html).
+### CBOR Values
 
 These aliases denote bare CBOR values; the CDDL schema at each use site defines their contents:
 
@@ -168,7 +143,6 @@ type CborValue = ...;
 type CborMap = CborValue;   // map
 ```
 
-All values follow RFC 8949 Section 4.2.1 Core Deterministic Encoding and their applicable schema.
 Binary fields use `Sized<CborValue>` when they need an explicit byte boundary.
 
 ### `Checksum`
@@ -212,6 +186,31 @@ The byte string contains the exact encoding of one `ChecksumValue`: the first by
 ID and the remaining bytes are `digest`.
 
 ## File Structure
+
+The Janex container has the following layout:
+
+```rust
+struct JanexFile {
+    /// The magic number identifying this as a Janex file.
+    ///
+    /// Always `0x0000_0058_454e_414a` ("JANEX\0\0\0").
+    magic_number: u64, // 0x0000_0058_454e_414a ("JANEX\0\0\0")
+
+    /// The sections of the Janex file.
+    sections: [Section; ...],
+
+    /// The file-level metadata at the end of the Janex file.
+    file_metadata: FileMetadata,
+}
+```
+
+The complete physical file may contain data outside `JanexFile`:
+
+```text
+[external header] [JanexFile] [external tail]
+```
+
+`FileMetadataObject` records optional size and checksum constraints for the external regions.
 
 ### `FileMetadata`
 
