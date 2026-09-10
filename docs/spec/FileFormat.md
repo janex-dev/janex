@@ -143,7 +143,8 @@ type CborValue = ...;
 type CborMap = CborValue;   // map
 ```
 
-Binary fields use `Sized<CborValue>` when they need an explicit byte boundary.
+CBOR fields in binary structures must use `Sized<CborValue>` or `Sized<CborMap>`.
+Values nested within CBOR use native CBOR encoding without a `Sized` wrapper.
 
 ### `Checksum`
 
@@ -970,8 +971,9 @@ See [Java Runtime Requirements](#janexjava-runtime-requirements) for `janex.java
 ## Applications
 
 A file may contain any number of `Application` sections. Each section is one independently launchable
-target. Multiple targets may share blobs. The section body after the magic number is one deterministic
-CBOR `ApplicationObject`. A file with no application section has no launch target.
+target. Multiple targets may share blobs. The section body after the magic number is one
+`Sized<CborMap>` containing a deterministic CBOR `ApplicationObject`. A file with no application
+section has no launch target.
 
 Separate commands with independent launch configurations use separate application sections.
 Subcommands interpreted by one program are ordinary application arguments.
@@ -991,11 +993,12 @@ struct ApplicationSection {
     magic_number: u64, // 0x5050_4158_454e_414a ("JANEXAPP")
 
     /// One deterministic CBOR `ApplicationObject`.
-    application: CborMap, // ApplicationObject
+    application: Sized<CborMap>, // ApplicationObject
 }
 ```
 
-`application` occupies the remainder of the section.
+The complete `application` field, including its length prefix, must occupy exactly the remainder of
+the section.
 
 ### `ApplicationObject`
 
