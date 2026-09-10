@@ -689,45 +689,43 @@ ClassFileTransformPropertiesObject = {
 ```
 
 `string_pool` selects the pool when present; otherwise, the containing `ResourceRoot.string_pool`
-is used. An invalid explicit pool is an error, with no fallback. Restoring a class file converts
-selected strings to Modified UTF-8.
+is used. An invalid explicit pool is an error, with no fallback.
 
-It modifies the class file as follows:
+The input must be a valid Java class file, and reversing the transform must reproduce its exact
+bytes. The transform changes only the magic bytes and selected `CONSTANT_Utf8` entries; constant-pool
+counts, slots, reference indices, and all other bytes remain unchanged. Original class-file fields
+retain their big-endian encoding; external string indices use `StringPoolIndex` (`vuint`).
 
-1. The magic number of the transformed class file is rewritten to `0x70CAFECA`
-   (`0xCA 0xFE 0xCA 0x70` in file order) to distinguish it from an unmodified class file.
-2. The transformed class file may contain new constant types that reference entries in the shared
-   `StringPool` by index, replacing the original `CONSTANT_Utf8` entries.
+The transformed magic bytes are `CA FE CA 70`; decoding restores `CA FE BA BE`.
+The following entries may replace `CONSTANT_Utf8` entries:
 
-    New constant pool entries include:
+```rust
+struct CONSTANT_External_String {
+    tag: u8, // 0xFF
 
-    1. `CONSTANT_External_String`:
+    /// The index of the complete string in the selected string pool.
+    string_pool_index: StringPoolIndex,
+}
 
-        ```rust
-        struct CONSTANT_External_Utf8 {
-            tag: u8, // 0xFF
+struct CONSTANT_External_String_Class {
+    tag: u8, // 0xFE
 
-            /// The index of the string in the selected string pool.
-            string_pool_index: StringPoolIndex,
-        }
-        ```
+    /// The index of the slash-separated package name, or 0 for the unnamed package.
+    package_name_index: StringPoolIndex,
 
-    2. `CONSTANT_External_String_Class`:
+    /// The index of the nonempty class name without the package prefix.
+    class_name_index: StringPoolIndex,
+}
+```
 
-        ```rust
-        struct CONSTANT_External_String {
-            tag: u8, // 0xFE
+`CONSTANT_External_String` restores the selected string. `CONSTANT_External_String_Class` restores
+`package + "/" + class` when the package is nonempty, or just `class` otherwise. Array class names
+may use `CONSTANT_External_String` or remain unchanged.
 
-            /// The index of the package name in the selected string pool.
-            package_name_index: StringPoolIndex,
-
-            /// The index of the class name in the selected string pool.
-            class_name_index: StringPoolIndex,
-        }
-        ```
-
-The input must be a valid Java class file. External string indices select entries in the pool
-selected by the transform's properties or the root default.
+Both entries decode to `CONSTANT_Utf8` (tag `0x01`), followed by a big-endian `u16` byte length and
+the restored string encoded as Modified UTF-8. The encoded string must fit in 65,535 bytes.
+Strings that cannot round-trip losslessly through the UTF-8 pool, such as those containing unpaired
+surrogates, must retain their original `CONSTANT_Utf8` entries.
 
 ## Resource Roots
 
