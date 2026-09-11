@@ -184,7 +184,8 @@ Algorithm ID `0` is reserved. `digest` has no length prefix; its length must mat
 Readers may skip unknown algorithms when the containing field provides a byte boundary. Required
 validation accepts supported algorithms only.
 
-XXH64 uses a seed of `0`.
+Digests use each algorithm's standard byte representation, independently of Janex's integer byte
+order. XXH64 uses seed `0` and its 8-byte big-endian canonical representation.
 
 In CBOR:
 
