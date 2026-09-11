@@ -892,7 +892,7 @@ ResourceMetadataObject = {
     ? 2: UnixNanosecondsObject,      ; creation_time
     ? 3: UnixNanosecondsObject,      ; modification_time
     ? 4: UnixNanosecondsObject,      ; access_time
-    ? 5: 0..65535,                   ; posix_permissions
+    ? 5: 0..4095,                    ; posix_permissions
     * uint => any,
 }
 
@@ -905,7 +905,12 @@ UnixNanosecondsObject =
 An empty map represents no metadata.
 
 `checksum` is valid only for regular files and covers the logical content after transforms are
-reversed. `posix_permissions` contains the POSIX permission bits.
+reversed.
+
+`posix_permissions` is valid only for regular files and directories, not symbolic links. It contains
+the nine POSIX read/write/execute bits and the setuid, setgid, and sticky bits (octal `0000..7777`),
+excluding file-type bits. Omission leaves permissions unspecified; `0` means no permission bits are set.
+Consumers apply permissions according to platform capabilities and local policy.
 
 Time values are signed `i128` POSIX timestamps in nanoseconds. Values in CBOR's basic integer range use
 major type `0` or `1`. Larger values use tag `2` or `3` with a minimal 9-to-16-byte big-endian
