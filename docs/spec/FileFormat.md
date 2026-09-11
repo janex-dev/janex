@@ -1473,8 +1473,9 @@ elements are omitted from the written `$VNUM`. `$PRE` is a pre-release identifie
 `$BUILD` is a decimal build number. `$OPT` is additional build information. Examples: `8`, `8.0.402`,
 `17`, `17.0.10`, `21.0.2+13`, `21-ea+11`.
 
-Writers should use this canonical form in a VERS. `8` means any Java 8 release. `8.0.402` means
-update 402 of Java 8.
+Writers should use this canonical form in a VERS. A bare version requires equality under the
+comparison rules below: `8` does not match `8.0.402`, which denotes update 402 of Java 8.
+Use `vers:jep322/>=8|<9` for versions at least `8` and less than `9`.
 
 #### Java 8 Aliases
 
