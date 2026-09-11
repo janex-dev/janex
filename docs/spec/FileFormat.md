@@ -923,7 +923,7 @@ Launch configurations and resource layers use conditions to select data for a su
 ### `ConditionObject`
 
 ```cddl
-NameSelector = tstr / [+ tstr]
+NameSelector = NonemptyText / [+ NonemptyText]
 
 ConditionObject = {
     ? 1: NameSelector,                          ; os
@@ -1011,7 +1011,7 @@ the section.
 ApplicationObject = {
     0: ApplicationDescriptorObject,             ; descriptor
     ? 1: LocalizedText,                         ; name
-    ? 2: tstr,                                  ; version
+    ? 2: NonemptyText,                          ; version
     ? 3: LocalizedText,                         ; comment
     ? 4: ApplicationIntegrationObject,          ; integration
     ? 5: ApplicationLaunchMode,                 ; launch_mode
@@ -1072,7 +1072,7 @@ platform. An empty array should be omitted.
 
 ```cddl
 ApplicationIconObject = {
-    0: tstr,                                    ; media_type
+    0: NonemptyText,                            ; media_type
     1: BlobRefObject,                           ; image
     * uint => any,
 }
@@ -1090,8 +1090,8 @@ For `runtime_type` `janex.java`, `requirements` is:
 
 ```cddl
 JavaRuntimeRequirementsObject = {
-    ? 0: tstr,                                  ; version
-    ? 1: tstr,                                  ; vendor
+    ? 0: NonemptyText,                          ; version
+    ? 1: NonemptyText,                          ; vendor
     * uint => any,
 }
 ```
@@ -1176,7 +1176,7 @@ JavaPathEntryObject =
     }
   / {
         0: 1,                    ; external
-        1: tstr,                 ; uri
+        1: NonemptyText,         ; uri
         ? 2: ChecksumObject,     ; checksum
         * uint => any,
     }
