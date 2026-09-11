@@ -355,18 +355,9 @@ ExternalRegionObject = {
 Omission leaves the region unconstrained. Otherwise, `size` must match, and `checksum` must be verified
 when present. A size of zero requires the region to be absent.
 
-The caller supplies `external_tail_length`; standalone Janex uses zero. It is not inferred from the
-file. For a physical file of `physical_file_size` bytes:
-
-```text
-janex_end   = physical_file_size - external_tail_length
-janex_start = janex_end - file_length
-file_length = 8 + sum(FileMetadataObject.section_table[*].length) + metadata_length
-```
-
-All arithmetic is checked. The external header precedes `janex_start`, and the tail starts at
-`janex_end`. The 24-byte footer before `janex_end` provides `metadata_length` and `file_length`;
-`end_mark` must match, and `metadata_length` must equal the encoded `FileMetadata` length.
+The caller may supply `external_tail_length`, or a reader may derive it using
+[External Wrappers](#external-wrappers). Recorded region constraints are checked after locating
+the metadata.
 
 ### `VerificationInfo` Structure
 
@@ -432,6 +423,58 @@ The payload must consume exactly `payload_bytes`. A checksum payload must be one
 `ChecksumValue`. OpenPGP and CMS payloads must be nonempty. Unknown verification types are invalid.
 
 See [Verification](#verification) for signature profiles and authenticated content scope.
+
+## External Wrappers
+
+### Locating Janex
+
+`external_tail_length` is supplied by the caller or derived from a recognized wrapper. With no
+external tail, it is zero. For a physical file of `physical_file_size` bytes:
+
+```text
+janex_end   = physical_file_size - external_tail_length
+janex_start = janex_end - file_length
+file_length = 8 + sum(FileMetadataObject.section_table[*].length) + metadata_length
+```
+
+All arithmetic is checked. The external header precedes `janex_start`, and the tail starts at
+`janex_end`. The 24-byte footer before `janex_end` provides `metadata_length` and `file_length`;
+`end_mark` must match, and `metadata_length` must equal the encoded `FileMetadata` length.
+The file magic, metadata, section boundaries, and recorded external-region constraints must also
+validate. Automatic discovery must reject missing or ambiguous valid Janex boundaries.
+
+### JAR Tail Wrapper
+
+A complete single-disk JAR may immediately follow `JanexFile` and end at the physical end of the file:
+
+```text
+[external header] [JanexFile] [JAR, including its ZIP end records and comment]
+```
+
+ZIP offsets are relative to the start of this JAR, not the physical file. The unencrypted,
+uncompressed central directory immediately precedes the ZIP end records. Ordinary ZIP uses an
+end-of-central-directory record (EOCD); ZIP64 uses a ZIP64 EOCD, its locator, and the EOCD,
+consecutively. Record layouts follow the
+[ZIP specification](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT).
+
+Readers locate an EOCD in the final 65,557 bytes whose 22-byte header and declared comment end
+exactly at the physical end of the file. Without ZIP64, `directory_end` is the physical EOCD offset,
+and the central-directory size and offset come from that record.
+
+With ZIP64, the 20-byte locator immediately precedes the EOCD. Locate a ZIP64 EOCD whose signature
+and declared record length place its end exactly at the locator; its total length is 12 plus its
+size field and is not necessarily 56 bytes. `directory_end` is its physical offset, and its 64-bit
+fields supply the central-directory size and offset.
+
+```text
+jar_start = directory_end - central_directory_size - central_directory_offset
+janex_end = jar_start
+external_tail_length = physical_file_size - jar_start
+```
+
+For ZIP64, `jar_start` plus the locator's ZIP64 EOCD offset must equal `directory_end`.
+The ZIP directory and referenced records must validate within the JAR region. Each candidate must
+also pass the Janex boundary checks above; a ZIP signature alone does not establish a boundary.
 
 ## Blob Pools
 
