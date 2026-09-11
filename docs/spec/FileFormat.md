@@ -114,6 +114,9 @@ are ignored. If lookup matches no key, the Host uses `und` when present;
 otherwise it uses the remaining well-formed key that is first in core
 deterministic map order.
 
+The map must contain at least one well-formed language tag. Well-formed tags must be unique under
+case-insensitive comparison.
+
 ### Tagged Payload
 
 `TaggedPayload<T>` prefixes a payload with a tag and its byte length:
@@ -867,6 +870,11 @@ ResourceRootMetadataObject = { * NonemptyText => any }
 The metadata map may be empty. Readers must resolve `string_pool` before using references to it.
 Multiple resource roots may name the same string-pool blob.
 
+The optional text attribute `janex.java.jar_name` preserves the JAR filename used when materializing
+this root as a Java path entry, including filename-derived automatic module names. It must be a
+single filename ending in `.jar`, without `/`, `\`, or NUL. The default is `resources.jar`.
+Consumers materialize different roots in separate directories to avoid filename collisions.
+
 ### String Pools
 
 A string-pool blob must resolve to exactly one `StringPoolData` and consume every resolved byte.
@@ -1248,8 +1256,8 @@ JavaLaunchConfigObject = {
 
 An omitted `condition` is unconditional. See [Conditions](#conditions) for the condition model.
 
-The launcher visits the root configuration and its `overlays` in depth-first pre-order. Each matching
-object contributes as follows:
+The launcher visits the root configuration and its `overlays` in depth-first pre-order. A nonmatching
+object and its entire subtree are skipped. Each matching object contributes as follows:
 
 - missing keys make no contribution;
 - `entry_point` replaces the current value, while `null` clears it;

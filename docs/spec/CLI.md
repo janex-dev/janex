@@ -11,6 +11,7 @@ directly executable.
 
 The CLI should separate software acquisition from software execution:
 
+- `janex pack`: build a Janex application from local directories and JARs.
 - `janex install`: acquire a Janex application package, validate it, present trust and policy decisions, and record a local installed copy.
 - `janex run`: start an installed application or a local Janex file without implicitly treating remote content as trusted software.
 - `janex java`: discover, install, select, and remove Java installations used by Janex.
@@ -20,6 +21,56 @@ This split keeps trust decisions at acquisition time and keeps the run path simp
 `janex run` may use a managed Java installation installed by `janex java`, but it must not download or install a Java runtime implicitly.
 If no suitable runtime is available, `janex run` should report the missing requirement and point the user to the appropriate
 `janex java` command.
+
+## `janex pack`
+
+```text
+janex pack <SOURCE> --output <FILE>
+    [--class-path <PATH>]...
+    [--module-path <PATH>]...
+    [--main-class <NAME>]
+    [--main-module <NAME>]
+    [--application <ID>]
+    [--jvm-option <ARG>]...
+    [--argument <ARG>]...
+    [--java-version <VERS>]
+```
+
+`SOURCE` and every path entry must be a local directory or JAR. Each input becomes a separate
+resource root. The primary input comes first on the module path when `--main-module` is present,
+otherwise first on the classpath. Repeated path options retain their order. JAR filenames are
+preserved; directory inputs use `resources.jar`.
+
+`--main-class` overrides entry-point inference. Otherwise the main manifest supplies `Main-Class`;
+for classpath launching, a module descriptor's main class is used when the manifest supplies none.
+Different main classes in versioned descriptors require an explicit entry point. With
+`--main-module` and no main class, the selected module supplies its main class at launch.
+An input without a determinable entry point is an error. `--application` defaults to `main`.
+
+Each `--jvm-option` and `--argument` contributes one complete argument, including empty strings.
+No shell splitting, variable substitution, or wildcard expansion is performed. Use forms such as
+`--jvm-option=-ea` and `--argument=--verbose` for values starting with a hyphen.
+`--java-version` takes a `vers:jep322` range, such as `vers:jep322/>=21|<26`.
+
+The packer preserves file bytes and available POSIX permission bits, imports symbolic links without
+following them, and maps Multi-Release JAR versions to conditional layers. Timestamps are omitted.
+Manifest `Class-Path` entries do not cause dependency acquisition; supply dependencies explicitly.
+Malformed paths, duplicate entries, unsupported filesystem nodes, and corrupt archives are errors.
+
+The output uses SHA-256 checksums and constrains both external regions to be absent. A shared string
+pool and identical-file blob reuse reduce repetition within each root. Zstandard is used where it
+reduces storage. CLASSFILE transforms are selected only when their complete candidate package is
+smaller, including string-pool and index costs. Unrecognized class files remain ordinary resources.
+Given unchanged inputs, permission bits, options, and encoder versions, output bytes are reproducible.
+
+`--output` is required and must not exist. The packer writes temporary files beside the destination,
+then publishes the completed result without replacing an existing file.
+
+```text
+janex pack app.jar --output app.janex --class-path lib/dependency.jar
+janex pack classes --output app.janex --main-class example.Main --jvm-option=-ea
+janex pack app.jar --output app.janex --main-module example.app --argument=--verbose
+```
 
 ## `janex install`
 
@@ -91,102 +142,58 @@ janex install app.janex
 
 ## `janex run`
 
-`janex run` starts an installed Janex application or a local Janex file.
-
-### Synopsis
-
 ```text
 janex run [OPTIONS] <TARGET> [ARGS...]
 ```
 
-### Description
-
-The `run` subcommand is responsible for execution, not software acquisition.
-
-At a high level, the command should:
-
-1. Locate the installed package by `package_name` or open the local Janex file.
-2. Select an `Application` section by an explicit `application_id`, or use the only application
-   section.
-3. Select a launcher for its `application_type`; reject unsupported types.
-4. Resolve its descriptor. For `janex.java`, set `invocation` to `run`, select a compatible Java
-   runtime, and build the JVM invocation.
-5. Start the target application using its launch mode and forward its exit code.
-
-Remote URIs should be installed first instead of being executed directly by `janex run`.
-
-### Arguments
-
-#### `<TARGET>`
-
-The Janex application to run.
-
-This value may be either:
-
-- An installed package name.
-- A local file name or path.
-- A local `file:` URI.
-
-After the Janex file target appears on the command line, all remaining arguments are forwarded to the target application as-is.
-
-This means Janex CLI options for the `run` subcommand must appear before `<TARGET>`.
-
-#### `[ARGS...]`
-
-Application arguments passed to the selected program.
+`TARGET` is a local Janex file path or a local `file:` URI without a query or fragment.
+Remote acquisition and installed-package lookup are outside the local execution interface.
+All arguments after the target are forwarded to the application, including empty strings,
+`--`, and arguments resembling Janex options. Janex options must precede the target.
 
 ### Options
 
-The exact option set may evolve, but the `run` subcommand is expected to support the following categories:
+- `--application <ID>` selects an application section; otherwise the file must contain exactly one.
+- `--java <PATH>` selects a Java executable or a bare executable name on `PATH`.
+- `--java-home <PATH>` selects the Java executable under that home. It conflicts with `--java`.
+- `--allow-unsigned` permits local files using None or Checksum verification. It never bypasses
+  authentication for a signed file. OpenPGP and CMS execution require signature support and
+  corresponding trust material; unsupported authentication fails before launching Java.
 
-- `--application <ID>` selects an application section within the package or local file.
-- Java runtime selection override, such as explicitly providing a Java executable or Java home.
-- Offline and policy controls for local-file execution.
-- Diagnostics output, such as printing the selected runtime, resolved configuration, or final JVM command.
-- Logging verbosity control for troubleshooting launch failures.
+### Execution
+
+The launcher reads a bounded, owned snapshot and verifies all recorded checksums once before
+selecting a runtime. The result is reused for this launch. Later changes to the source file do not
+change the prepared invocation; there is no verification cache shared across launches.
+
+Runtime selection tries an explicit override, `JAVA_HOME`, then Java executables on `PATH`.
+An explicit override fails without fallback. Otherwise, failed probes, mismatched conditions,
+and unsatisfied local module requirements cause the launcher to try the next candidate.
+Classpath launching supports Java 8; module launching requires Java 9 or later.
+
+Conditions, overlays, and resource layers use the selected runtime and invocation `run`.
+Each distinct local resource root becomes a JAR in its own temporary directory, retaining its
+JAR filename for automatic-module naming. Module requirements use the selected Java runtime
+and supplied local module-path entries; unresolved external references fail without downloading.
+Symbolic links expand into resource contents; dangling links, cycles, and root escapes fail.
+
+Runtime JARs omit manifest `Class-Path`, JAR signature files, and signature-only manifest attributes.
+Other manifest attributes, including sealing information, are retained. The original resources in
+the Janex file remain unchanged. Temporary JARs are removed after the child process exits.
+
+Java starts directly without a shell, inheriting the working directory and standard streams.
+JVM options and agent options retain their argument boundaries. Preset program arguments precede
+user arguments; `@` arguments are passed literally. Windowed applications suppress a console
+window on Windows. The CLI propagates the child's exit code; Unix signal termination maps to
+`128 + signal`. Preparation or process-launch failure returns `1`; invalid CLI syntax returns `2`.
 
 ### Examples
 
-Run an installed application: 
-
 ```text
-janex run com.example.app
+janex run --allow-unsigned ./app.janex
+janex run --allow-unsigned --application javac ./jdk-tools.janex --version
+janex run --allow-unsigned --java-home /opt/jdk ./app.janex --config=config.toml
 ```
-
-Run a local Janex file:
-
-```text
-janex run ./app.janex
-```
-
-Select an application from a file containing multiple launch targets:
-
-```text
-janex run --application javac ./jdk-tools.janex --version
-```
-
-Pass application arguments:
-
-```text
-janex run ./app.janex --server.port=8080 --profile=prod
-```
-
-Run a Janex file with additional diagnostics:
-
-```text
-janex run --verbose app.janex
-```
-
-Arguments after the Janex file target are still forwarded to the application even if they begin with `-` or `--`:
-
-```text
-janex run app.janex --enable-feature --config=config.toml
-```
-
-### Exit Status
-
-- `0`: the Janex application exited successfully.
-- Non-zero: the launch failed, or the launched application exited with a non-zero status.
 
 ## `janex java`
 
