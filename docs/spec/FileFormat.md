@@ -913,6 +913,12 @@ metadata and its entries are merged into the directory. A later file or symbolic
 name replaces the earlier one. A tombstone removes an earlier file or symbolic link with that name.
 A tombstone for a name that is not present is ignored.
 
+For each matching layer, apply its tombstones to the existing tree before merging its other records.
+After each layer, no file or symbolic link may occupy the path of an explicit or implicit directory;
+such a conflict invalidates the resource root. Replacing a file or symbolic link with a directory
+requires a tombstone in the same or an earlier matching layer. Tombstones do not remove directories,
+so replacing a directory with a file or symbolic link is invalid.
+
 `entries.transforms` must be empty.
 
 ### `DirectoryEntry`
