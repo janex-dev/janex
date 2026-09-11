@@ -71,6 +71,7 @@ struct Sized<T> {
 
 `byte_size` counts only the encoded bytes of `value`. The value must occupy exactly that many bytes;
 `Sized<T>` adds no alignment or padding.
+`Sized<CborMap>` has an empty-map encoding defined in [CBOR Values](#cbor-values).
 
 ### String
 
@@ -145,6 +146,11 @@ type CborMap = CborValue;   // map
 
 CBOR fields in binary structures must use `Sized<CborValue>` or `Sized<CborMap>`.
 Values nested within CBOR use native CBOR encoding without a `Sized` wrapper.
+
+As a special case, `Sized<CborMap>` must encode an empty map with `byte_size = 0` and no payload.
+A positive `byte_size` must contain exactly one nonempty deterministic CBOR map; encoding an empty
+map this way, such as `01 A0`, is invalid. The decoded map must satisfy its applicable schema.
+This special case does not apply to `Sized<CborValue>` or maps nested within CBOR.
 
 ### `Checksum`
 
