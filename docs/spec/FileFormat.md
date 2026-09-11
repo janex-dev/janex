@@ -491,8 +491,31 @@ enum BlobFilterId {
 }
 ```
 
-The properties schema is selected by `method`. Unsupported filters are invalid. `ZSTD` properties must
-be empty.
+The properties schema is selected by `method`. Unsupported filters are invalid.
+
+#### Zstandard
+
+`ZSTD` uses the following properties:
+
+```cddl
+ZstdPropertiesObject = {
+    ? 0: BlobRefObject,                         ; dictionary
+    * uint => any,
+}
+```
+
+The encoded bytes contain one or more Zstandard frames, optionally interspersed with skippable frames,
+as defined by [RFC 8878](https://www.rfc-editor.org/rfc/rfc8878.html). Decoding must consume every
+encoded byte and concatenate frame outputs in order, producing exactly `input_size` bytes.
+
+Omitting `dictionary` means no dictionary is used. Otherwise, the referenced blob's decoded bytes
+provide the formatted or raw-content dictionary defined by RFC 8878 Section 5 for every frame.
+Multiple blobs may share a dictionary. The reference selects the dictionary; `Dictionary_ID` is not
+used to locate it. A nonzero frame `Dictionary_ID` must match the selected dictionary's ID.
+
+Blob-table page filters must omit `dictionary`. Filters used to decode a dictionary blob, including
+any stored sources of its extents, must also omit `dictionary`.
+Whether to use a dictionary and how to train it are writer policy.
 
 ### Blob Table
 
@@ -566,6 +589,7 @@ produce exactly one `BlobTablePage` and consume every decoded byte. When present
 the decoded page bytes and must be verified. Each page decodes independently using self-contained
 filters. `BlobRef` addresses logical blobs. Locating a stored blob requires only its selected table
 page; resolving an extents blob may also require the pages containing its stored sources.
+Decoding a blob may additionally require resolving its dictionary blobs.
 
 Each `BlobTableEntry` payload must consume exactly `payload_bytes`. Unknown entry types may be skipped
 but cannot be resolved. A reader may use `payload_bytes` to skip preceding entries when locating one
