@@ -92,11 +92,11 @@ NonemptyText = tstr .ne ""
 Locale = tstr .ne ""
 
 LocalizedText =
-    NonemptyText
-  / { + Locale => NonemptyText }
+    tstr
+  / { + Locale => tstr }
 ```
 
-A bare `NonemptyText` declares no language and is used for every locale. The
+A bare `tstr` declares no language and is used for every locale. The
 map form gives every string a [BCP 47](https://www.rfc-editor.org/rfc/rfc5646.html)
 language tag such as `en`, `zh-Hans`, or `pt-BR`. There is no distinguished
 default entry. Writers should use the shortest well-formed tag that
@@ -105,7 +105,7 @@ explicit language-neutral fallback. The bare string is only for values that
 do not declare a language.
 
 A Host selects a string for a user-interface locale as follows. A bare
-`NonemptyText` is used for every locale. Otherwise the Host looks up the locale
+`tstr` is used for every locale. Otherwise the Host looks up the locale
 in the map using BCP 47 language priority lookup
 ([RFC 4647](https://www.rfc-editor.org/rfc/rfc4647.html) Lookup). Tags are
 compared case-insensitively. Keys that are not well-formed BCP 47 language tags
@@ -1033,9 +1033,10 @@ logical target should retain its `application_id` across versions of the same pa
 `application_type` selects the schema and semantics of `descriptor`; this document defines
 `janex.java`, and reserves the `janex.` prefix. Third-party types use a reverse-domain name.
 `descriptor` must follow the selected schema. `name` is a display name and may be localized.
+When present, its bare string or every translation must be nonempty.
 `version` is the application's own version string. `comment` is a short description and may be
-localized. `launch_mode` defaults to `console`. `windowed` suppresses console window creation on
-platforms that distinguish the two modes.
+localized; its text may be empty. `launch_mode` defaults to `console`. `windowed` suppresses console
+window creation on platforms that distinguish the two modes.
 
 `name` and `comment` are for presentation. They are not command names and are not part of the
 installed target identity. When presenting this application, including a desktop launcher, the Host
