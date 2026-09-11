@@ -1123,6 +1123,7 @@ JavaLaunchConfigObject = {
     ? 4: ([* JavaAgentObject] / null),           ; agents
     ? 5: ([* tstr] / null),                     ; jvm_options
     ? 6: [* JavaLaunchConfigObject],             ; overlays
+    ? 7: ([* tstr] / null),                     ; arguments
     * uint => any,
 }
 ```
@@ -1134,11 +1135,16 @@ object contributes as follows:
 
 - missing keys make no contribution;
 - `entry_point` replaces the current value, while `null` clears it;
-- arrays append to `module_path`, `class_path`, `agents`, or `jvm_options`, while `null` clears that
-  list; and
+- arrays append to `module_path`, `class_path`, `agents`, `jvm_options`, or `arguments`, while `null`
+  clears that list; an empty array makes no contribution; and
 - `overlays` preserves array order and must not be `null`.
 
 The resulting configuration must contain an `entry_point`.
+
+`arguments` supplies preset program arguments, followed at launch by user-supplied program arguments.
+Each string is one complete argument and may be empty. The launcher preserves argument boundaries
+and performs no shell splitting, variable expansion, or wildcard expansion. The program determines
+how repeated or conflicting arguments are handled.
 
 #### `JavaEntryPointObject`
 
