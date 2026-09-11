@@ -946,7 +946,7 @@ enum DirectoryEntry {
         /// The symbolic-link name within the directory.
         name: NonemptyStringValue,
 
-        /// The relative target path.
+        /// The target path relative to the symbolic link's containing directory.
         target: NonemptyStringValue,
 
         /// One deterministic CBOR resource-metadata map.
@@ -989,8 +989,11 @@ resource path is the resolved entry name for the root directory, or `directory_p
 entry_name` otherwise, using the resolved strings. Directory records and file or symbolic-link
 entries must not produce conflicting paths.
 
-Symbolic-link targets use normalized relative `/`-separated paths and follow the nonempty path rules
-used for non-root directory paths.
+Symbolic-link targets are nonempty relative `/`-separated paths with no leading or trailing `/`
+and no empty components. They are resolved component by component in the merged resource tree,
+relative to the link's containing directory. `.` denotes the current directory and `..` its parent.
+Resolution must not escape the resource root, including when following other symbolic links;
+an attempt to do so is an error.
 
 ### Resource Metadata
 
