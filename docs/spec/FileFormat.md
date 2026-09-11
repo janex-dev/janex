@@ -890,15 +890,22 @@ enum DirectoryEntry {
 }
 ```
 
-Entry names and symbolic-link targets use `NonemptyStringValue`, which starts with a `vuint`:
+Entry names and symbolic-link targets use `NonemptyStringValue`:
 
-| Value | Encoding |
+| Encoding | Meaning |
 | --- | --- |
-| `0` | Followed by an inline `String`, which must be nonempty. |
-| `1..` | The index of an existing entry in the root's string pool; no additional bytes. |
+| A positive `vuint` | An existing index in the root's string pool; no additional bytes. |
+| `0`, then a nonempty `String` | An inline value. |
+| `0`, then an empty `String`, then `Vec<StringPoolIndex>` | A concatenation of root string-pool entries. |
+
+The concatenation index array must contain at least two entries. Their strings are concatenated in
+array order without separators, and the result must be nonempty.
+The empty `String` is a marker, not the resolved value.
 
 For example, `05` references pool entry `5`; `00 03 66 6F 6F` encodes inline `"foo"`.
-Both forms may be mixed, and comparisons use the resolved UTF-8 bytes.
+If pool entries `5` and `6` contain `"Object"` and `".class"`, `00 00 02 05 06` encodes `"Object.class"`.
+All forms may be mixed; writers choose the representation. Name and path constraints, sorting, and
+uniqueness checks apply to the resolved UTF-8 bytes.
 
 Entry names are nonempty UTF-8 strings without `/` and must not be `.` or `..`. They are unique within
 their directory, including tombstones, and sorted by the UTF-8 bytes of the resolved strings. A full
