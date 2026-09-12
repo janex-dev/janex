@@ -6,7 +6,7 @@
 use janex_core::{
     java::{JavaOptions, JavaRuntime, candidates},
     pack::{PackOptions, pack},
-    run::{ExecutionPlan, RunOptions, prepare},
+    run::{ExecutionPlan, LaunchMode, RunOptions, prepare},
 };
 use janex_format::{
     application::{Application, PathEntry},
@@ -124,7 +124,7 @@ public class Main {
     options.arguments = [
         "--java",
         "@missing-argfile",
-        "\u{4e2d}",
+        "\u{4e2d}\u{1f680}",
         "two words",
         "\"quoted\"",
         "C:\\tail\\",
@@ -150,7 +150,7 @@ public class Main {
         String::from_utf8(output.stdout)
             .unwrap()
             .replace("\r\n", "\n"),
-        "two words\narg:cHJlc2V0\narg:\narg:LS1qYXZh\narg:QG1pc3NpbmctYXJnZmlsZQ==\narg:5Lit\narg:dHdvIHdvcmRz\narg:InF1b3RlZCI=\narg:QzpcdGFpbFw=\narg:LS1kaXNhYmxlLUBmaWxlcw==\narg:QEBkb3VibGU=\narg:\n"
+        "two words\narg:cHJlc2V0\narg:\narg:LS1qYXZh\narg:QG1pc3NpbmctYXJnZmlsZQ==\narg:5Lit8J+agA==\narg:dHdvIHdvcmRz\narg:InF1b3RlZCI=\narg:QzpcdGFpbFw=\narg:LS1kaXNhYmxlLUBmaWxlcw==\narg:QEBkb3VibGU=\narg:\n"
     );
     drop(plan);
     assert!(!directory.exists());
@@ -163,7 +163,7 @@ fn java_8_launches_classpath_applications() {
         return;
     };
     let temp = tempfile::tempdir().unwrap();
-    fs::write(temp.path().join("Main.java"), "public class Main { public static void main(String[] args) { for (String arg : args) System.out.println(\"[\" + arg + \"]\"); } }").unwrap();
+    fs::write(temp.path().join("Main.java"), "class Main { public static void main(String... args) { for (String arg : args) System.out.println(java.util.Base64.getEncoder().encodeToString(arg.getBytes(java.nio.charset.StandardCharsets.UTF_8))); } }").unwrap();
     tool(
         temp.path(),
         "javac",
@@ -179,7 +179,7 @@ fn java_8_launches_classpath_applications() {
         java: None,
         java_home: Some(home.into()),
     };
-    options.arguments = ["", "two words", "@literal", "--flag"]
+    options.arguments = ["", "two words", "@literal", "--flag", "\u{4e2d}\u{1f680}"]
         .map(Into::into)
         .into();
     let plan = prepare(&options).unwrap();
@@ -194,8 +194,142 @@ fn java_8_launches_classpath_applications() {
         String::from_utf8(output.stdout)
             .unwrap()
             .replace("\r\n", "\n"),
-        "[]\n[two words]\n[@literal]\n[--flag]\n"
+        "\ndHdvIHdvcmRz\nQGxpdGVyYWw=\nLS1mbGFn\n5Lit8J+agA==\n"
     );
+    options.launch_mode = LaunchMode::Direct;
+    options.arguments.pop();
+    let direct = prepare(&options).unwrap();
+    assert_eq!(direct.launch_mode(), LaunchMode::Direct);
+    assert!(!direct.directory().join("bootstrap.jar").exists());
+    assert_eq!(
+        String::from_utf8(capture(&direct).stdout)
+            .unwrap()
+            .replace("\r\n", "\n"),
+        "\ndHdvIHdvcmRz\nQGxpdGVyYWw=\nLS1mbGFn\n"
+    );
+}
+
+#[test]
+fn both_launch_modes_support_modern_main_methods_and_uncaught_exceptions() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::write(
+        temp.path().join("Instance.java"),
+        "class Instance { void main(String... args) { System.out.println(args.length); } }",
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join("NoArgs.java"),
+        "class NoArgs { void main() { System.out.println(\"no-args\"); } }",
+    )
+    .unwrap();
+    fs::write(temp.path().join("Failure.java"), "class Failure { public static void main(String[] args) { throw new IllegalStateException(\"application-failure\"); } }").unwrap();
+    tool(
+        temp.path(),
+        "javac",
+        &[
+            "--release",
+            "25",
+            "-d",
+            "classes",
+            "Instance.java",
+            "NoArgs.java",
+            "Failure.java",
+        ],
+    );
+    for (main, expected) in [("Instance", "2"), ("NoArgs", "no-args"), ("Failure", "")] {
+        let mut packing = PackOptions::new(
+            temp.path().join("classes"),
+            temp.path().join(format!("{main}.janex")),
+        );
+        packing.main_class = Some(main.into());
+        pack(&packing).unwrap();
+        for mode in [LaunchMode::Bootstrap, LaunchMode::Direct] {
+            let mut options = options(&packing.output);
+            options.launch_mode = mode;
+            options.arguments = vec!["".into(), "two words".into()];
+            let plan = prepare(&options).unwrap();
+            assert_eq!(plan.launch_mode(), mode);
+            let output = capture(&plan);
+            let error = String::from_utf8_lossy(&output.stderr);
+            if main == "Failure" {
+                assert!(!output.status.success());
+                assert!(
+                    error.contains("java.lang.IllegalStateException: application-failure"),
+                    "{error}"
+                );
+                assert!(!error.contains("InvocationTargetException"), "{error}");
+            } else {
+                assert!(output.status.success(), "{error}");
+                assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), expected);
+            }
+        }
+    }
+}
+
+#[test]
+fn bootstrap_preserves_utf16_code_units_and_arguments_beyond_native_command_limits() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::write(
+        temp.path().join("Units.java"),
+        r#"
+class Units {
+    public static void main(String[] args) {
+        for (String arg : args) {
+            System.out.print(arg.length());
+            if (arg.length() <= 8) {
+                for (char unit : arg.toCharArray()) System.out.printf(":%04x", (int) unit);
+            }
+            System.out.println();
+        }
+    }
+}
+"#,
+    )
+    .unwrap();
+    tool(
+        temp.path(),
+        "javac",
+        &["--release", "8", "-d", "classes", "Units.java"],
+    );
+    let mut packing =
+        PackOptions::new(temp.path().join("classes"), temp.path().join("units.janex"));
+    packing.main_class = Some("Units".into());
+    packing.arguments = vec!["".into(), "\0".into(), "\u{1f680}".repeat(20_000)];
+    pack(&packing).unwrap();
+    let mut options = options(&packing.output);
+    options.arguments = vec!["\u{4e2d}\u{1f680}".into()];
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt;
+        options
+            .arguments
+            .push(std::ffi::OsString::from_wide(&[0xd800, 0x61, 0xdc00]));
+    }
+    let plan = prepare(&options).unwrap();
+    assert!(
+        plan.arguments()
+            .iter()
+            .all(|argument| argument.len() < 10_000)
+    );
+    let output = capture(&plan);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let expected = if cfg!(windows) {
+        "0\n1:0000\n40000\n3:4e2d:d83d:de80\n3:d800:0061:dc00\n"
+    } else {
+        "0\n1:0000\n40000\n3:4e2d:d83d:de80\n"
+    };
+    assert_eq!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .replace("\r\n", "\n"),
+        expected
+    );
+    options.launch_mode = LaunchMode::Direct;
+    assert!(prepare(&options).unwrap_err().to_string().contains("NUL"));
 }
 
 #[test]
@@ -396,13 +530,13 @@ fn module_launch_uses_filename_derived_names_and_reports_missing_dependencies() 
     let temp = tempfile::tempdir().unwrap();
     fs::create_dir_all(temp.path().join("src/library")).unwrap();
     fs::create_dir_all(temp.path().join("src/app")).unwrap();
-    fs::write(temp.path().join("src/library/Library.java"), "package library; public class Library { public static String value() { return \"automatic\"; } }").unwrap();
+    fs::write(temp.path().join("src/library/Library.java"), "package library; public class Library { public static String value() { return \"automatic\"; } public static void main(String[] args) { System.out.println(value()); } }").unwrap();
     fs::write(
         temp.path().join("src/module-info.java"),
         "module sample.app { requires auto.library; }",
     )
     .unwrap();
-    fs::write(temp.path().join("src/app/Main.java"), "package app; public class Main { public static void main(String[] args) { System.out.println(library.Library.value()); } }").unwrap();
+    fs::write(temp.path().join("src/app/Main.java"), "package app; public class Main { public static void main(String[] args) { System.out.println(library.Library.value()); for (String arg : args) System.out.println(java.util.Base64.getEncoder().encodeToString(arg.getBytes(java.nio.charset.StandardCharsets.UTF_8))); } }").unwrap();
     tool(
         temp.path(),
         "javac",
@@ -460,8 +594,48 @@ fn module_launch_uses_filename_derived_names_and_reports_missing_dependencies() 
         .module_path
         .push(temp.path().join("auto-library-1.2.jar"));
     pack(&packing).unwrap();
-    let plan = prepare(&options(&packing.output)).unwrap();
+    change_launch(&packing.output, |config| {
+        replace(
+            config,
+            1,
+            Value::map([(Value::uint(1), Value::text("sample.app"))]).unwrap(),
+        )
+    });
+    let mut unicode_options = options(&packing.output);
+    unicode_options.arguments = vec!["\u{4e2d}\u{1f680}".into()];
+    let plan = prepare(&unicode_options).unwrap();
     let output = capture(&plan);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .replace("\r\n", "\n"),
+        "automatic\n5Lit8J+agA==\n"
+    );
+    let mut direct_options = options(&packing.output);
+    direct_options.launch_mode = LaunchMode::Direct;
+    let direct = capture(&prepare(&direct_options).unwrap());
+    assert!(
+        direct.status.success(),
+        "{}",
+        String::from_utf8_lossy(&direct.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(direct.stdout).unwrap().trim(),
+        "automatic"
+    );
+    let mut automatic = PackOptions::new(
+        temp.path().join("auto-library-1.2.jar"),
+        temp.path().join("automatic-main.janex"),
+    );
+    automatic.main_module = Some("auto.library".into());
+    automatic.main_class = Some("library.Library".into());
+    pack(&automatic).unwrap();
+    let output = capture(&prepare(&options(&automatic.output)).unwrap());
     assert!(
         output.status.success(),
         "{}",

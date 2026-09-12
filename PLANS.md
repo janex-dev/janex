@@ -126,6 +126,11 @@ janex run [OPTIONS] <TARGET> [ARGS...]
 - Produce a structured execution plan, then start Java directly without a shell. Preserve JVM and
   program argument boundaries. Place preset program arguments before user-supplied arguments.
   Inherit the working directory and standard streams, and propagate the process exit status.
+- Retain explicit `bootstrap` and `direct` launch modes. The default bootstrap transports Unicode
+  program arguments independently of the native launcher's code page; direct mode uses the native
+  application entry point. Keep this choice in the runtime implementation, not the file format.
+  Do not make future runtime backends, including translated Java on Windows on Arm or IKVM,
+  depend on the bootstrap being available.
 
 ## Validation and Acceptance
 

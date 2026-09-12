@@ -8,7 +8,7 @@ use janex_core::pack::{PackOptions, PackSigner, pack};
 use janex_core::{
     authentication::{self, CmsAlgorithm, MATERIAL_LIMITS, OpenPgpAlgorithm},
     java::JavaOptions,
-    run::{RunOptions, prepare},
+    run::{LaunchMode, RunOptions, prepare},
 };
 use std::{
     ffi::OsString,
@@ -54,6 +54,9 @@ struct RunArgs {
     /// Explicit Java home, disabling runtime fallback.
     #[arg(long, value_name = "PATH")]
     java_home: Option<PathBuf>,
+    /// Preserve Unicode arguments through a bootstrap, or use the native Java entry point.
+    #[arg(long, value_enum, default_value = "bootstrap")]
+    launch_mode: LaunchModeArg,
     /// Permit local None or Checksum inputs; signed input still requires authentication.
     #[arg(long)]
     allow_unsigned: bool,
@@ -72,6 +75,15 @@ struct RunArgs {
     /// Local path or file URI, then program arguments forwarded without Janex option parsing.
     #[arg(value_name = "TARGET", required = true, num_args = 1.., trailing_var_arg = true, allow_hyphen_values = true)]
     target: Vec<OsString>,
+}
+
+/// CLI choices for application entry-point invocation.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum LaunchModeArg {
+    /// Restore Unicode program arguments in a Java 8-compatible entry layer.
+    Bootstrap,
+    /// Use the runtime's native entry point and argument conversion.
+    Direct,
 }
 
 /// Local packaging inputs and Java launch arguments.
@@ -250,6 +262,10 @@ fn run(cli: Cli) -> janex_core::Result<i32> {
             options.java = JavaOptions {
                 java: args.java,
                 java_home: args.java_home,
+            };
+            options.launch_mode = match args.launch_mode {
+                LaunchModeArg::Bootstrap => LaunchMode::Bootstrap,
+                LaunchModeArg::Direct => LaunchMode::Direct,
             };
             options.allow_unsigned = args.allow_unsigned;
             options.openpgp_trust = args

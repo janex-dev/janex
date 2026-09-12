@@ -4,6 +4,7 @@
 //! Local packaging, signing, authentication, and Java launch services for Janex containers.
 
 pub mod authentication;
+mod bootstrap;
 mod error;
 pub mod import;
 pub mod java;

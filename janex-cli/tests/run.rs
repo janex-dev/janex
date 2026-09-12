@@ -82,6 +82,25 @@ public class Main {
             .replace("\r\n", "\n"),
         "[preset]\n[]\n[two words]\n[--help]\n[--java]\n[fake]\n[@missing]\n[--]\n"
     );
+    let direct = Command::new(env!("CARGO_BIN_EXE_janex"))
+        .current_dir(temp.path())
+        .args(["run", "--allow-unsigned", "--launch-mode", "direct"])
+        .arg(&target)
+        .args(["", "two words"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        direct.status.code(),
+        Some(42),
+        "{}",
+        String::from_utf8_lossy(&direct.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(direct.stdout)
+            .unwrap()
+            .replace("\r\n", "\n"),
+        "[preset]\n[]\n[two words]\n"
+    );
     let help = Command::new(env!("CARGO_BIN_EXE_janex"))
         .args(["run", "--help"])
         .output()

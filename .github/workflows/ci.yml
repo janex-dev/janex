@@ -33,6 +33,8 @@ jobs:
           java-version: '25'
       - name: Check formatting
         run: cargo fmt --all --check
+      - name: Verify embedded Java bootstrap
+        run: python janex-core/bootstrap/build.py --check
       - name: Check warnings
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Run tests and documentation examples

@@ -6,6 +6,7 @@
 use crate::{
     Error, Result,
     authentication::{Authentication, CmsTrust, OpenPgpCertificate},
+    bootstrap,
     error::invalid,
     java::{self, JavaOptions, JavaRuntime},
     materialize::materialize,
@@ -30,6 +31,21 @@ use std::{
 };
 use tempfile::TempDir;
 
+/// Selects how Java reaches the application entry point.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum LaunchMode {
+    /// Uses a Java 8-compatible entry layer to preserve Unicode program arguments.
+    ///
+    /// Unix arguments must be Unicode; Windows UTF-16 code units are retained verbatim.
+    #[default]
+    Bootstrap,
+    /// Invokes the runtime's native launcher with the application entry point directly.
+    ///
+    /// Argument conversion follows that launcher's behavior, including Windows code-page limits.
+    /// Preparation rejects NUL in native process arguments.
+    Direct,
+}
+
 /// Local input, runtime overrides, and per-launch resource limits.
 #[derive(Clone, Debug)]
 pub struct RunOptions {
@@ -39,6 +55,8 @@ pub struct RunOptions {
     pub application: Option<String>,
     /// Java executable or home override, otherwise JAVA_HOME followed by PATH.
     pub java: JavaOptions,
+    /// Entry-point invocation strategy; defaults to lossless bootstrap argument transport.
+    pub launch_mode: LaunchMode,
     /// Arguments appended after the descriptor's preset program arguments.
     pub arguments: Vec<OsString>,
     /// Explicit permission to execute None or Checksum verification types.
@@ -66,6 +84,7 @@ impl RunOptions {
             target: target.into(),
             application: None,
             java: JavaOptions::default(),
+            launch_mode: LaunchMode::default(),
             arguments: Vec::new(),
             allow_unsigned: false,
             cms_trust: CmsTrust::default(),
@@ -85,6 +104,8 @@ impl RunOptions {
 pub struct ExecutionPlan {
     /// Runtime selected after condition and local-module checks.
     runtime: JavaRuntime,
+    /// Entry-point strategy selected by the caller.
+    launch_mode: LaunchMode,
     /// Complete ordered process arguments, without shell encoding.
     arguments: Vec<OsString>,
     /// Full-snapshot checksum result retained for inspection.
@@ -103,7 +124,14 @@ impl ExecutionPlan {
         &self.runtime
     }
 
-    /// Returns JVM options, entry point, and program arguments in process order.
+    /// Returns the selected entry-point invocation strategy.
+    pub fn launch_mode(&self) -> LaunchMode {
+        self.launch_mode
+    }
+
+    /// Returns the actual Java process arguments in order.
+    ///
+    /// Bootstrap launches carry program arguments in the temporary JAR instead of this vector.
     pub fn arguments(&self) -> &[OsString] {
         &self.arguments
     }
@@ -349,10 +377,11 @@ fn prepare_runtime(
         module_path,
         agents,
         &directory,
-        &options.arguments,
+        options,
     )?;
     Ok(ExecutionPlan {
         runtime,
+        launch_mode: options.launch_mode,
         arguments,
         integrity,
         authentication,
@@ -416,13 +445,43 @@ fn arguments(
     module_path: Vec<PathBuf>,
     agents: Vec<OsString>,
     directory: &TempDir,
-    user_arguments: &[OsString],
+    options: &RunOptions,
 ) -> Result<Vec<OsString>> {
+    options
+        .limits
+        .elements(launch.arguments.len() as u64 + options.arguments.len() as u64)?;
+    let program_arguments: Vec<_> = launch
+        .arguments
+        .iter()
+        .map(OsString::from)
+        .chain(options.arguments.iter().cloned())
+        .collect();
+    let bridge = if options.launch_mode == LaunchMode::Bootstrap {
+        Some(bootstrap::write(
+            directory.path(),
+            &launch.entry_point,
+            &program_arguments,
+            runtime.version.feature() >= 25
+                || (runtime.version.feature() >= 21
+                    && launch
+                        .jvm_options
+                        .iter()
+                        .any(|option| option == "--enable-preview")),
+            options.limits,
+        )?)
+    } else {
+        None
+    };
     let mut arguments = Vec::new();
     if runtime.version.feature() >= 9 {
         arguments.push("--disable-@files".into());
     }
     arguments.extend(launch.jvm_options.iter().map(OsString::from));
+    if launch.entry_point.main_module.is_none()
+        && let Some(bridge) = &bridge
+    {
+        class_path.insert(0, bridge.clone());
+    }
     if class_path.is_empty() {
         let empty = directory.path().join("empty-classpath");
         fs::create_dir(&empty)?;
@@ -436,25 +495,38 @@ fn arguments(
     }
     arguments.extend(agents);
     if let Some(module) = &launch.entry_point.main_module {
-        let entry = launch
-            .entry_point
-            .main_class
-            .as_ref()
-            .map_or_else(|| module.clone(), |class| format!("{module}/{class}"));
-        arguments.push("--module".into());
-        arguments.push(entry.into());
-    } else {
-        arguments.push(
+        let entry = if let Some(bridge) = &bridge {
+            arguments.push("--patch-module".into());
+            let mut patch = OsString::from(format!("{module}="));
+            patch.push(bridge);
+            arguments.push(patch);
+            format!("{module}/{}", bootstrap::MAIN_CLASS)
+        } else {
             launch
                 .entry_point
                 .main_class
                 .as_ref()
-                .expect("validated classpath entry point")
-                .into(),
+                .map_or_else(|| module.clone(), |class| format!("{module}/{class}"))
+        };
+        arguments.push("--module".into());
+        arguments.push(entry.into());
+    } else {
+        arguments.push(
+            if bridge.is_some() {
+                bootstrap::MAIN_CLASS
+            } else {
+                launch
+                    .entry_point
+                    .main_class
+                    .as_deref()
+                    .expect("validated classpath entry point")
+            }
+            .into(),
         );
     }
-    arguments.extend(launch.arguments.iter().map(OsString::from));
-    arguments.extend_from_slice(user_arguments);
+    if bridge.is_none() {
+        arguments.extend(program_arguments);
+    }
     if arguments
         .iter()
         .any(|argument| argument.as_encoded_bytes().contains(&0))

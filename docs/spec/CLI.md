@@ -206,6 +206,7 @@ All arguments after the target are forwarded to the application, including empty
 - `--application <ID>` selects an application section; otherwise the file must contain exactly one.
 - `--java <PATH>` selects a Java executable or a bare executable name on `PATH`.
 - `--java-home <PATH>` selects the Java executable under that home. It conflicts with `--java`.
+- `--launch-mode <bootstrap|direct>` selects entry-point invocation. The default is `bootstrap`.
 - `--allow-unsigned` permits local files using None or Checksum verification. It never bypasses
   authentication for a signed file or an explicit signer requirement.
 - `--trust-cms-certificate <FILE>` requires that signer certificate. Repeat it to require every
@@ -243,6 +244,14 @@ An explicit override fails without fallback. Otherwise, failed probes, mismatche
 and unsatisfied local module requirements cause the launcher to try the next candidate.
 Classpath launching supports Java 8; module launching requires Java 9 or later.
 
+Bootstrap mode restores program arguments from private UTF-16 launch data before invoking the
+application, preserving characters that the Windows Java launcher's ANSI conversion would lose.
+It supports classpath and module entry points, including Java 25 instance and no-argument main
+methods. Direct mode invokes the native application entry point without this layer and retains
+the runtime's argument-conversion limits. Both modes preserve argument order and boundaries.
+On Unix, non-Unicode native argument bytes require direct mode. JVM options, Java paths, and
+agent options use the native launcher in both modes.
+
 Conditions, overlays, and resource layers use the selected runtime and invocation `run`.
 Each distinct local resource root becomes a JAR in its own temporary directory, retaining its
 JAR filename for automatic-module naming. Module requirements use the selected Java runtime
@@ -265,6 +274,7 @@ window on Windows. The CLI propagates the child's exit code; Unix signal termina
 janex run --allow-unsigned ./app.janex
 janex run --allow-unsigned --application javac ./jdk-tools.janex --version
 janex run --allow-unsigned --java-home /opt/jdk ./app.janex --config=config.toml
+janex run --allow-unsigned --launch-mode direct ./app.janex
 janex run --trust-cms-certificate signer.pem ./app.janex
 ```
 
