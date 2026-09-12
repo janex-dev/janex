@@ -66,6 +66,8 @@ pub struct PackOptions {
     pub compression_level: i32,
     /// Compare a CLASSFILE-transformed candidate and retain it only when the complete file is smaller.
     pub transform_classfiles: bool,
+    /// Append the portable Java launcher as a JAR tail for `java -jar` execution.
+    pub java_launcher: bool,
     /// Optional publisher signer; absent uses Checksum verification.
     pub signer: Option<PackSigner>,
 }
@@ -98,6 +100,7 @@ impl PackOptions {
             import: ImportOptions::default(),
             compression_level: 3,
             transform_classfiles: true,
+            java_launcher: false,
             signer: None,
         }
     }
@@ -126,6 +129,18 @@ pub struct PackReport {
 /// The smaller complete container wins when
 /// comparing transformed and ordinary class files. Ties retain ordinary class files.
 pub fn pack(options: &PackOptions) -> Result<PackReport> {
+    if options.java_launcher && options.signer.is_some() {
+        return Err(invalid(
+            "the standalone Java launcher does not yet support signed packages",
+        ));
+    }
+    if options.java_launcher
+        && (!options.external_class_path.is_empty() || !options.external_module_path.is_empty())
+    {
+        return Err(invalid(
+            "the standalone Java launcher requires embedded dependencies; use local classpath and module-path inputs",
+        ));
+    }
     match fs::symlink_metadata(&options.output) {
         Ok(_) => {
             return Err(std::io::Error::new(
@@ -363,9 +378,25 @@ fn write_package(
         Some(application.type_info().clone()),
     )?;
     let empty_region = Value::map([(Value::uint(0), Value::uint(0))])?;
+    let tail: &[u8] = if options.java_launcher {
+        include_bytes!("../../janex-bootstrap/bootstrap.jar")
+    } else {
+        &[]
+    };
+    let tail_region = if tail.is_empty() {
+        empty_region.clone()
+    } else {
+        Value::map([
+            (Value::uint(0), Value::uint(tail.len() as u64)),
+            (
+                Value::uint(1),
+                Value::bytes(&Checksum::compute(Algorithm::Sha256, tail)?.encode()),
+            ),
+        ])?
+    };
     let metadata = Value::map([
         (Value::uint(1), empty_region.clone()),
-        (Value::uint(2), empty_region),
+        (Value::uint(2), tail_region),
     ])?;
     match &options.signer {
         Some(PackSigner::Cms(signer)) => {
@@ -379,7 +410,8 @@ fn write_package(
             })?;
         }
         None => {
-            writer.finish(metadata)?;
+            let mut output = writer.finish(metadata)?;
+            output.write_all(tail)?;
         }
     }
     Ok(transformed)

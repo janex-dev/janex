@@ -14,4 +14,5 @@ tasks.assemble {
 
 tasks.check {
     dependsOn(":janex-bootstrap:check")
+    dependsOn(":janex-reader:check")
 }

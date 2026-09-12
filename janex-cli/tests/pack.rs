@@ -21,6 +21,7 @@ fn cli_packs_local_input_and_preserves_complete_arguments() {
         .arg("--output")
         .arg(&output)
         .args([
+            "--java-launcher",
             "--main-class",
             "example.Main",
             "--application",
@@ -51,6 +52,7 @@ fn cli_packs_local_input_and_preserves_complete_arguments() {
     let mut reader =
         Reader::open_auto(fs::File::open(&output).unwrap(), Limits::default()).unwrap();
     assert!(reader.verify_checksums().unwrap().complete_secure_coverage);
+    assert!(reader.range().end < fs::metadata(&output).unwrap().len());
     let apps = read_applications(&mut reader).unwrap();
     assert_eq!(apps[0].id(), "chosen");
     let launch = apps[0]
@@ -96,6 +98,7 @@ fn cli_documents_implemented_options_and_rejects_incomplete_commands() {
         "--jvm-option",
         "--argument",
         "--java-version",
+        "--java-launcher",
     ] {
         assert!(text.contains(flag), "{flag}");
     }

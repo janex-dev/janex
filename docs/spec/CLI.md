@@ -36,6 +36,7 @@ janex pack <SOURCE> --output <FILE>
     [--external-module-path <URI> <CHECKSUM>]...
     [--argument <ARG>]...
     [--java-version <VERS>]
+    [--java-launcher]
     [--cms-certificate <FILE> --cms-key <FILE>]
     [--cms-algorithm <ALGORITHM>]
     [--openpgp-key <FILE>]
@@ -88,6 +89,31 @@ Encrypted keys prompt for a hidden password when standard input is a terminal. O
 `--key-password-file` is required. One final LF or CRLF is removed from that file; other bytes
 are retained. Passwords are never accepted as command-line values. Excessive encoded key-derivation
 costs fail before decryption. Key and trust files are individually limited to 4 MiB.
+
+### Standalone Java Launcher
+
+`--java-launcher` appends an executable bootstrap JAR using the existing JAR Tail Wrapper. The
+package metadata records its length and SHA-256 checksum. The format remains version 0.1.
+
+```shell
+janex pack app.jar --output app.janex --java-launcher
+java -jar app.janex arg1 arg2
+```
+
+The Java reader selects the application and resources, then starts a child JVM from the same Java
+installation with the package's JVM options and existing resource loader. Preset arguments precede
+user arguments; exit status is propagated and temporary files are removed after exit. Java 8+
+supports classpath applications; modules require Java 9+. `-Djanex.application=ID` selects a target.
+Options supplied before `-jar` are forwarded to the child before the package's options. Arguments
+already altered by the platform's initial Java launcher cannot be recovered.
+
+The initial standalone profile requires embedded dependencies and SHA-256/SHA-512 integrity coverage.
+Signing options and external path declarations cannot be combined with `--java-launcher`. The Java
+reader rejects signed packages, agents, external dependencies, external Zstd dictionaries, ZIP64
+tails, and startup options requiring direct mode. Per-file checksums are not repeated after the
+complete encoded sections have been verified. This entry point does not establish publisher trust:
+the appended launcher executes before it can check the package. Existing `janex run` bootstrap and
+direct modes remain available, including their signature and remote-dependency capabilities.
 
 ### OpenPGP Signing
 

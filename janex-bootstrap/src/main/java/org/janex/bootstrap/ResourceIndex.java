@@ -11,8 +11,8 @@ import org.janex.bootstrap.internal.zstd.Zstandard;
 
 /// Reads Host-selected resources from a private snapshot without rebuilding classpath JARs.
 ///
-/// The Host authenticates the complete snapshot before publishing this index. This reader
-/// does not establish publisher trust or repeat per-entry checksum verification.
+/// The launch preparer verifies the snapshot before publishing this index and applies its own
+/// trust policy. This reader does not establish publisher trust or repeat per-entry checksums.
 final class ResourceIndex implements Closeable {
     /// Maximum size of an individual decoded value.
     private final int maxBytes;

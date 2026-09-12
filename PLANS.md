@@ -19,7 +19,7 @@ Update [FileFormat.md](docs/spec/FileFormat.md) before implementing the affected
   filename for Java path materialization. It must be a single filename. Materialize each resource
   root in a separate directory to avoid filename collisions. Use `resources.jar` when absent.
 
-Use five Rust crates and one Java bootstrap project:
+Use five Rust crates and two Java projects:
 
 - Use `janex-format` for container reading and writing, compression, resource trees, CLASSFILE
   transforms, format conditions, version comparison, and checksums. It does not depend on the
@@ -29,7 +29,10 @@ Use five Rust crates and one Java bootstrap project:
 - Use `janex-java` for runtime discovery and probes, bounded JAR reading, manifests, and native
   or bootstrap launch argument preparation. Its inputs do not contain Janex format types.
 - Use `janex-bootstrap` for portable Java resource loading and entry invocation. The Host supplies
-  an evaluated resource index over its verified snapshot; Java does not repeat launch policy.
+  an evaluated resource index over its verified snapshot on the default launch path.
+- Use `janex-reader` for independent Java parsing, integrity checks, and launch/resource selection.
+  The optional executable JAR tail uses it to produce the same private resource index. A child JVM
+  from the current Java installation receives the selected startup options and existing loader.
 - Use `janex-host` to orchestrate local packaging, load trust material, apply execution policy,
   prepare resources, select compatible runtimes, and own temporary files and process lifetimes.
   It converts format limits, conditions, and application descriptors into capability inputs.
@@ -37,6 +40,18 @@ Use five Rust crates and one Java bootstrap project:
   [CLI.md](docs/spec/CLI.md) alongside the command implementation.
 
 ## Implementation Order and Interfaces
+
+### Standalone Java Launch
+
+`pack --java-launcher` appends the bootstrap JAR using the existing JAR Tail Wrapper. Metadata binds
+the tail's exact size and SHA-256 digest. Keep native bootstrap and direct launching available.
+The initial standalone profile supports embedded classpath/module roots, resource layers, shared
+string pools, Stored/Extents blobs, dictionary-free Zstandard, and CLASSFILE transforms on Java 8+.
+It requires SHA-256/SHA-512 metadata, section, and nonempty external-region checksums. It rejects
+signed packages, external dependencies, agents, external dictionaries, and unsupported startup
+options explicitly. Publisher authentication and remote acquisition remain Host capabilities.
+Verify Java 8 and current-JDK launches, module resources, JVM options, exact preset arguments,
+exit status, malformed encoding, corruption rejection, and continued native launching.
 
 ### 1. Format Reading and Writing
 

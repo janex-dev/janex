@@ -12,6 +12,10 @@ plugins {
 group = rootProject.group
 version = rootProject.version
 
+dependencies {
+    implementation(project(":janex-reader"))
+}
+
 java {
     toolchain.languageVersion = JavaLanguageVersion.of(25)
 }
@@ -37,9 +41,16 @@ tasks.withType<Jar>().configureEach {
 }
 
 tasks.jar {
+    dependsOn(configurations.runtimeClasspath)
     archiveFileName = "janex-bootstrap.jar"
-    manifest.attributes("Multi-Release" to "true")
+    manifest.attributes(
+        "Multi-Release" to "true",
+        "Main-Class" to "org.janex.bootstrap.Standalone"
+    )
     from(java9.output) { into("META-INF/versions/9") }
+    from(configurations.runtimeClasspath.map { files -> files.map { zipTree(it) } }) {
+        exclude("META-INF/MANIFEST.MF")
+    }
     from(rootProject.file("LICENSE")) {
         into("META-INF")
         rename { "LICENSE-MPL-2.0" }

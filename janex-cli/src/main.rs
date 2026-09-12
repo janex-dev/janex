@@ -101,6 +101,9 @@ enum LaunchModeArg {
 /// Local packaging inputs and Java launch arguments.
 #[derive(Args)]
 struct PackArgs {
+    /// Append a portable launcher so the package can also run with java -jar.
+    #[arg(long)]
+    java_launcher: bool,
     /// Primary directory or JAR.
     source: PathBuf,
     /// Destination file; existing files are never replaced.
@@ -237,6 +240,7 @@ fn run(cli: Cli) -> janex_host::Result<i32> {
     match cli.command {
         Command::Pack(args) => {
             let mut options = PackOptions::new(args.source, args.output);
+            options.java_launcher = args.java_launcher;
             options.class_path = args.class_path;
             options.module_path = args.module_path;
             options.external_class_path = external_entries(&args.external_class_path, false)?;
