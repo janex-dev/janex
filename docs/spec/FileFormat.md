@@ -173,14 +173,13 @@ Checksum algorithms:
 ```rust
 #[repr(u8)]
 enum ChecksumAlgorithm {
-    XXH3_64 = 1,  // 8 bytes
-    XXH3_128 = 2, // 16 bytes
+    XXH3_64 = 0x11,  // 8 bytes
+    XXH3_128 = 0x12, // 16 bytes
     
-    SHA256 = 3, // 32 bytes
-
-    SHA512 = 4, // 64 bytes
+    SHA256 = 0x21, // 32 bytes
+    SHA512 = 0x22, // 64 bytes
     
-    SM3 = 5,    // 32 bytes
+    SM3 = 0x31, // 32 bytes
 }
 ```
 

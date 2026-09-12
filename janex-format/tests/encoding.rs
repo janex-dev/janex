@@ -218,39 +218,39 @@ fn cbor_limits_apply_before_large_collections_and_nested_values() {
 #[test]
 fn digest_known_answers_and_wire_representation() {
     for (algorithm, id, secure, input, expected) in [
-        (Algorithm::Xxh3_64, 1, false, "", "2d06800538d394c2"),
-        (Algorithm::Xxh3_64, 1, false, "abc", "78af5f94892f3950"),
+        (Algorithm::Xxh3_64, 0x11, false, "", "2d06800538d394c2"),
+        (Algorithm::Xxh3_64, 0x11, false, "abc", "78af5f94892f3950"),
         (
             Algorithm::Xxh3_128,
-            2,
+            0x12,
             false,
             "",
             "99aa06d3014798d86001c324468d497f",
         ),
         (
             Algorithm::Xxh3_128,
-            2,
+            0x12,
             false,
             "abc",
             "06b05ab6733a618578af5f94892f3950",
         ),
         (
             Algorithm::Sha256,
-            3,
+            0x21,
             true,
             "abc",
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
         ),
         (
             Algorithm::Sha512,
-            4,
+            0x22,
             true,
             "abc",
             "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f",
         ),
         (
             Algorithm::Sm3,
-            5,
+            0x31,
             true,
             "abc",
             "66c7f0f462eeedd9d1f2d46bdc10e4e24167c4875cf2f7a2297da02b8f4ba8e0",
@@ -286,11 +286,14 @@ fn digest_known_answers_and_wire_representation() {
         );
     }
     assert!(Checksum::decode(&[0]).is_err());
-    assert!(Checksum::decode(&[2, 0]).is_err());
-    assert_eq!(
-        Checksum::decode(&[99, 0]).unwrap_err().kind(),
-        ErrorKind::Unsupported
-    );
+    assert!(Checksum::decode(&[0x12, 0]).is_err());
+    for id in [1, 2, 3, 4, 5, 0x10, 0x13, 0x20, 0x23, 0x30, 0x32, 0xff] {
+        assert_eq!(
+            Checksum::decode(&[id, 0]).unwrap_err().kind(),
+            ErrorKind::Unsupported,
+            "accepted undefined algorithm {id:#04x}",
+        );
+    }
 }
 
 #[test]

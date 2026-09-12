@@ -12,15 +12,15 @@ use std::io::Read;
 #[repr(u8)]
 pub enum Algorithm {
     /// XXH3-64 with the default secret, seed zero, and a big-endian digest; not cryptographically secure.
-    Xxh3_64 = 1,
+    Xxh3_64 = 0x11,
     /// XXH3-128 with the default secret, seed zero, and a big-endian digest; not cryptographically secure.
-    Xxh3_128 = 2,
+    Xxh3_128 = 0x12,
     /// SHA-256 with a 32-byte digest.
-    Sha256 = 3,
+    Sha256 = 0x21,
     /// SHA-512 with a 64-byte digest.
-    Sha512 = 4,
+    Sha512 = 0x22,
     /// SM3 with a 32-byte digest.
-    Sm3 = 5,
+    Sm3 = 0x31,
 }
 
 impl Algorithm {
@@ -43,11 +43,11 @@ impl Algorithm {
     pub fn from_id(id: u8) -> Result<Self> {
         match id {
             0 => Err(invalid("checksum algorithm zero is reserved")),
-            1 => Ok(Self::Xxh3_64),
-            2 => Ok(Self::Xxh3_128),
-            3 => Ok(Self::Sha256),
-            4 => Ok(Self::Sha512),
-            5 => Ok(Self::Sm3),
+            0x11 => Ok(Self::Xxh3_64),
+            0x12 => Ok(Self::Xxh3_128),
+            0x21 => Ok(Self::Sha256),
+            0x22 => Ok(Self::Sha512),
+            0x31 => Ok(Self::Sm3),
             _ => Err(Error::new(
                 ErrorKind::Unsupported,
                 format!("checksum algorithm {id}"),
