@@ -47,6 +47,58 @@ pub struct JavaRuntime {
 }
 
 impl JavaRuntime {
+    /// Validates an indexed bootstrap's module graph without application main methods or agents.
+    pub(crate) fn validate_indexed_modules(
+        &self,
+        bridge: &Path,
+        options: &[String],
+    ) -> Result<Vec<String>> {
+        let mut resolution = Vec::new();
+        let mut index = 0;
+        while index < options.len() {
+            let key = options[index].split('=').next().unwrap();
+            if matches!(
+                key,
+                "--limit-modules" | "--upgrade-module-path" | "--enable-native-access"
+            ) {
+                resolution.push(options[index].clone());
+                if !options[index].contains('=') {
+                    index += 1;
+                    resolution.push(
+                        options
+                            .get(index)
+                            .ok_or_else(|| invalid("missing module option operand"))?
+                            .clone(),
+                    );
+                }
+            }
+            index += 1;
+        }
+        let mut args = crate::launch::indexed_module_options(&resolution)?;
+        args.push("--add-modules=ALL-SYSTEM".into());
+        args.push("-cp".into());
+        args.push(bridge.as_os_str().into());
+        args.push("org.janex.bootstrap.ModuleSupport".into());
+        let output = Command::new(&self.executable)
+            .args(&args)
+            .stdin(Stdio::null())
+            .output()?;
+        if !output.status.success() {
+            return Err(invalid(format!(
+                "Java module validation failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+        let text =
+            String::from_utf8(output.stdout).map_err(|_| invalid("invalid module probe output"))?;
+        let names: Vec<String> = text.lines().map(str::to_owned).collect();
+        if names.iter().any(|name| {
+            name.is_empty() || name.contains([',', '=', '\0']) || !self.modules.contains_key(name)
+        }) {
+            return Err(invalid("invalid module probe output"));
+        }
+        Ok(names)
+    }
     /// Probes one executable's properties and, on Java 9 or later, system modules.
     ///
     /// Probes start child processes without a shell, capture their output, and do not
@@ -130,6 +182,8 @@ impl JavaRuntime {
 }
 
 /// Joins explicit Java path entries, rejecting separators that Java cannot escape.
+///
+/// Windows verbatim disk and UNC prefixes are converted to ordinary absolute paths for Java.
 pub fn join_path(paths: &[PathBuf]) -> Result<OsString> {
     let separator = if cfg!(windows) { b';' } else { b':' };
     if paths
@@ -140,7 +194,33 @@ pub fn join_path(paths: &[PathBuf]) -> Result<OsString> {
             "Java path entry contains the platform path separator",
         ));
     }
-    std::env::join_paths(paths).map_err(|error| invalid(format!("invalid Java path: {error}")))
+    std::env::join_paths(paths.iter().map(|path| java_path(path)))
+        .map_err(|error| invalid(format!("invalid Java path: {error}")))
+}
+
+/// Converts Windows filesystem prefixes that older Java runtimes reject.
+fn java_path(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+        let mut components = path.components();
+        if let Some(Component::Prefix(prefix)) = components.next() {
+            let mut result = match prefix.kind() {
+                Prefix::VerbatimDisk(drive) => PathBuf::from(format!("{}:", char::from(drive))),
+                Prefix::VerbatimUNC(server, share) => {
+                    let mut unc = OsString::from("\\\\");
+                    unc.push(server);
+                    unc.push("\\");
+                    unc.push(share);
+                    PathBuf::from(unc)
+                }
+                _ => return path.to_owned(),
+            };
+            result.push(components.as_path());
+            return result;
+        }
+    }
+    path.to_owned()
 }
 
 /// Returns executable candidates in explicit-override, JAVA_HOME, then PATH order.
@@ -337,6 +417,20 @@ mod tests {
     //! Pure settings and candidate-order tests without global environment mutation.
     use super::*;
     use std::fs;
+
+    #[cfg(windows)]
+    #[test]
+    fn java_paths_accept_canonical_disk_and_unc_paths() {
+        assert_eq!(
+            join_path(&[
+                PathBuf::from(r"\\?\C:\packages\app.jar"),
+                PathBuf::from(r"\\?\UNC\server\share\app.jar")
+            ])
+            .unwrap(),
+            OsString::from(r"C:\packages\app.jar;\\server\share\app.jar")
+        );
+        assert!(join_path(&[PathBuf::from(r"C:\bad;path.jar")]).is_err());
+    }
 
     #[test]
     fn parses_java_8_aliases_unicode_properties_and_module_versions() {

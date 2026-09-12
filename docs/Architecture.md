@@ -343,7 +343,7 @@ The workspace has five Rust crates and a Java bootstrap project:
 | --- | --- |
 | `janex-format` | Container codecs, resources, CLASSFILE transforms, format conditions, version ranges, compression, and checksums |
 | `janex-signature` | CMS/OpenPGP signatures, keys, certificate validation, and explicit authentication policy |
-| `janex-bootstrap` | Java entry invocation, indexed snapshot resource loading, CLASSFILE restoration, and portable Zstandard decoding |
+| `janex-bootstrap` | Java entry invocation, indexed classpath/module loading, resource URLs, read-only NIO, CLASSFILE restoration, and portable Zstandard decoding |
 | `janex-java` | Java runtime facts, bounded JAR reading, manifests, and direct/bootstrap launch preparation |
 | `janex-host` | Packaging and application workflows, trust-material loading, policy, resource materialization, and process/resource lifetimes |
 | `janex-cli` | Argument parsing, terminal interaction, and presentation |

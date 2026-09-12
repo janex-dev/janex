@@ -602,6 +602,7 @@ fn module_launch_uses_filename_derived_names_and_reports_missing_dependencies() 
     let mut unicode_options = options(&packing.output);
     unicode_options.arguments = vec!["\u{4e2d}\u{1f680}".into()];
     let plan = prepare(&unicode_options).unwrap();
+    assert_eq!(fs::read_dir(plan.directory()).unwrap().count(), 2);
     let output = capture(&plan);
     assert!(
         output.status.success(),
@@ -616,6 +617,11 @@ fn module_launch_uses_filename_derived_names_and_reports_missing_dependencies() 
     );
     let mut direct_options = options(&packing.output);
     direct_options.launch_mode = LaunchMode::Direct;
+    direct_options.arguments = vec![
+        "@literal".into(),
+        "@@double".into(),
+        "--disable-@files".into(),
+    ];
     let direct = capture(&prepare(&direct_options).unwrap());
     assert!(
         direct.status.success(),
@@ -623,8 +629,10 @@ fn module_launch_uses_filename_derived_names_and_reports_missing_dependencies() 
         String::from_utf8_lossy(&direct.stderr)
     );
     assert_eq!(
-        String::from_utf8(direct.stdout).unwrap().trim(),
-        "automatic"
+        String::from_utf8(direct.stdout)
+            .unwrap()
+            .replace("\r\n", "\n"),
+        "automatic\nQGxpdGVyYWw=\nQEBkb3VibGU=\nLS1kaXNhYmxlLUBmaWxlcw==\n"
     );
     let mut automatic = PackOptions::new(
         temp.path().join("auto-library-1.2.jar"),
@@ -829,6 +837,7 @@ public class Main {
             check(first.openConnection().getPermission() == null);
             check("janex".equals(Main.class.getProtectionDomain().getCodeSource().getLocation().getProtocol()));
             check(loader.getResources("").hasMoreElements());
+            org.janex.bootstrap.FileSystemTest.run(escaped);
         }
         System.out.println("resources-ok");
     }
@@ -837,7 +846,22 @@ public class Main {
     tool(
         temp.path(),
         "javac",
-        &["--release", "8", "-d", "main", "Service.java", "Main.java"],
+        &[
+            "--release",
+            "8",
+            "-d",
+            "main",
+            "Service.java",
+            "Main.java",
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .join(
+                    "janex-bootstrap/src/testFixtures/java/org/janex/bootstrap/FileSystemTest.java",
+                )
+                .to_str()
+                .unwrap(),
+        ],
     );
     fs::write(temp.path().join("Provider.java"), "package other; public class Provider implements sample.Service { public String value() { return \"provider\"; } }").unwrap();
     fs::write(
@@ -924,6 +948,22 @@ public class Main {
             String::from_utf8(output.stdout).unwrap().trim(),
             "resources-ok"
         );
+        if mode == LaunchMode::Bootstrap
+            && let Some(home) = std::env::var_os("JANEX_TEST_JAVA8_HOME")
+        {
+            running.java.java = None;
+            running.java.java_home = Some(home.into());
+            let output = capture(&prepare(&running).unwrap());
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap().trim(),
+                "resources-ok"
+            );
+        }
     }
     let mut running = options(&packing.output);
     running.max_materialized_bytes = 100;
@@ -933,4 +973,215 @@ public class Main {
             .to_string()
             .contains("resource byte limit")
     );
+}
+
+#[test]
+fn indexed_modules_expose_readers_filesystems_services_and_access_options() {
+    let temp = tempfile::tempdir().unwrap();
+    for path in [
+        "src/service.api/api",
+        "src/service.provider/impl",
+        "src/sample.app/app",
+        "extra/outside",
+        "agent",
+    ] {
+        fs::create_dir_all(temp.path().join(path)).unwrap();
+    }
+    for (path, text) in [
+        (
+            "src/service.api/module-info.java",
+            "module service.api { exports api; }",
+        ),
+        (
+            "src/service.api/api/Greeting.java",
+            "package api; public interface Greeting { String value(); }",
+        ),
+        (
+            "src/service.provider/module-info.java",
+            "module service.provider { requires service.api; provides api.Greeting with impl.GreetingImpl; }",
+        ),
+        (
+            "src/service.provider/impl/GreetingImpl.java",
+            "package impl; public class GreetingImpl implements api.Greeting { private String secret = \"private\"; public String value() { return \"service\"; } }",
+        ),
+        (
+            "src/sample.app/module-info.java",
+            "module sample.app { requires service.api; uses api.Greeting; }",
+        ),
+        (
+            "extra/outside/Helper.java",
+            "package outside; public class Helper {}",
+        ),
+    ] {
+        fs::write(temp.path().join(path), text).unwrap();
+    }
+    fs::write(temp.path().join("src/sample.app/app/Main.java"), r#"
+package app;
+import java.io.*;
+import java.lang.module.*;
+import java.nio.*;
+import java.nio.file.*;
+import java.util.*;
+public class Main {
+    static void check(boolean value) { if (!value) throw new AssertionError(); }
+    public static void main(String[] args) throws Exception {
+        Module self = Main.class.getModule();
+        ClassLoader loader = ClassLoader.getSystemClassLoader();
+        check(self.getLayer() != ModuleLayer.boot());
+        check(Main.class.getClassLoader() == loader && Thread.currentThread().getContextClassLoader() == loader);
+        check("once".equals(System.getProperty("agent.executed")));
+        api.Greeting service = ServiceLoader.load(api.Greeting.class).iterator().next();
+        check("service".equals(service.value()));
+        check(ServiceLoader.load(self.getLayer(), api.Greeting.class).iterator().hasNext());
+        Module provider = service.getClass().getModule();
+        check(self.canRead(provider) && provider.isExported("impl", self));
+        java.lang.reflect.Field field = service.getClass().getDeclaredField("secret");
+        field.setAccessible(true); check(field.get(service).equals("private"));
+        String.class.getDeclaredField("value").setAccessible(true);
+        Module foreign = new ClassLoader() {}.getUnnamedModule();
+        check(self.canRead(foreign) && self.isExported("app", foreign) && self.isOpen("app", foreign));
+        check((Boolean) Module.class.getMethod("isNativeAccessEnabled").invoke(self));
+        check(!Class.forName("outside.Helper").getModule().isNamed());
+        check(loader.getResource("impl/secret.txt") == null);
+        try (InputStream input = provider.getResourceAsStream("impl/secret.txt")) { check(input.read() == 's'); }
+        ModuleReference reference = self.getLayer().configuration().findModule("sample.app").get().reference();
+        check(reference.location().get().getScheme().equals("janex"));
+        check(Files.isDirectory(Paths.get(reference.location().get())));
+        ModuleReader reader = reference.open();
+        ModuleReader independent = reference.open();
+        check(reader.find("missing").isEmpty());
+        check(reader.find("").isEmpty());
+        check(reader.find("app/../app/data.txt").isEmpty());
+        check(reader.find("app").get().getPath().endsWith("/"));
+        check(reader.find("app/").isPresent());
+        try (java.util.stream.Stream<String> names = reader.list()) { check(names.anyMatch("app/"::equals)); }
+        java.net.URI uri = reader.find("app/data.txt").get();
+        check("payload".equals(new String(Files.readAllBytes(Paths.get(uri)), "UTF-8")));
+        check(uri.toURL().openStream().read() == 'p');
+        ByteBuffer data = reader.read("app/data.txt").get();
+        check(data.isReadOnly() && data.remaining() == 7 && data.get(0) == 'p');
+        reader.release(data); reader.close(); reader.close();
+        check(data.get(0) == 'p');
+        try { reader.find("app/data.txt"); throw new AssertionError(); } catch (IOException expected) {}
+        check(independent.read("app/data.txt").get().remaining() == 7); independent.close();
+        check(loader.getResource("app/data.txt") == null);
+        System.out.println("modules-ok");
+    }
+}
+"#).unwrap();
+    tool(
+        temp.path(),
+        "javac",
+        &[
+            "--release",
+            "11",
+            "--module-source-path",
+            "src",
+            "-d",
+            "modules",
+            "--module",
+            "service.api,service.provider,sample.app",
+        ],
+    );
+    tool(
+        temp.path(),
+        "javac",
+        &["--release", "8", "-d", "extra", "extra/outside/Helper.java"],
+    );
+    fs::write(
+        temp.path().join("modules/sample.app/app/data.txt"),
+        b"payload",
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join("modules/service.provider/impl/secret.txt"),
+        b"secret",
+    )
+    .unwrap();
+    fs::write(temp.path().join("agent/Agent.java"), r#"
+public class Agent {
+    public static void premain(String value, java.lang.instrument.Instrumentation instrumentation) throws Exception {
+        if (System.getProperty("agent.executed") != null) throw new AssertionError();
+        Class<?> application = Class.forName("app.Main", false, ClassLoader.getSystemClassLoader());
+        if (!application.getModule().getName().equals("sample.app")) throw new AssertionError();
+        System.setProperty("agent.executed", "once");
+        java.nio.file.Files.write(java.nio.file.Paths.get(value), new byte[] {1});
+    }
+}
+"#).unwrap();
+    tool(
+        temp.path(),
+        "javac",
+        &["--release", "11", "-d", "agent", "agent/Agent.java"],
+    );
+    fs::write(
+        temp.path().join("agent.mf"),
+        "Manifest-Version: 1.0\nPremain-Class: Agent\n\n",
+    )
+    .unwrap();
+    tool(
+        temp.path(),
+        "jar",
+        &[
+            "--create",
+            "--file",
+            "agent.jar",
+            "--manifest",
+            "agent.mf",
+            "-C",
+            "agent",
+            ".",
+        ],
+    );
+    let mut packing = PackOptions::new(
+        temp.path().join("modules/sample.app"),
+        temp.path().join("modules.janex"),
+    );
+    packing.main_module = Some("sample.app".into());
+    packing.main_class = Some("app.Main".into());
+    packing.module_path = vec![
+        temp.path().join("modules/service.api"),
+        temp.path().join("modules/service.provider"),
+    ];
+    packing.class_path = vec![temp.path().join("extra"), temp.path().join("agent.jar")];
+    packing.jvm_options = [
+        "--add-reads=sample.app=service.provider,ALL-UNNAMED",
+        "--add-exports=service.provider/impl=sample.app",
+        "--add-opens=service.provider/impl=sample.app",
+        "--add-opens=java.base/java.lang=sample.app",
+        "--add-exports=sample.app/app=ALL-UNNAMED",
+        "--add-opens=sample.app/app=ALL-UNNAMED",
+        "--enable-native-access=sample.app",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    pack(&packing).unwrap();
+    let marker = temp.path().join("agent-marker");
+    change_launch(&packing.output, |config| {
+        let entries = config.required(3).unwrap().as_array().unwrap();
+        replace(
+            config,
+            4,
+            Value::array([Value::map([
+                (Value::uint(0), entries[1].clone()),
+                (Value::uint(1), Value::text(marker.to_str().unwrap())),
+            ])
+            .unwrap()]),
+        )
+    });
+    let plan = prepare(&options(&packing.output)).unwrap();
+    assert!(!marker.exists(), "preparation must not execute agents");
+    assert_eq!(fs::read_dir(plan.directory()).unwrap().count(), 4);
+    let output = capture(&plan);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap().trim(),
+        "modules-ok"
+    );
+    assert_eq!(fs::read(marker).unwrap(), [1]);
 }

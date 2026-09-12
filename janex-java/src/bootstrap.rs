@@ -28,6 +28,7 @@ pub(crate) fn write(
     instance_main: bool,
     limits: Limits,
     resources: Option<&[u8]>,
+    jvm_options: &[String],
 ) -> Result<PathBuf> {
     if entry.main_class.as_deref() == Some(MAIN_CLASS) {
         return Err(invalid(
@@ -77,7 +78,8 @@ pub(crate) fn write(
         }
         if resources.is_none()
             && entry.name() != "org/janex/bootstrap/Bootstrap.class"
-            && !entry.name().starts_with("META-INF/")
+            && entry.name() != "META-INF/MANIFEST.MF"
+            && !entry.name().starts_with("META-INF/LICENSE")
         {
             continue;
         }
@@ -91,6 +93,28 @@ pub(crate) fn write(
         .map_err(std::io::Error::other)?;
     jar.write_all(&data)?;
     if let Some(resources) = resources {
+        let mut option_data = Vec::new();
+        string(
+            &mut option_data,
+            entry.main_module.as_deref().unwrap_or("").encode_utf16(),
+            limits,
+        )?;
+        string(
+            &mut option_data,
+            entry.main_class.as_deref().unwrap_or("").encode_utf16(),
+            limits,
+        )?;
+        option_data.extend(count(jvm_options.len())?.to_be_bytes());
+        for option in jvm_options {
+            string(&mut option_data, option.encode_utf16(), limits)?;
+        }
+        limits.bytes(option_data.len() as u64)?;
+        jar.start_file(
+            "org/janex/bootstrap/options.bin",
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
+        )
+        .map_err(std::io::Error::other)?;
+        jar.write_all(&option_data)?;
         limits.bytes(resources.len() as u64)?;
         jar.start_file("org/janex/bootstrap/resources.bin", options)
             .map_err(std::io::Error::other)?;

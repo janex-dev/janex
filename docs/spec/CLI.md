@@ -251,13 +251,15 @@ It supports classpath and module entry points, including Java 25 instance and no
 methods. Direct mode invokes the native application entry point without this layer and retains
 the runtime's argument-conversion limits. Both modes preserve argument order and boundaries.
 On Unix, non-Unicode native argument bytes require direct mode. JVM options, Java paths, and
-agent options use the native launcher in both modes. A custom `java.system.class.loader` requires
-direct mode for classpath applications.
+agent options use the native launcher in both modes. A custom `java.system.class.loader` or
+`--patch-module` requires direct mode.
 
 Conditions, overlays, and resource layers use the selected runtime and invocation `run`.
-Classpath bootstrap entry points load resources on demand from the verified snapshot, using a
-Janex system class loader. Modules, agents, direct launches, and module entry-point launches
-use temporary JARs, retaining their filenames for automatic-module naming. Module requirements use
+Bootstrap entry points load classpath and module resources on demand from the verified snapshot,
+using a Janex system class loader. Resource URLs support `Paths.get(uri)` and read-only NIO access.
+On Java 9+, application modules occupy a child of the native boot layer; module access options are
+applied to that layer through the JDK module-access bridge. Agents and direct launches use
+temporary JARs. Original filenames are retained for automatic-module naming. Module requirements use
 the selected Java runtime and supplied local module-path entries; unresolved external references fail without downloading.
 Symbolic links expand into resource contents; dangling links, cycles, and root escapes fail.
 

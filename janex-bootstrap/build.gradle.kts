@@ -23,6 +23,11 @@ tasks.withType<JavaCompile>().configureEach {
     options.compilerArgs.add("-Xlint:-options")
 }
 
+val java9 = sourceSets.create("java9") {
+    compileClasspath += sourceSets.main.get().output
+}
+tasks.named<JavaCompile>(java9.compileJavaTaskName) { options.release = 9 }
+
 tasks.withType<Jar>().configureEach {
     isPreserveFileTimestamps = false
     isReproducibleFileOrder = true
@@ -33,6 +38,8 @@ tasks.withType<Jar>().configureEach {
 
 tasks.jar {
     archiveFileName = "janex-bootstrap.jar"
+    manifest.attributes("Multi-Release" to "true")
+    from(java9.output) { into("META-INF/versions/9") }
     from(rootProject.file("LICENSE")) {
         into("META-INF")
         rename { "LICENSE-MPL-2.0" }

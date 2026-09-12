@@ -295,11 +295,10 @@ fn prepare_runtime(
         return Err(invalid("module launching requires Java 9 or later"));
     }
     let directory = tempfile::Builder::new().prefix("janex-run-").tempdir()?;
-    let resources = if options.launch_mode == LaunchMode::Bootstrap
-        && launch.entry_point.main_module.is_none()
-    {
+    let resources = if options.launch_mode == LaunchMode::Bootstrap {
         Some(crate::bootstrap::prepare(
             &launch.class_path,
+            &launch.module_path,
             &context,
             blobs,
             roots,
@@ -331,12 +330,12 @@ fn prepare_runtime(
     for entry in &launch.module_path {
         if let Some(requirement) = entry.module_requirement() {
             requirements.push(requirement);
-        } else {
+        } else if resources.is_none() {
             module_path.push(materializer.local(entry)?);
         }
     }
     let modules = runtime.validate_module_path(&module_path)?;
-    for (name, version) in requirements {
+    for (name, version) in requirements.into_iter().filter(|_| resources.is_none()) {
         let actual = modules
             .get(&name)
             .ok_or_else(|| invalid(format!("required module is unavailable: {name}")))?;
@@ -349,23 +348,22 @@ fn prepare_runtime(
         }
     }
     if let Some(name) = &launch.entry_point.main_module
+        && resources.is_none()
         && !modules.contains_key(name)
     {
         return Err(invalid(format!("main module is unavailable: {name}")));
     }
     let mut agents = Vec::new();
     for (index, agent) in launch.agents.iter().enumerate() {
-        let mut path = materializer.local(&agent.reference)?;
+        let source = materializer.local(&agent.reference)?;
+        // The native agent loader rejects Windows verbatim paths before calling the system loader.
+        let path = directory.path().join(format!("agent-{index}.jar"));
         if path.as_os_str().as_encoded_bytes().contains(&b'=') {
-            let alias = directory.path().join(format!("agent-{index}.jar"));
-            if alias.as_os_str().as_encoded_bytes().contains(&b'=') {
-                return Err(invalid(
-                    "Java agent path contains an unrepresentable equals sign",
-                ));
-            }
-            fs::hard_link(&path, &alias)?;
-            path = alias;
+            return Err(invalid(
+                "Java agent path contains an unrepresentable equals sign",
+            ));
         }
+        fs::hard_link(&source, &path)?;
         let mut argument = OsString::from("-javaagent:");
         argument.push(path);
         if !agent.option.is_empty() {

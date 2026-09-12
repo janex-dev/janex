@@ -68,11 +68,12 @@ impl LaunchRequest {
         self.prepare_with_resources(runtime, directory, limits, None)
     }
 
-    /// Prepares a launch with an optional private classpath resource index.
+    /// Prepares a launch with an optional private classpath and module resource index.
     ///
     /// `resources` must be Host-generated launch data matching the embedded Java bootstrap.
-    /// It requires bootstrap mode and a classpath entry point. The caller must retain the
-    /// referenced private snapshot until Java exits. Other behavior matches [`Self::prepare`].
+    /// It requires bootstrap mode. The caller must retain the referenced private snapshot until
+    /// Java exits. Java 9+ validates the indexed module graph in a separate process without
+    /// executing application entry points or agents. Other behavior matches [`Self::prepare`].
     pub fn prepare_with_resources(
         &self,
         runtime: &JavaRuntime,
@@ -80,12 +81,8 @@ impl LaunchRequest {
         limits: Limits,
         resources: Option<&[u8]>,
     ) -> Result<Vec<OsString>> {
-        if resources.is_some()
-            && (self.mode != LaunchMode::Bootstrap || self.entry_point.main_module.is_some())
-        {
-            return Err(invalid(
-                "resource loading requires a classpath bootstrap launch",
-            ));
+        if resources.is_some() && self.mode != LaunchMode::Bootstrap {
+            return Err(invalid("resource loading requires bootstrap mode"));
         }
         if resources.is_some()
             && self
@@ -123,14 +120,12 @@ impl LaunchRequest {
                             .any(|option| option == "--enable-preview")),
                 limits,
                 resources,
+                &self.jvm_options,
             )?)
         } else {
             None
         };
         let mut arguments = Vec::new();
-        if runtime.feature >= 9 {
-            arguments.push("--disable-@files".into());
-        }
         if resources.is_some()
             && runtime.feature >= 9
             && runtime
@@ -142,11 +137,16 @@ impl LaunchRequest {
             // expected HotSpot CDS notice out of application output; user options follow.
             arguments.push("-Xlog:cds=error".into());
         }
-        arguments.extend(self.jvm_options.iter().map(OsString::from));
+        let indexed_modules = resources.is_some() && runtime.feature >= 9;
+        if indexed_modules {
+            arguments.extend(indexed_module_options(&self.jvm_options)?);
+        } else {
+            arguments.extend(self.jvm_options.iter().map(OsString::from));
+        }
         if resources.is_some() {
             arguments.push("-Djava.system.class.loader=org.janex.bootstrap.ResourceLoader".into());
         }
-        if self.entry_point.main_module.is_none()
+        if (self.entry_point.main_module.is_none() || resources.is_some())
             && let Some(bridge) = &bridge
         {
             class_path.insert(0, bridge.clone());
@@ -163,7 +163,9 @@ impl LaunchRequest {
             arguments.push(crate::runtime::join_path(module_path)?);
         }
         arguments.extend(agents);
-        if let Some(module) = &self.entry_point.main_module {
+        if let Some(module) = &self.entry_point.main_module
+            && resources.is_none()
+        {
             let entry = if let Some(bridge) = &bridge {
                 arguments.push("--patch-module".into());
                 let mut patch = OsString::from(format!("{module}="));
@@ -200,6 +202,58 @@ impl LaunchRequest {
         {
             return Err(invalid("Java process arguments must not contain NUL"));
         }
+        if indexed_modules {
+            let system_modules = runtime.validate_indexed_modules(
+                bridge.as_ref().expect("bootstrap resources require bridge"),
+                &self.jvm_options,
+            )?;
+            if !system_modules.is_empty() {
+                arguments.insert(
+                    0,
+                    format!("--add-modules={}", system_modules.join(",")).into(),
+                );
+            }
+        }
         Ok(arguments)
     }
+}
+
+/// Retains native JVM options while deferring module access changes until the indexed layer exists.
+pub(crate) fn indexed_module_options(options: &[String]) -> Result<Vec<OsString>> {
+    let mut result = vec!["--add-exports=java.base/jdk.internal.module=ALL-UNNAMED".into()];
+    let mut index = 0;
+    while index < options.len() {
+        let option = &options[index];
+        let key = option.split('=').next().unwrap_or(option);
+        if key == "--patch-module" {
+            return Err(invalid("--patch-module requires direct launch mode"));
+        }
+        if matches!(
+            key,
+            "--add-modules"
+                | "--add-reads"
+                | "--add-exports"
+                | "--add-opens"
+                | "--enable-native-access"
+        ) {
+            let value = if let Some((_, value)) = option.split_once('=') {
+                value
+            } else {
+                index += 1;
+                options
+                    .get(index)
+                    .ok_or_else(|| invalid(format!("missing operand for {key}")))?
+            };
+            if key == "--enable-native-access" {
+                result.push("--add-opens=java.base/java.lang=ALL-UNNAMED".into());
+                if value.split(',').any(|name| name == "ALL-UNNAMED") {
+                    result.push("--enable-native-access=ALL-UNNAMED".into());
+                }
+            }
+        } else {
+            result.push(option.into());
+        }
+        index += 1;
+    }
+    Ok(result)
 }

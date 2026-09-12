@@ -5,6 +5,7 @@ package org.janex.bootstrap;
 
 import java.io.*;
 import java.util.*;
+import java.math.BigInteger;
 import org.janex.bootstrap.internal.zstd.Zstandard;
 
 /// Reads Host-selected resources from a private snapshot without rebuilding classpath JARs.
@@ -24,6 +25,8 @@ final class ResourceIndex implements Closeable {
     private final String[][] pools;
     /// Classpath roots in lookup order.
     final List<Root> roots;
+    /// Required observable module names and optional exact versions.
+    final Map<String, String> requirements;
     /// Decoded blob cache in least-recently-used order; values are never exposed mutably.
     private final LinkedHashMap<Integer, byte[]> cache = new LinkedHashMap<Integer, byte[]>(16, 0.75f, true);
     /// Current decoded cache size.
@@ -55,6 +58,16 @@ final class ResourceIndex implements Closeable {
                 for (int j = 0; j < pools[i].length; j++) pools[i][j] = text(input);
                 if (pools[i].length == 0 || !pools[i][0].isEmpty()) throw new IOException("Invalid string pool");
             }
+            Map<String, String> required = new LinkedHashMap<String, String>();
+            int requiredCount = count(input);
+            for (int i = 0; i < requiredCount; i++) {
+                String name = text(input);
+                String version = text(input);
+                String previous = required.get(name);
+                if (previous != null && !previous.isEmpty() && !version.isEmpty() && !previous.equals(version)) throw new IOException("Conflicting required module version: " + name);
+                if (previous == null || !version.isEmpty()) required.put(name, version);
+            }
+            requirements = Collections.unmodifiableMap(required);
             List<Root> result = new ArrayList<Root>();
             int count = count(input);
             for (int i = 0; i < count; i++) result.add(new Root(input));
@@ -173,15 +186,18 @@ final class ResourceIndex implements Closeable {
         return bytes;
     }
 
-    /// A single logical classpath root, preserving its original resource names.
+    /// A single logical classpath or module root, preserving its original resource names.
     final class Root {
         /// Original JAR filename used in resource and code-source URLs.
         final String name;
+        /// Whether this root belongs to the module path rather than the classpath.
+        final boolean module;
         /// Resources in Host traversal order, including explicit directories.
         final Map<String, Resource> files;
         /// Reads one root and rejects duplicate names.
         Root(DataInputStream input) throws IOException {
             name = text(input);
+            module = input.readBoolean();
             Map<String, Resource> entries = new LinkedHashMap<String, Resource>();
             int count = count(input);
             for (int i = 0; i < count; i++) {
@@ -190,6 +206,8 @@ final class ResourceIndex implements Closeable {
             }
             files = Collections.unmodifiableMap(entries);
         }
+        /// Tests the lifetime of the snapshot containing this root.
+        boolean isClosed() { return ResourceIndex.this.isClosed(); }
     }
 
     /// A directory or a logical file with its selected transform pools.
@@ -200,6 +218,10 @@ final class ResourceIndex implements Closeable {
         final int[][] transforms;
         /// Logical resource length, zero for directories.
         final int length;
+        /// Nullable creation, modification, and access timestamps in exact nanoseconds.
+        final BigInteger[] times = new BigInteger[3];
+        /// POSIX permission bits, or -1 when unspecified.
+        final int permissions;
         /// Reads and validates a file descriptor.
         Resource(DataInputStream input) throws IOException {
             id = input.readInt();
@@ -210,9 +232,17 @@ final class ResourceIndex implements Closeable {
                 if (transform[1] >= pools.length) throw new IOException("Invalid transform pool ID");
             }
             length = id == -1 ? 0 : transforms.length == 0 ? sources[id].length : transforms[transforms.length - 1][0];
+            int flags = input.readUnsignedByte();
+            if ((flags & ~15) != 0) throw new IOException("Invalid resource metadata flags");
+            for (int i = 0; i < 3; i++) if ((flags & (1 << i)) != 0) {
+                byte[] value = new byte[16]; input.readFully(value); times[i] = new BigInteger(value);
+            }
+            permissions = (flags & 8) == 0 ? -1 : input.readInt();
+            if (((flags & 8) != 0 && permissions < 0) || permissions > 4095) throw new IOException("Invalid resource permissions");
         }
         /// Returns privately owned logical bytes; callers must not modify them.
         byte[] read() throws IOException {
+            if (isClosed()) throw new IOException("Resource reader is closed");
             byte[] bytes = id == -1 ? new byte[0] : source(id);
             for (int[] transform : transforms) bytes = ClassFiles.restore(bytes, pools[transform[1]], transform[0]);
             return bytes;
@@ -223,4 +253,6 @@ final class ResourceIndex implements Closeable {
     @Override public synchronized void close() throws IOException {
         if (!closed) { closed = true; cache.clear(); cachedBytes = 0; snapshot.close(); }
     }
+    /// Returns whether the owning resource snapshot has closed.
+    synchronized boolean isClosed() { return closed; }
 }

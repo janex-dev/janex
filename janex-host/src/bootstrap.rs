@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Glavo
 // SPDX-License-Identifier: MPL-2.0
 
-//! Host-selected classpath resources referencing one authenticated snapshot.
+//! Host-selected classpath and module resources referencing one authenticated snapshot.
 
 use crate::{Result, adapters::java_limits, error::invalid};
 use janex_format::{
@@ -24,13 +24,14 @@ use std::{
 pub(crate) struct Resources {
     /// Private index embedded in the bootstrap JAR.
     pub(crate) data: Vec<u8>,
-    /// Aggregate logical bytes across selected classpath roots.
+    /// Aggregate logical bytes across selected classpath and module roots.
     pub(crate) logical_bytes: u64,
 }
 
 /// Builds private launch data; ordinary resource payloads remain in the snapshot.
 pub(crate) fn prepare(
     entries: &[PathEntry],
+    modules: &[PathEntry],
     context: &Context,
     blobs: &mut BlobStore<Cursor<Vec<u8>>>,
     roots: &mut BTreeMap<BlobRef, ResourceRoot>,
@@ -57,12 +58,29 @@ pub(crate) fn prepare(
         index_bytes: 0,
     };
     let mut root_data = Vec::new();
-    number(&mut root_data, entries.len() as u64)?;
-    for entry in entries {
+    let requirements: Vec<_> = modules
+        .iter()
+        .filter_map(PathEntry::module_requirement)
+        .collect();
+    number(&mut root_data, requirements.len() as u64)?;
+    for (name, version) in requirements {
+        string(&mut root_data, &name)?;
+        string(&mut root_data, version.as_deref().unwrap_or(""))?;
+    }
+    let selected: Vec<_> = entries
+        .iter()
+        .map(|entry| (entry, false))
+        .chain(
+            modules
+                .iter()
+                .filter(|entry| entry.module_requirement().is_none())
+                .map(|entry| (entry, true)),
+        )
+        .collect();
+    number(&mut root_data, selected.len() as u64)?;
+    for (entry, module) in selected {
         let PathEntry::Local(reference) = entry else {
-            return Err(invalid(
-                "bootstrap classpath requires resolved local resources",
-            ));
+            return Err(invalid("bootstrap paths require resolved local resources"));
         };
         if !roots.contains_key(reference) {
             let bytes = builder.blobs.resolve(*reference)?;
@@ -70,6 +88,7 @@ pub(crate) fn prepare(
         }
         let root = &roots[reference];
         string(&mut root_data, root.jar_name()?)?;
+        root_data.push(u8::from(module));
         let tree = root.merge(context, builder.blobs.reader().limits())?;
         let mut children = BTreeMap::<&str, Vec<&str>>::new();
         for (path, _) in tree.entries().filter(|(p, _)| !p.is_empty()) {
@@ -91,7 +110,8 @@ pub(crate) fn prepare(
         number(&mut root_data, files.len() as u64)?;
         for (name, canonical) in files {
             string(&mut root_data, &name)?;
-            match tree.get(&canonical).expect("expanded node exists") {
+            let node = tree.get(&canonical).expect("expanded node exists");
+            match node {
                 Node::Directory(_) => root_data.extend_from_slice(&(-1i32).to_be_bytes()),
                 Node::File {
                     content,
@@ -108,6 +128,27 @@ pub(crate) fn prepare(
                     }
                 }
                 Node::SymbolicLink { .. } => unreachable!("expanded symbolic link"),
+            }
+            let empty_metadata = janex_format::cbor::Value::empty_map();
+            let metadata = match node {
+                Node::Directory(metadata) => metadata.unwrap_or(&empty_metadata),
+                Node::File { metadata, .. } => metadata,
+                Node::SymbolicLink { .. } => unreachable!(),
+            };
+            let mut flags = 0u8;
+            for key in 2..=5 {
+                if metadata.get(key)?.is_some() {
+                    flags |= 1 << (key - 2);
+                }
+            }
+            root_data.push(flags);
+            for key in 2..=4 {
+                if let Some(value) = metadata.get(key)? {
+                    root_data.extend(value.as_i128()?.to_be_bytes());
+                }
+            }
+            if let Some(mode) = metadata.get(5)? {
+                number(&mut root_data, mode.as_u64()?)?;
             }
             builder
                 .blobs
@@ -441,6 +482,12 @@ public class Main {
         java.nio.file.Files.write(java.nio.file.Paths.get(args[0]), read("Main.class"));
         System.out.println(new String(read("extent.txt"), "UTF-8"));
         System.out.println(new String(read("alias/data.txt"), "UTF-8"));
+        java.nio.file.Path folder = java.nio.file.Paths.get(Main.class.getClassLoader().getResource("alias/").toURI());
+        java.util.Map<String, Object> attributes = java.nio.file.Files.readAttributes(folder, "janex:*");
+        if (!new java.math.BigInteger("-170141183460469231731687303715884105728").equals(attributes.get("creationTimeNanos"))) throw new AssertionError();
+        if (!new java.math.BigInteger("170141183460469231731687303715884105727").equals(attributes.get("lastAccessTimeNanos"))) throw new AssertionError();
+        if (!Integer.valueOf(493).equals(attributes.get("permissions"))) throw new AssertionError();
+        if (((java.nio.file.attribute.FileTime) attributes.get("lastModifiedTime")).to(java.util.concurrent.TimeUnit.NANOSECONDS) != 1234567890123L) throw new AssertionError();
         try { read("unused.txt"); throw new AssertionError("invalid Zstd accepted"); }
         catch (IOException expected) { System.out.println("lazy-error"); }
     }
@@ -568,7 +615,13 @@ public class Main {
                     },
                     Directory {
                         path: "folder".into(),
-                        metadata: Value::empty_map(),
+                        metadata: Value::map([
+                            (Value::uint(2), Value::integer(i128::MIN)),
+                            (Value::uint(3), Value::integer(1234567890123)),
+                            (Value::uint(4), Value::integer(i128::MAX)),
+                            (Value::uint(5), Value::uint(0o755)),
+                        ])
+                        .unwrap(),
                         entries: vec![file("data.txt", Content::blob(reference(3)))],
                     },
                 ],
@@ -585,6 +638,7 @@ public class Main {
         fs::create_dir(&launch).unwrap();
         let resources = prepare(
             &[PathEntry::Local(reference(98))],
+            &[],
             &context,
             &mut blobs,
             &mut roots,

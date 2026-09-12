@@ -128,11 +128,15 @@ janex run [OPTIONS] <TARGET> [ARGS...]
 - Evaluate conditions, overlays, and resource layers against each candidate runtime. Check local
   modules and modules supplied by the runtime. Report missing dependencies without downloading
   content or invoking remote providers.
-- For classpath bootstrap entry points, write a private snapshot and resource index. Read ordinary
+- For bootstrap entry points, write a private snapshot and resource index. Read ordinary
   Stored blobs, Extents, Zstandard frames, and CLASSFILE transforms on demand in Java. Preserve root
   order, resource enumeration, manifest package attributes, sealing, and service discovery.
-- Materialize module paths, agents, and direct-mode paths as JARs, preserving automatic-module
-  naming. Module entry points retain the existing native module layer and bootstrap patch.
+- Load named and automatic modules directly through indexed module finders and readers, retaining
+  original filenames, services, and access options. Keep system modules in the native boot layer.
+- Expose resource URLs through a read-only NIO provider with path operations, directory traversal,
+  seekable channels, metadata, and explicit view lifetimes. All readers share the verified snapshot.
+- Materialize agents and direct-mode paths as JARs. Preserve the native agent lifecycle and keep
+  direct classpath and module-path launching independently usable.
 - Decode external-dictionary blobs in the Host until the portable Java decoder supports dictionaries.
   Bound index size, logical expansion, and Java blob-cache retention. Resolve symbolic links before
   launching, rejecting dangling links, cycles, and root escapes.
@@ -165,15 +169,15 @@ janex run [OPTIONS] <TARGET> [ARGS...]
 Acceptance requires working packaging, signing, verification, and launching. Type skeletons and
 placeholder interfaces do not constitute completion.
 
-## Java Bootstrap Follow-up
+## Java Bootstrap Validation
 
-The classpath stage uses standard Java 8 APIs and a system class loader, with a checked-array
-Zstandard decoder adapted from japp. The root Gradle multi-project build uses JDK 25 with `--release 8`. Its `jar` task
-builds the reproducible artifact, `check` verifies the embedded copy, and
-`:janex-bootstrap:updateEmbeddedBootstrap` updates it. CI invokes the root Gradle Wrapper; normal Cargo builds do not require Java or network downloads.
+The root Gradle build uses Java 8 base classes and Java 9 module classes in a reproducible
+multi-release JAR. The portable Zstandard decoder is implemented under MPL-2.0. `check` validates
+the embedded artifact, and `:janex-bootstrap:updateEmbeddedBootstrap` updates it.
 
-Direct loading of named modules and a read-only NIO file-system provider remain subsequent stages.
-Do not replace the current module path until module resolution, agents, service discovery, access
-options, and native boot-layer behavior have equivalent coverage. Keep direct mode independently
-usable throughout. Custom system loaders require direct mode. Host authentication covers the
-complete snapshot once; the Java reader does not add per-resource publisher authentication.
+Cover NIO URI round trips, full directory traversal, channel positioning, write rejection,
+metadata precision, closure and remounting on Java 8 and current Java. Cover direct module reads,
+automatic modules, service discovery, access options, module-reader lifetimes, and agents on Java 9+.
+The module bridge uses explicitly enabled JDK module-access APIs. Custom system loaders and
+`--patch-module` use direct mode. Host authentication covers the complete snapshot once;
+the Java readers do not add per-resource publisher authentication.

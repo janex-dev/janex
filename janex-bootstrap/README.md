@@ -1,8 +1,9 @@
 # Java Bootstrap
 
-This Java 8 Gradle subproject provides entry invocation and direct classpath resource loading. `janex-java`
+This Gradle subproject provides entry invocation, snapshot resource loading, and a read-only NIO file system. `janex-java`
 embeds its reproducible `bootstrap.jar`; ordinary Cargo builds require neither Java nor downloads.
-The root Gradle build selects a JDK 25 toolchain and compiles with `--release 8`.
+The root Gradle build uses JDK 25, compiling the base with `--release 8` and module support with
+`--release 9` in a multi-release JAR.
 Use the root Wrapper (`gradlew.bat` on Windows):
 
 ```text
@@ -24,15 +25,32 @@ comes from the Host's verified snapshot. Manifests are sanitized in the Host.
 The loader preserves parent-first delegation, classpath root order, duplicate resource enumeration,
 package metadata and sealing, code-source URLs, and service lookup through the context loader.
 Serialized resource URLs use Java's protocol-handler package lookup; the bootstrap appends its
-handler prefix without replacing existing prefixes. It uses Java APIs without JNI, Unsafe, or
-JDK-internal class-loader access. Custom system loaders
+handler prefix without replacing existing prefixes. Resource loading uses Java APIs without JNI,
+Unsafe, or JDK-internal class-loader access. Custom system loaders
 prevent HotSpot from using archived application classes; expected CDS notices are suppressed for
 recognized HotSpot VMs without disabling system-class sharing or overriding explicit user logging.
 
-External-dictionary blobs are decoded by the Host into the private index. Module paths and agents
-still use materialized JARs. A module entry point retains native module resolution and patches the
-entry bridge into the main module. Direct mode retains ordinary JAR launching independently.
-Direct module loading and a read-only NIO file-system provider are planned separately.
+`Paths.get(resourceUrl.toURI())` uses the installed `janex` provider. It supports directory traversal,
+glob/regex matching, read-only seekable channels, basic attributes, and copying to native files.
+The `janex` attribute view also exposes nullable exact nanosecond timestamps and POSIX permission
+bits. Missing basic timestamps use the epoch; timestamps beyond `FileTime` range saturate.
+Closing a filesystem view invalidates its channels but leaves class loading and resource URLs
+usable. `FileSystems.newFileSystem` can remount the active snapshot; it does not open arbitrary packages.
+
+Java 9+ uses indexed `ModuleFinder`, `ModuleReference`, and independently closeable `ModuleReader`
+implementations. Named and automatic modules share the system resource loader in a child of the
+native boot layer. Automatic-module names and versions use original JAR filenames and manifests;
+service declarations and module resource encapsulation are retained. Preparation resolves the
+module graph without running application entry points or agents. Only required system modules are
+added to the actual JVM invocation.
+
+Module access options are applied after layer definition. `--add-reads`, `--add-exports`, and
+`--add-opens` use an explicitly exported `jdk.internal.module.Modules` bridge, retaining
+`ALL-UNNAMED` behavior. Named `--enable-native-access` also requires access to `java.lang.Module`
+internals on the selected JDK. `--patch-module` and custom system loaders require direct mode.
+Agents retain the JVM's native JAR protocol and execute after resource-layer initialization.
+External-dictionary blobs are decoded by the Host. Direct mode independently retains native
+classpath/module-path launching with materialized JARs.
 
 Each launch embeds `launch.bin`: module name, class name, the modern-main boolean, and program
 arguments. Strings use a big-endian nonnegative 32-bit UTF-16 unit count followed by those units;
@@ -42,7 +60,8 @@ The main method runs on the main thread; exceptions and process exits propagate.
 
 `resources.bin` is private Host/bootstrap communication, not part of the Janex file format. It
 contains a magic, limits, snapshot path, topologically ordered sources, shared pools, and ordered
-roots. The Host and embedded Java artifact are built together. The snapshot and index must remain
+roots, module requirements, and resource metadata. `options.bin` carries the module entry and JVM
+options needed by the module bridge. The Host and embedded Java artifact are built together. The snapshot and index must remain
 private and alive until the child exits. The Java reader does not reopen the original package.
 
 The Java Zstandard decoder is implemented in this project under MPL-2.0, using

@@ -57,6 +57,15 @@ public final class Bootstrap {
         Class<?> application;
         if (moduleName.isEmpty()) {
             application = Class.forName(className, false, ClassLoader.getSystemClassLoader());
+        } else if (ClassLoader.getSystemClassLoader().getClass().getName().equals("org.janex.bootstrap.ResourceLoader")) {
+            try {
+                application = (Class<?>) Class.forName("org.janex.bootstrap.ModuleSupport")
+                        .getMethod("mainClass", Class.forName("org.janex.bootstrap.ResourceLoader"), String.class, String.class)
+                        .invoke(null, ClassLoader.getSystemClassLoader(), moduleName, className);
+            } catch (InvocationTargetException failure) { throw failure.getCause(); }
+            className = application.getName();
+            System.setProperty("jdk.module.main", moduleName);
+            System.setProperty("jdk.module.main.class", className);
         } else {
             Class<?> moduleType = Class.forName("java.lang.Module");
             Object module = Class.class.getMethod("getModule").invoke(Bootstrap.class);
