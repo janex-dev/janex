@@ -67,7 +67,7 @@ pub struct PackOptions {
     /// Compare a CLASSFILE-transformed candidate and retain it only when the complete file is smaller.
     pub transform_classfiles: bool,
     /// Append the portable Java launcher as a JAR tail for `java -jar` execution.
-    pub java_launcher: bool,
+    pub with_launcher: bool,
     /// Optional publisher signer; absent uses Checksum verification.
     pub signer: Option<PackSigner>,
 }
@@ -100,7 +100,7 @@ impl PackOptions {
             import: ImportOptions::default(),
             compression_level: 3,
             transform_classfiles: true,
-            java_launcher: false,
+            with_launcher: false,
             signer: None,
         }
     }
@@ -129,12 +129,12 @@ pub struct PackReport {
 /// The smaller complete container wins when
 /// comparing transformed and ordinary class files. Ties retain ordinary class files.
 pub fn pack(options: &PackOptions) -> Result<PackReport> {
-    if options.java_launcher && options.signer.is_some() {
+    if options.with_launcher && options.signer.is_some() {
         return Err(invalid(
             "the standalone Java launcher does not yet support signed packages",
         ));
     }
-    if options.java_launcher
+    if options.with_launcher
         && (!options.external_class_path.is_empty() || !options.external_module_path.is_empty())
     {
         return Err(invalid(
@@ -378,7 +378,7 @@ fn write_package(
         Some(application.type_info().clone()),
     )?;
     let empty_region = Value::map([(Value::uint(0), Value::uint(0))])?;
-    let tail: &[u8] = if options.java_launcher {
+    let tail: &[u8] = if options.with_launcher {
         include_bytes!("../../janex-bootstrap/bootstrap.jar")
     } else {
         &[]

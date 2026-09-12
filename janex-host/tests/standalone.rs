@@ -59,7 +59,7 @@ public class Main {
     options.arguments = vec!["\u{1f680}".into(), "".into()];
     options.jvm_options = vec!["-Dexample.value=two words".into()];
     options.java_version = Some("vers:jep322/>=8".into());
-    options.java_launcher = true;
+    options.with_launcher = true;
     pack(&options).unwrap();
     let mut reader =
         Reader::open_auto(fs::File::open(&output).unwrap(), Limits::default()).unwrap();
@@ -180,7 +180,7 @@ public class Main {
     );
     options.main_class = Some("app.Main".into());
     options.main_module = Some("sample.app".into());
-    options.java_launcher = true;
+    options.with_launcher = true;
     pack(&options).unwrap();
     let result = Command::new("java")
         .arg("-jar")

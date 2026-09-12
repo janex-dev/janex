@@ -21,7 +21,7 @@ fn cli_packs_local_input_and_preserves_complete_arguments() {
         .arg("--output")
         .arg(&output)
         .args([
-            "--java-launcher",
+            "--with-launcher",
             "--main-class",
             "example.Main",
             "--application",
@@ -98,7 +98,7 @@ fn cli_documents_implemented_options_and_rejects_incomplete_commands() {
         "--jvm-option",
         "--argument",
         "--java-version",
-        "--java-launcher",
+        "--with-launcher",
     ] {
         assert!(text.contains(flag), "{flag}");
     }

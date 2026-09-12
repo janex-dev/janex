@@ -43,7 +43,7 @@ Use five Rust crates and two Java projects:
 
 ### Standalone Java Launch
 
-`pack --java-launcher` appends the bootstrap JAR using the existing JAR Tail Wrapper. Metadata binds
+`pack --with-launcher` appends the bootstrap JAR using the existing JAR Tail Wrapper. Metadata binds
 the tail's exact size and SHA-256 digest. Keep native bootstrap and direct launching available.
 The initial standalone profile supports embedded classpath/module roots, resource layers, shared
 string pools, Stored/Extents blobs, dictionary-free Zstandard, and CLASSFILE transforms on Java 8+.

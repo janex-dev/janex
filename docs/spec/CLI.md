@@ -36,7 +36,7 @@ janex pack <SOURCE> --output <FILE>
     [--external-module-path <URI> <CHECKSUM>]...
     [--argument <ARG>]...
     [--java-version <VERS>]
-    [--java-launcher]
+    [--with-launcher]
     [--cms-certificate <FILE> --cms-key <FILE>]
     [--cms-algorithm <ALGORITHM>]
     [--openpgp-key <FILE>]
@@ -92,11 +92,11 @@ costs fail before decryption. Key and trust files are individually limited to 4 
 
 ### Standalone Java Launcher
 
-`--java-launcher` appends an executable bootstrap JAR using the existing JAR Tail Wrapper. The
+`--with-launcher` appends an executable bootstrap JAR using the existing JAR Tail Wrapper. The
 package metadata records its length and SHA-256 checksum. The format remains version 0.1.
 
 ```shell
-janex pack app.jar --output app.janex --java-launcher
+janex pack app.jar --output app.janex --with-launcher
 java -jar app.janex arg1 arg2
 ```
 
@@ -108,7 +108,7 @@ Options supplied before `-jar` are forwarded to the child before the package's o
 already altered by the platform's initial Java launcher cannot be recovered.
 
 The initial standalone profile requires embedded dependencies and SHA-256/SHA-512 integrity coverage.
-Signing options and external path declarations cannot be combined with `--java-launcher`. The Java
+Signing options and external path declarations cannot be combined with `--with-launcher`. The Java
 reader rejects signed packages, agents, external dependencies, external Zstd dictionaries, ZIP64
 tails, and startup options requiring direct mode. Per-file checksums are not repeated after the
 complete encoded sections have been verified. This entry point does not establish publisher trust:
