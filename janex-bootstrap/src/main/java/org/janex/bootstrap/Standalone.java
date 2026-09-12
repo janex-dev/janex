@@ -42,7 +42,7 @@ public final class Standalone {
                     throw new IOException("Zstd decoded length mismatch");
                 }
                 return decoded;
-            })) {
+            }, new Dependencies())) {
                 launch = reader.launch(System.getProperty("janex.application"));
             }
             launch.arguments.addAll(Arrays.asList(arguments));

@@ -134,13 +134,6 @@ pub fn pack(options: &PackOptions) -> Result<PackReport> {
             "the standalone Java launcher does not yet support signed packages",
         ));
     }
-    if options.with_launcher
-        && (!options.external_class_path.is_empty() || !options.external_module_path.is_empty())
-    {
-        return Err(invalid(
-            "the standalone Java launcher requires embedded dependencies; use local classpath and module-path inputs",
-        ));
-    }
     match fs::symlink_metadata(&options.output) {
         Ok(_) => {
             return Err(std::io::Error::new(

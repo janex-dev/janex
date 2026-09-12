@@ -107,11 +107,29 @@ supports classpath applications; modules require Java 9+. `-Djanex.application=I
 Options supplied before `-jar` are forwarded to the child before the package's options. Arguments
 already altered by the platform's initial Java launcher cannot be recovered.
 
-The initial standalone profile requires embedded dependencies and SHA-256/SHA-512 integrity coverage.
-Signing options and external path declarations cannot be combined with `--with-launcher`. The Java
-reader rejects signed packages, agents, external dependencies, external Zstd dictionaries, ZIP64
-tails, and startup options requiring direct mode. Per-file checksums are not repeated after the
-complete encoded sections have been verified. This entry point does not establish publisher trust:
+External classpath and module-path declarations support HTTP(S) JARs and exact Maven PURLs, using
+the same cache directory, keys, and checked records as `janex run`. Multi-release resources and
+original JAR filenames are retained. Supply these properties before `-jar`:
+
+| Property | Default | Meaning |
+| --- | --- | --- |
+| `janex.dependencyCache` | Platform user cache | Override the shared dependency cache directory. |
+| `janex.offline` | `false` | Use verified cache entries without network access. |
+| `janex.refreshDependencies` | `false` | Replace cached entries after a successful download; incompatible with offline mode. |
+| `janex.mavenRepository` | `https://repo.maven.apache.org/maven2/` | Default Maven repository. |
+
+These settings govern preparation in the initial JVM; package JVM options cannot override them.
+Downloads allow five redirects, prohibit HTTPS downgrade, and are bounded to 60 seconds and 512 MiB
+per dependency. HTTP requires a SHA-256 or SHA-512 checksum. HTTPS may omit it; any declared checksum
+must use one of those two algorithms and is verified on downloads and cache hits. No POMs or
+transitive dependencies are resolved. Offline cache misses and corruption fail; online corruption
+triggers reacquisition. Cache publication is atomic. See [Dependency Cache](../DependencyCache.md).
+
+The standalone profile requires SHA-256/SHA-512 integrity coverage. Signing options cannot be
+combined with `--with-launcher`. The Java reader rejects signed packages, agents, virtual module
+requirements, external Zstd dictionaries, ZIP64 JARs, and startup options requiring direct mode.
+Per-file checksums are not repeated after the complete encoded sections have been verified.
+This entry point does not establish publisher trust:
 the appended launcher executes before it can check the package. Existing `janex run` bootstrap and
 direct modes remain available, including their signature and remote-dependency capabilities.
 

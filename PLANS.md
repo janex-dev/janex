@@ -48,8 +48,14 @@ the tail's exact size and SHA-256 digest. Keep native bootstrap and direct launc
 The initial standalone profile supports embedded classpath/module roots, resource layers, shared
 string pools, Stored/Extents blobs, dictionary-free Zstandard, and CLASSFILE transforms on Java 8+.
 It requires SHA-256/SHA-512 metadata, section, and nonempty external-region checksums. It rejects
-signed packages, external dependencies, agents, external dictionaries, and unsupported startup
-options explicitly. Publisher authentication and remote acquisition remain Host capabilities.
+signed packages, agents, virtual module requirements, ZIP64 JARs, external dictionaries, and
+unsupported startup options explicitly. Publisher authentication remains a Host capability.
+Resolve selected HTTP(S) JARs and exact Maven PURLs through a reader callback implemented by the
+bootstrap module. Share the Host's cache keys and records, verify SHA-256/SHA-512 pins, and support
+offline, refresh, and repository overrides. Import remote archives through the same resource index,
+retaining multi-release layers, automatic-module filenames, permissions, and symbolic links.
+Verify cache interchange in both directions, corruption repair, failed-download isolation, and
+offline launches after the server stops. Keep format parsing independent of networking policy.
 Verify Java 8 and current-JDK launches, module resources, JVM options, exact preset arguments,
 exit status, malformed encoding, corruption rejection, and continued native launching.
 

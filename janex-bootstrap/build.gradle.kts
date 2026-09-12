@@ -14,6 +14,7 @@ version = rootProject.version
 
 dependencies {
     implementation(project(":janex-reader"))
+    testFixturesImplementation(project(":janex-reader"))
 }
 
 java {
@@ -91,7 +92,15 @@ tasks.register("updateEmbeddedBootstrap") {
 }
 
 tasks.check {
-    dependsOn(verifyEmbeddedBootstrap, tasks.testFixturesClasses, "checkZstandard")
+    dependsOn(verifyEmbeddedBootstrap, tasks.testFixturesClasses, "checkZstandard", "checkDependencies")
+}
+
+tasks.register<JavaExec>("checkDependencies") {
+    group = "verification"
+    description = "Checks canonical dependency addresses and Maven repository mapping."
+    classpath = sourceSets.testFixtures.get().runtimeClasspath
+    mainClass = "org.janex.bootstrap.DependenciesTest"
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
 }
 
 tasks.register<JavaExec>("checkZstandard") {

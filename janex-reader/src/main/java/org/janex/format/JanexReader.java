@@ -27,6 +27,8 @@ public final class JanexReader implements Closeable {
     private final Path path;
     /// Caller-supplied Zstandard decoder, shared with the runtime resource reader.
     private final BlobDecoder decoder;
+    /// Optional acquisition policy for external JARs, never owned or closed by this reader.
+    private final DependencyResolver resolver;
     /// Pools indexed by their opaque section IDs.
     private final Map<Long, Pool> pools = new LinkedHashMap<Long, Pool>();
     /// Application descriptors paired with their type information.
@@ -50,8 +52,19 @@ public final class JanexReader implements Closeable {
     /// @param decoder Zstandard decoder producing exactly the requested number of bytes
     /// @throws IOException if framing, recorded integrity, or the supported profile is invalid
     public JanexReader(Path path, BlobDecoder decoder) throws IOException {
+        this(path, decoder, null);
+    }
+
+    /// Opens a snapshot with a caller-supplied external dependency policy.
+    ///
+    /// @param path local snapshot kept unchanged until the application exits
+    /// @param decoder decoder producing exactly the requested number of bytes
+    /// @param resolver resolver called only for selected external entries, or null to reject them
+    /// @throws IOException if opening or validating the snapshot fails
+    public JanexReader(Path path, BlobDecoder decoder, DependencyResolver resolver) throws IOException {
         this.path = path;
         this.decoder = Objects.requireNonNull(decoder);
+        this.resolver = resolver;
         file = new RandomAccessFile(path.toFile(), "r");
         try {
             container();
@@ -651,6 +664,11 @@ public final class JanexReader implements Closeable {
             }
         }
         input.end();
+        return finishRoot(jarName, module, tree);
+    }
+
+    /// Rewrites manifests and expands aliases for an imported or embedded root.
+    private Root finishRoot(String jarName, boolean module, Map<String, Node> tree) throws IOException {
         runtimeManifests(tree);
         Map<String, List<String>> children = new HashMap<String, List<String>>();
         for (String name : tree.keySet()) {
@@ -963,11 +981,100 @@ public final class JanexReader implements Closeable {
         return launch;
     }
 
-    /// Reads a local path entry; external acquisition remains a Host capability.
+    /// Resolves an embedded root or imports a caller-acquired external JAR.
     private Root pathEntry(Object value, boolean module) throws IOException {
         Map<Object, Object> entry = integers(map(value));
-        require(number(get(entry, 0)) == 0, "Standalone external dependencies are not yet supported; use Janex Host");
-        return root(get(entry, 1), module);
+        long kind = number(get(entry, 0));
+        if (kind == 0) {
+            return root(get(entry, 1), module);
+        }
+        require(kind == 1, "Unsupported Java path entry");
+        String uri = Conditions.nonempty(get(entry, 1));
+        byte[] checksum = has(entry, 2) ? binary(get(entry, 2)) : null;
+        require(resolver != null, "External dependencies require a dependency resolver");
+        Dependency dependency = Objects.requireNonNull(resolver.resolve(uri, checksum));
+        require(dependency.jarName.endsWith(".jar") && dependency.jarName.indexOf('/') < 0
+                && dependency.jarName.indexOf('\\') < 0 && dependency.jarName.indexOf(0) < 0, "Invalid dependency JAR filename");
+        return jarRoot(dependency, module);
+    }
+
+    /// Imports bounded JAR entries and applies increasing multi-release layers for this runtime.
+    private Root jarRoot(Dependency dependency, boolean module) throws IOException {
+        List<JarArchive.Entry> entries = JarArchive.read(dependency.bytes);
+        boolean multiRelease = false;
+        for (JarArchive.Entry entry : entries) {
+            if (entry.name.equals("META-INF/MANIFEST.MF")) {
+                require(entry.kind != 0120000, "JAR manifest must be a regular file");
+                java.util.jar.Manifest manifest = new java.util.jar.Manifest(new ByteArrayInputStream(entry.bytes));
+                multiRelease = "true".equalsIgnoreCase(manifest.getMainAttributes().getValue("Multi-Release"));
+            }
+        }
+        SortedMap<Integer, Map<String, Node>> layers = new TreeMap<Integer, Map<String, Node>>();
+        for (JarArchive.Entry entry : entries) {
+            boolean directory = entry.name.endsWith("/");
+            String name = directory ? entry.name.substring(0, entry.name.length() - 1) : entry.name;
+            require(!name.isEmpty() && name.indexOf(0) < 0, "Invalid JAR resource path");
+            path(name, false);
+            int version = 0;
+            if (multiRelease && name.startsWith("META-INF/versions/")) {
+                String tail = name.substring("META-INF/versions/".length());
+                int slash = tail.indexOf('/');
+                String number = slash < 0 ? tail : tail.substring(0, slash);
+                if (number.matches("[1-9][0-9]*") && number.length() <= 10) {
+                    long parsed = Long.parseLong(number);
+                    if (parsed >= 9 && parsed <= Integer.MAX_VALUE) {
+                        version = (int) parsed;
+                        name = slash < 0 ? "" : tail.substring(slash + 1);
+                        require(!name.equals("META-INF") && !name.startsWith("META-INF/"), "Multi-Release JAR cannot version META-INF");
+                        require(!name.isEmpty() || directory, "Multi-Release version root is not a directory");
+                    }
+                }
+            }
+            Node node = new Node();
+            if (entry.kind == 0120000) {
+                node.source = -2;
+                node.target = utf8(entry.bytes);
+                require(node.target.indexOf(0) < 0, "Invalid JAR symbolic-link target");
+                for (String component : node.target.split("/", -1)) {
+                    require(!component.isEmpty(), "Invalid JAR symbolic-link target");
+                }
+            } else if (!directory) {
+                node.source = inline(entry.bytes);
+            }
+            if (entry.mode >= 0 && node.source >= -1) {
+                node.metadata = new LinkedHashMap<Object, Object>();
+                node.metadata.put(BigInteger.valueOf(5), BigInteger.valueOf(entry.mode & 07777));
+            }
+            Map<String, Node> layer = layers.computeIfAbsent(version, ignored -> new TreeMap<String, Node>());
+            require(layer.put(name, node) == null, "Conflicting JAR resource paths");
+        }
+        Map<String, Node> tree = new TreeMap<String, Node>();
+        Map<String, Node> validation = new TreeMap<String, Node>();
+        tree.put("", new Node());
+        validation.put("", new Node());
+        for (Map.Entry<Integer, Map<String, Node>> layer : layers.entrySet()) {
+            mergeJarLayer(validation, layer.getValue());
+            if (layer.getKey() <= feature()) {
+                mergeJarLayer(tree, layer.getValue());
+            }
+        }
+        return finishRoot(dependency.jarName, module, tree);
+    }
+
+    /// Merges one JAR layer without permitting implicit file/directory replacement.
+    private static void mergeJarLayer(Map<String, Node> tree, Map<String, Node> layer) throws IOException {
+        for (Map.Entry<String, Node> entry : layer.entrySet()) {
+            String name = entry.getKey();
+            if (entry.getValue().source == -1) {
+                directory(tree, name);
+            } else {
+                int slash = name.lastIndexOf('/');
+                directory(tree, slash < 0 ? "" : name.substring(0, slash));
+                require(!tree.containsKey(name) || tree.get(name).source != -1, "JAR file/directory conflict");
+            }
+            tree.put(name, entry.getValue());
+            count(tree.size());
+        }
     }
 
     /// Visits all configuration nodes for validation and applies matching overlays in order.
@@ -1070,6 +1177,36 @@ public final class JanexReader implements Closeable {
         /// @return a new array containing exactly the decoded bytes
         /// @throws IOException if the input is invalid or cannot produce the required output
         byte[] decode(byte[] input, int length) throws IOException;
+    }
+
+    /// Acquires an external JAR under the caller's network, cache, and integrity policy.
+    @FunctionalInterface
+    public interface DependencyResolver {
+        /// Resolves one selected external path entry; failure aborts launch preparation.
+        ///
+        /// @param uri external URI from the verified application descriptor
+        /// @param checksum encoded algorithm byte and digest, or null when absent; must not be modified
+        /// @return owned JAR bytes whose declared checksum has been verified when present
+        /// @throws IOException if acquisition, validation, or the caller's policy fails
+        Dependency resolve(String uri, byte[] checksum) throws IOException;
+    }
+
+    /// Owns acquired JAR bytes and their original filename for automatic-module naming.
+    public static final class Dependency {
+        /// Original filename ending in .jar, without path separators.
+        public final String jarName;
+        /// Complete archive bytes; must remain unchanged while the reader imports them.
+        public final byte[] bytes;
+
+        /// Retains the supplied array without copying it.
+        ///
+        /// @param jarName original JAR filename, validated during import
+        /// @param bytes acquired archive bytes, validated during import
+        /// @throws NullPointerException if either argument is null
+        public Dependency(String jarName, byte[] bytes) {
+            this.jarName = Objects.requireNonNull(jarName);
+            this.bytes = Objects.requireNonNull(bytes);
+        }
     }
 
     /// Closes the owned handle; the caller retains ownership of the snapshot file.

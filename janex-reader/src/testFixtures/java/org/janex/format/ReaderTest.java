@@ -4,9 +4,13 @@
 package org.janex.format;
 
 import java.io.IOException;
+import java.io.ByteArrayOutputStream;
 import java.math.BigInteger;
 import java.util.Arrays;
 import java.util.Map;
+import java.util.List;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 /// Exercises deterministic encoding and version boundaries independently of the native writer.
 public final class ReaderTest {
@@ -61,6 +65,45 @@ public final class ReaderTest {
         // Unknown extension tags remain opaque rather than being interpreted as timestamps.
         Map<Object, Object> extension = new Input(new byte[]{5, (byte) 0xa1, 0x18, 99, (byte) 0xc2, 0x40}).map();
         check(extension.containsKey(BigInteger.valueOf(99)));
+        archives();
+    }
+
+    /// Checks ZIP framing, central-directory identity, and deflate integrity before resource import.
+    private static void archives() throws Exception {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        try (ZipOutputStream zip = new ZipOutputStream(buffer)) {
+            zip.putNextEntry(new ZipEntry("empty"));
+            zip.closeEntry();
+            zip.putNextEntry(new ZipEntry("value"));
+            zip.write(new byte[]{1, 2, 3});
+            zip.closeEntry();
+        }
+        byte[] original = buffer.toByteArray();
+        List<JarArchive.Entry> entries = JarArchive.read(original);
+        check(entries.size() == 2 && entries.get(0).bytes.length == 0);
+        check(Arrays.equals(entries.get(1).bytes, new byte[]{1, 2, 3}));
+        reject(() -> JarArchive.read(Arrays.copyOf(original, original.length - 1)));
+        reject(() -> JarArchive.read(new byte[0]));
+        int directory = -1;
+        for (int index = 0; index < original.length - 3; index++) {
+            if (original[index] == 'P' && original[index + 1] == 'K' && original[index + 2] == 1 && original[index + 3] == 2) {
+                directory = index;
+                break;
+            }
+        }
+        check(directory >= 0);
+        byte[] name = original.clone();
+        name[directory + 46] ^= 1;
+        reject(() -> JarArchive.read(name));
+        byte[] crc = original.clone();
+        crc[directory + 16] ^= 1;
+        reject(() -> JarArchive.read(crc));
+        byte[] count = original.clone();
+        count[count.length - 12] = 3;
+        reject(() -> JarArchive.read(count));
+        byte[] size = original.clone();
+        Arrays.fill(size, directory + 24, directory + 28, (byte) 0xff);
+        reject(() -> JarArchive.read(size));
     }
 
     /// Fails the test when an expected invariant does not hold.
