@@ -13,8 +13,11 @@ path = "src/main.rs"
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 janex-core.workspace = true
+rpassword = "7"
+zeroize = "1"
 
 [dev-dependencies]
+pgp = { version = "0.20", default-features = false }
 tempfile = "3"
 janex-format.workspace = true
 

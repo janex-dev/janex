@@ -18,6 +18,8 @@ pub enum ErrorKind {
     Limit,
     /// A digest or signature does not match its authenticated input.
     Verification,
+    /// A signer does not satisfy the caller's identity, time, usage, or revocation policy.
+    Trust,
     /// Reading or writing the underlying stream failed.
     Io,
 }

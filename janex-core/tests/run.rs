@@ -264,12 +264,15 @@ fn rejects_corruption_and_never_downgrades_signed_input() {
         fs::write(&path, bytes).unwrap();
         let mut options = options(&path);
         options.java.java = Some(temp.path().join("must-not-start-java"));
-        assert!(
-            prepare(&options)
-                .unwrap_err()
-                .to_string()
-                .contains("signature authentication")
-        );
+        match prepare(&options).unwrap_err() {
+            janex_core::Error::Format(error) if kind == 2 => {
+                assert_eq!(error.kind(), janex_format::ErrorKind::Trust)
+            }
+            janex_core::Error::Format(error) if kind == 3 => {
+                assert_eq!(error.kind(), janex_format::ErrorKind::Invalid)
+            }
+            error => panic!("unexpected signed-input result: {error}"),
+        }
     }
     let source = temp.path().join("source");
     fs::create_dir(&source).unwrap();

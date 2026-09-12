@@ -5,6 +5,7 @@
 
 use crate::{
     Error, Result,
+    authentication::{Authentication, CmsTrust, OpenPgpCertificate},
     error::invalid,
     java::{self, JavaOptions, JavaRuntime},
     materialize::materialize,
@@ -16,6 +17,7 @@ use janex_format::{
     condition::Context,
     container::{IntegrityReport, Reader, Verification},
     resource::ResourceRoot,
+    signature::{cms::CmsSignature, openpgp::OpenPgpSignature},
 };
 use std::{
     collections::{BTreeMap, btree_map::Entry},
@@ -24,6 +26,7 @@ use std::{
     io::{Cursor, Read},
     path::{Path, PathBuf},
     process::{Command, ExitStatus, Stdio},
+    time::SystemTime,
 };
 use tempfile::TempDir;
 
@@ -42,6 +45,12 @@ pub struct RunOptions {
     ///
     /// This never permits a signed file to bypass signature authentication.
     pub allow_unsigned: bool,
+    /// Explicit CMS signer pins and revocation material. Pins also reject unsigned inputs.
+    pub cms_trust: CmsTrust,
+    /// One pinned OpenPGP primary key and its supplied bindings and revocations.
+    ///
+    /// Rejects unsigned or CMS inputs. Cannot be combined with CMS signer pins.
+    pub openpgp_trust: Option<OpenPgpCertificate>,
     /// Limits on individual format values and resource expansion.
     pub limits: Limits,
     /// Maximum complete input snapshot size in bytes, including external regions.
@@ -59,6 +68,8 @@ impl RunOptions {
             java: JavaOptions::default(),
             arguments: Vec::new(),
             allow_unsigned: false,
+            cms_trust: CmsTrust::default(),
+            openpgp_trust: None,
             limits: Limits::default(),
             max_snapshot_bytes: 512 * 1024 * 1024,
             max_materialized_bytes: 512 * 1024 * 1024,
@@ -78,6 +89,8 @@ pub struct ExecutionPlan {
     arguments: Vec<OsString>,
     /// Full-snapshot checksum result retained for inspection.
     integrity: IntegrityReport,
+    /// Publisher authentication outcome for the immutable snapshot.
+    authentication: Authentication,
     /// Whether the application requests a windowless Windows process.
     windowed: bool,
     /// Lifetime owner of every generated Java path entry.
@@ -98,6 +111,11 @@ impl ExecutionPlan {
     /// Returns the snapshot's checksum coverage, independently of publisher authentication.
     pub fn integrity(&self) -> IntegrityReport {
         self.integrity
+    }
+
+    /// Returns publisher authentication independently of content checksum coverage.
+    pub fn authentication(&self) -> &Authentication {
+        &self.authentication
     }
 
     /// Returns the temporary directory removed when this plan is dropped.
@@ -143,22 +161,76 @@ impl ExecutionPlan {
 /// `allow_unsigned`; signed inputs require signature support and never fall back to that policy.
 /// No application main method or descriptor-supplied agent runs during preparation.
 pub fn prepare(options: &RunOptions) -> Result<ExecutionPlan> {
+    if options.openpgp_trust.is_some() && !options.cms_trust.signers.is_empty() {
+        return Err(invalid(
+            "OpenPGP and CMS signer pins are mutually exclusive",
+        ));
+    }
     let bytes = snapshot(&target_path(&options.target)?, options.max_snapshot_bytes)?;
     let mut reader = Reader::open_auto(Cursor::new(bytes), options.limits)?;
-    match reader.verification() {
-        Verification::None | Verification::Checksum(_) if options.allow_unsigned => {}
+    let authentication = match reader.verification() {
+        Verification::None | Verification::Checksum(_)
+            if options.allow_unsigned
+                && options.cms_trust.signers.is_empty()
+                && options.openpgp_trust.is_none() =>
+        {
+            Authentication::Unsigned
+        }
+        Verification::None | Verification::Checksum(_)
+            if !options.cms_trust.signers.is_empty() || options.openpgp_trust.is_some() =>
+        {
+            return Err(janex_format::Error::new(
+                janex_format::ErrorKind::Trust,
+                "signer pins require a file authenticated by the selected signature format",
+            )
+            .into());
+        }
         Verification::None | Verification::Checksum(_) => {
             return Err(invalid(
                 "unsigned local execution requires --allow-unsigned",
             ));
         }
-        Verification::OpenPgp(_) | Verification::Cms(_) => {
-            return Err(Error::Unsupported(
-                "signed execution requires signature authentication support".into(),
-            ));
+        Verification::OpenPgp(payload) => {
+            let trust = options.openpgp_trust.as_ref().ok_or_else(|| {
+                janex_format::Error::new(
+                    janex_format::ErrorKind::Trust,
+                    "OpenPGP authentication requires an explicitly pinned public key",
+                )
+            })?;
+            let signature = OpenPgpSignature::decode(payload, options.limits)?;
+            Authentication::OpenPgp(trust.authenticate(
+                reader.verification_input(),
+                &signature,
+                SystemTime::now(),
+            )?)
         }
-    }
+        Verification::Cms(payload) => {
+            if options.openpgp_trust.is_some() {
+                return Err(janex_format::Error::new(
+                    janex_format::ErrorKind::Trust,
+                    "OpenPGP key pins require an OpenPGP-authenticated file",
+                )
+                .into());
+            }
+            let signature = CmsSignature::decode(payload, options.limits)?;
+            let trust = &options.cms_trust;
+            Authentication::Cms(signature.authenticate(
+                reader.verification_input(),
+                &trust.signers,
+                &trust.issuers,
+                &trust.revocation_lists,
+                SystemTime::now(),
+            )?)
+        }
+    };
     let integrity = reader.verify_checksums()?;
+    if !matches!(authentication, Authentication::Unsigned) && !integrity.complete_secure_coverage {
+        return Err(janex_format::Error::new(
+            janex_format::ErrorKind::Trust,
+            "signed execution requires secure checksums covering the complete container",
+        )
+        .into());
+    }
     let applications = read_applications(&mut reader)?;
     let application = select_application(&applications, options.application.as_deref())?;
     let mut blobs = BlobStore::new(reader);
@@ -173,6 +245,7 @@ pub fn prepare(options: &RunOptions) -> Result<ExecutionPlan> {
                 &mut blobs,
                 &mut roots,
                 integrity,
+                authentication.clone(),
             )
         });
         match result {
@@ -196,6 +269,7 @@ fn prepare_runtime(
     blobs: &mut BlobStore<Cursor<Vec<u8>>>,
     roots: &mut BTreeMap<BlobRef, ResourceRoot>,
     integrity: IntegrityReport,
+    authentication: Authentication,
 ) -> Result<ExecutionPlan> {
     let context = runtime.context(Some("run"));
     let launch = application
@@ -238,8 +312,7 @@ fn prepare_runtime(
             && actual.as_deref() != Some(&version)
         {
             return Err(invalid(format!(
-                "required module version is unavailable: {name}@{}",
-                version
+                "required module version is unavailable: {name}@{version}"
             )));
         }
     }
@@ -282,6 +355,7 @@ fn prepare_runtime(
         runtime,
         arguments,
         integrity,
+        authentication,
         windowed: application.windowed(),
         directory,
     })

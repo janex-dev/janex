@@ -3,13 +3,21 @@
 
 //! Janex command-line entry point.
 
-use clap::{Args, Parser, Subcommand};
-use janex_core::pack::{PackOptions, pack};
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use janex_core::pack::{PackOptions, PackSigner, pack};
 use janex_core::{
+    authentication::{self, CmsAlgorithm, MATERIAL_LIMITS, OpenPgpAlgorithm},
     java::JavaOptions,
     run::{RunOptions, prepare},
 };
-use std::{ffi::OsString, path::PathBuf, process::ExitStatus};
+use std::{
+    ffi::OsString,
+    io::IsTerminal,
+    path::{Path, PathBuf},
+    process::ExitStatus,
+    sync::Arc,
+};
+use zeroize::Zeroizing;
 
 /// Local Janex packaging and execution commands.
 #[derive(Parser)]
@@ -49,6 +57,18 @@ struct RunArgs {
     /// Permit local None or Checksum inputs; signed input still requires authentication.
     #[arg(long)]
     allow_unsigned: bool,
+    /// Require this CMS signer certificate; repeat to require every listed signer.
+    #[arg(long, value_name = "FILE", conflicts_with = "trust_openpgp_key")]
+    trust_cms_certificate: Vec<PathBuf>,
+    /// Trust this OpenPGP primary key and its valid signing subkeys, using supplied revocation data.
+    #[arg(long, value_name = "FILE")]
+    trust_openpgp_key: Option<PathBuf>,
+    /// Supply an issuer certificate for offline CRL authentication, without adding a signer pin.
+    #[arg(long, value_name = "FILE", requires = "trust_cms_certificate")]
+    cms_issuer: Vec<PathBuf>,
+    /// Supply a complete direct X.509 v2 revocation list.
+    #[arg(long, value_name = "FILE", requires = "trust_cms_certificate")]
+    cms_crl: Vec<PathBuf>,
     /// Local path or file URI, then program arguments forwarded without Janex option parsing.
     #[arg(value_name = "TARGET", required = true, num_args = 1.., trailing_var_arg = true, allow_hyphen_values = true)]
     target: Vec<OsString>,
@@ -86,6 +106,88 @@ struct PackArgs {
     /// Required Java version range, using vers:jep322 syntax.
     #[arg(long, value_name = "VERS")]
     java_version: Option<String>,
+    /// Sign with this CMS certificate and its matching PKCS#8 private key.
+    #[arg(long, value_name = "FILE", requires = "cms_key")]
+    cms_certificate: Option<PathBuf>,
+    /// Matching DER or PEM PKCS#8 private key, optionally encrypted.
+    #[arg(
+        long,
+        value_name = "FILE",
+        requires = "cms_certificate",
+        group = "signing_key"
+    )]
+    cms_key: Option<PathBuf>,
+    /// Select a CMS signing combination; otherwise infer it from the certificate.
+    #[arg(long, value_enum, requires = "cms_certificate")]
+    cms_algorithm: Option<CmsAlgorithmArg>,
+    /// Sign with a binary or armored transferable OpenPGP secret key.
+    #[arg(long, value_name = "FILE", group = "signing_key")]
+    openpgp_key: Option<PathBuf>,
+    /// Select a primary key or signing subkey by its complete hexadecimal fingerprint.
+    #[arg(long, value_name = "FINGERPRINT", requires = "openpgp_key")]
+    openpgp_signing_key: Option<String>,
+    /// Select an OpenPGP signing combination; otherwise infer it from the selected key.
+    #[arg(long, value_enum, requires = "openpgp_key")]
+    openpgp_algorithm: Option<OpenPgpAlgorithmArg>,
+    /// Read an encrypted key's password from a file instead of a hidden terminal prompt.
+    #[arg(long, value_name = "FILE", requires = "signing_key")]
+    key_password_file: Option<PathBuf>,
+}
+
+/// CLI names for supported OpenPGP public-key and digest combinations.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum OpenPgpAlgorithmArg {
+    /// RSA with SHA-256.
+    RsaSha256,
+    /// RSA with SHA-512.
+    RsaSha512,
+    /// NIST P-256 ECDSA with SHA-256.
+    EcdsaP256Sha256,
+    /// NIST P-384 ECDSA with SHA-384.
+    EcdsaP384Sha384,
+    /// Ed25519 with SHA-256.
+    Ed25519Sha256,
+    /// Ed25519 with SHA-512.
+    Ed25519Sha512,
+}
+
+impl From<OpenPgpAlgorithmArg> for OpenPgpAlgorithm {
+    /// Maps a parsed CLI choice to the format mechanism.
+    fn from(value: OpenPgpAlgorithmArg) -> Self {
+        match value {
+            OpenPgpAlgorithmArg::RsaSha256 => Self::RsaSha256,
+            OpenPgpAlgorithmArg::RsaSha512 => Self::RsaSha512,
+            OpenPgpAlgorithmArg::EcdsaP256Sha256 => Self::EcdsaP256Sha256,
+            OpenPgpAlgorithmArg::EcdsaP384Sha384 => Self::EcdsaP384Sha384,
+            OpenPgpAlgorithmArg::Ed25519Sha256 => Self::Ed25519Sha256,
+            OpenPgpAlgorithmArg::Ed25519Sha512 => Self::Ed25519Sha512,
+        }
+    }
+}
+
+/// CLI names for the supported CMS digest and signature combinations.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum CmsAlgorithmArg {
+    /// RSA PKCS#1 v1.5 with SHA-256.
+    RsaSha256,
+    /// RSA PKCS#1 v1.5 with SHA-512.
+    RsaSha512,
+    /// NIST P-256 ECDSA with SHA-256.
+    EcdsaP256Sha256,
+    /// NIST P-384 ECDSA with SHA-384.
+    EcdsaP384Sha384,
+}
+
+impl From<CmsAlgorithmArg> for CmsAlgorithm {
+    /// Maps a parsed CLI choice to the format mechanism.
+    fn from(value: CmsAlgorithmArg) -> Self {
+        match value {
+            CmsAlgorithmArg::RsaSha256 => Self::RsaSha256,
+            CmsAlgorithmArg::RsaSha512 => Self::RsaSha512,
+            CmsAlgorithmArg::EcdsaP256Sha256 => Self::EcdsaP256Sha256,
+            CmsAlgorithmArg::EcdsaP384Sha384 => Self::EcdsaP384Sha384,
+        }
+    }
 }
 
 /// Parses arguments, performs the requested operation, and reports service failures.
@@ -113,6 +215,25 @@ fn run(cli: Cli) -> janex_core::Result<i32> {
             options.jvm_options = args.jvm_options;
             options.arguments = args.arguments;
             options.java_version = args.java_version;
+            if let Some(certificate) = args.cms_certificate {
+                let signer = authentication::load_cms_signer(
+                    &certificate,
+                    args.cms_key.as_deref().expect("required CMS key"),
+                    args.cms_algorithm.map(Into::into),
+                    MATERIAL_LIMITS,
+                    || key_password(args.key_password_file.as_deref()),
+                )?;
+                options.signer = Some(PackSigner::Cms(Arc::new(signer)));
+            } else if let Some(key) = args.openpgp_key {
+                let signer = authentication::load_openpgp_signer(
+                    &key,
+                    args.openpgp_signing_key.as_deref(),
+                    args.openpgp_algorithm.map(Into::into),
+                    MATERIAL_LIMITS,
+                    || key_password(args.key_password_file.as_deref()),
+                )?;
+                options.signer = Some(PackSigner::OpenPgp(Arc::new(signer)));
+            }
             let report = pack(&options)?;
             println!(
                 "Packed {} ({} bytes, {} resource roots)",
@@ -131,11 +252,54 @@ fn run(cli: Cli) -> janex_core::Result<i32> {
                 java_home: args.java_home,
             };
             options.allow_unsigned = args.allow_unsigned;
+            options.openpgp_trust = args
+                .trust_openpgp_key
+                .as_deref()
+                .map(|path| authentication::load_openpgp_certificate(path, MATERIAL_LIMITS))
+                .transpose()?;
+            options.cms_trust.signers = args
+                .trust_cms_certificate
+                .iter()
+                .map(|path| authentication::load_certificate(path, MATERIAL_LIMITS))
+                .collect::<janex_core::Result<_>>()?;
+            options.cms_trust.issuers = args
+                .cms_issuer
+                .iter()
+                .map(|path| authentication::load_certificate(path, MATERIAL_LIMITS))
+                .collect::<janex_core::Result<_>>()?;
+            options.cms_trust.revocation_lists = args
+                .cms_crl
+                .iter()
+                .map(|path| authentication::load_revocation_list(path, MATERIAL_LIMITS))
+                .collect::<janex_core::Result<_>>()?;
             options.arguments = target.collect();
             return prepare(&options)?.execute().map(exit_code);
         }
     }
     Ok(0)
+}
+
+/// Obtains a password without exposing it as a command-line value or echoing it to the terminal.
+fn key_password(path: Option<&Path>) -> janex_core::Result<Zeroizing<Vec<u8>>> {
+    if let Some(path) = path {
+        let mut bytes = authentication::read_material(path, 65_536)?;
+        if bytes.last() == Some(&b'\n') {
+            bytes.pop();
+            if bytes.last() == Some(&b'\r') {
+                bytes.pop();
+            }
+        }
+        return Ok(bytes);
+    }
+    if !std::io::stdin().is_terminal() {
+        return Err(janex_core::Error::InvalidInput(
+            "encrypted keys require --key-password-file when standard input is not a terminal"
+                .into(),
+        ));
+    }
+    Ok(Zeroizing::new(
+        rpassword::prompt_password("Private key password: ")?.into_bytes(),
+    ))
 }
 
 /// Preserves native exit codes and maps Unix signals to the conventional shell status.

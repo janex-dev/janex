@@ -20,14 +20,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
-          distribution: temurin
+          distribution: zulu
           java-version: '8'
       - name: Retain Java 8 for launch tests
         shell: bash
         run: echo "JANEX_TEST_JAVA8_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '25'
@@ -37,3 +37,7 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Run tests and documentation examples
         run: cargo test --workspace --locked
+      - name: Verify generated CMS signatures with OpenSSL
+        run: python janex-format/tests/fixtures/cms/check_generated.py
+      - name: Verify generated OpenPGP signatures with GnuPG
+        run: python janex-format/tests/fixtures/openpgp/check_generated.py

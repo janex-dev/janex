@@ -34,6 +34,12 @@ janex pack <SOURCE> --output <FILE>
     [--jvm-option <ARG>]...
     [--argument <ARG>]...
     [--java-version <VERS>]
+    [--cms-certificate <FILE> --cms-key <FILE>]
+    [--cms-algorithm <ALGORITHM>]
+    [--openpgp-key <FILE>]
+    [--openpgp-signing-key <FINGERPRINT>]
+    [--openpgp-algorithm <ALGORITHM>]
+    [--key-password-file <FILE>]
 ```
 
 `SOURCE` and every path entry must be a local directory or JAR. Each input becomes a separate
@@ -61,7 +67,49 @@ The output uses SHA-256 checksums and constrains both external regions to be abs
 pool and identical-file blob reuse reduce repetition within each root. Zstandard is used where it
 reduces storage. CLASSFILE transforms are selected only when their complete candidate package is
 smaller, including string-pool and index costs. Unrecognized class files remain ordinary resources.
-Given unchanged inputs, permission bits, options, and encoder versions, output bytes are reproducible.
+Unsigned output bytes are reproducible given unchanged inputs, permission bits, options, and encoder
+versions. Signatures may include the current time or randomness.
+
+### Signing Keys
+
+Choose either OpenPGP or CMS signing; the two options are mutually exclusive. Without a signing
+key, the output uses Checksum verification.
+
+Encrypted keys prompt for a hidden password when standard input is a terminal. Otherwise,
+`--key-password-file` is required. One final LF or CRLF is removed from that file; other bytes
+are retained. Passwords are never accepted as command-line values. Excessive encoded key-derivation
+costs fail before decryption. Key and trust files are individually limited to 4 MiB.
+
+### OpenPGP Signing
+
+`--openpgp-key` accepts one binary or ASCII-armored transferable secret key. The newest eligible
+secret signing subkey is selected by default, falling back to the primary key. Equal creation times
+are ordered by ascending fingerprint. `--openpgp-signing-key` selects a primary key or subkey by its
+complete hexadecimal fingerprint, ignoring letter case. Selection checks certifications, signing
+usage, expiration, and supplied revocations before requesting a password for the selected key.
+
+`--openpgp-algorithm` accepts `rsa-sha256`, `rsa-sha512`, `ecdsa-p256-sha256`, `ecdsa-p384-sha384`,
+`ed25519-sha256`, or `ed25519-sha512`. The default is SHA-256 except P-384 uses SHA-384. RSA keys must
+contain 2048–8192 bits. The output contains one binary detached document signature, with protected
+creation time and signing-key fingerprint. Its packet version follows the selected key, either 4 or 6.
+
+Encrypted keys may use AES with CFB/SHA-1 integrity or AEAD protection. Salted and iterated password
+derivation accept SHA-256/384/512, plus SHA-1 for version-4 keys. Argon2 requires AEAD and is limited
+to 256 MiB, 10 passes, 16 lanes, and 1 GiB of memory times passes. Other protection schemes are
+rejected. Unlocking checks that the private parameters match the selected public key.
+
+### CMS Signing
+
+`--cms-certificate` and `--cms-key` must be supplied together. The certificate may be DER or PEM;
+the matching private key must be PKCS#8, in DER or PEM, optionally encrypted with PBES2.
+`--cms-algorithm` accepts `rsa-sha256`, `rsa-sha512`, `ecdsa-p256-sha256`, or `ecdsa-p384-sha384`.
+The default is SHA-256 for RSA and P-256, or SHA-384 for P-384. RSA keys must contain 2048–8192 bits.
+
+The output contains one detached CMS envelope with protected content type, digest, and algorithms.
+The embedded certificate identifies its signer; it does not establish trust. Certificate validity and
+code-signing usage are checked before signing.
+
+### Output
 
 `--output` is required and must not exist. The packer writes temporary files beside the destination,
 then publishes the completed result without replacing an existing file.
@@ -70,6 +118,8 @@ then publishes the completed result without replacing an existing file.
 janex pack app.jar --output app.janex --class-path lib/dependency.jar
 janex pack classes --output app.janex --main-class example.Main --jvm-option=-ea
 janex pack app.jar --output app.janex --main-module example.app --argument=--verbose
+janex pack app.jar --output app.janex --cms-certificate signer.pem --cms-key key.pem
+janex pack app.jar --output app.janex --openpgp-key signer.asc
 ```
 
 ## `janex install`
@@ -157,14 +207,36 @@ All arguments after the target are forwarded to the application, including empty
 - `--java <PATH>` selects a Java executable or a bare executable name on `PATH`.
 - `--java-home <PATH>` selects the Java executable under that home. It conflicts with `--java`.
 - `--allow-unsigned` permits local files using None or Checksum verification. It never bypasses
-  authentication for a signed file. OpenPGP and CMS execution require signature support and
-  corresponding trust material; unsupported authentication fails before launching Java.
+  authentication for a signed file or an explicit signer requirement.
+- `--trust-cms-certificate <FILE>` requires that signer certificate. Repeat it to require every
+  listed signer. Embedded certificates and system trust stores do not add trusted signers.
+- `--cms-issuer <FILE>` supplies an issuer certificate for offline CRL authentication without
+  adding a trusted application signer. It requires `--trust-cms-certificate`.
+- `--cms-crl <FILE>` supplies a complete direct X.509 v2 CRL in DER or PEM. Repeat for additional
+  lists. It requires `--trust-cms-certificate`.
+- `--trust-openpgp-key <FILE>` pins one binary or armored OpenPGP public-key certificate and its
+  valid signing subkeys. It conflicts with `--trust-cms-certificate` and rejects other verification types.
+
+CMS authentication checks each required signature, certificate validity, signing usage, and
+supported key strength. Unknown critical certificate extensions fail. Supplied or embedded CRLs
+matching a required certificate's issuer must be current and authenticated; revoked signers fail.
+Issuer keys must verify both the pinned certificate and its CRL. Delta, partitioned, and indirect
+CRLs are unsupported. No CRL means no revocation-status assertion, and no revocation data is fetched.
+
+OpenPGP authentication checks the document signature, self-certifications, signing flags, and
+key/signature validity both when the signature was created and at the current time. Signing subkeys
+need bindings in both directions. The newest applicable self-signature supplies policy; expiration
+does not reactivate older policy. Supplied primary-key and subkey revocations apply permanently and
+retroactively. Certification revocations suppress older certifications. Third-party certifications
+do not establish trust. Designated revokers and mixed primary/subkey packet versions are unsupported.
+Only supplied revocation information is checked; no network or global keyring is consulted.
 
 ### Execution
 
 The launcher reads a bounded, owned snapshot and verifies all recorded checksums once before
 selecting a runtime. The result is reused for this launch. Later changes to the source file do not
 change the prepared invocation; there is no verification cache shared across launches.
+Signed files additionally require secure checksum coverage of every section and both external regions.
 
 Runtime selection tries an explicit override, `JAVA_HOME`, then Java executables on `PATH`.
 An explicit override fails without fallback. Otherwise, failed probes, mismatched conditions,
@@ -193,6 +265,7 @@ window on Windows. The CLI propagates the child's exit code; Unix signal termina
 janex run --allow-unsigned ./app.janex
 janex run --allow-unsigned --application javac ./jdk-tools.janex --version
 janex run --allow-unsigned --java-home /opt/jdk ./app.janex --config=config.toml
+janex run --trust-cms-certificate signer.pem ./app.janex
 ```
 
 ## `janex java`

@@ -1,8 +1,9 @@
 // Copyright (c) 2025 Glavo
 // SPDX-License-Identifier: MPL-2.0
 
-//! Local packaging and Java launch services for Janex containers.
+//! Local packaging, signing, authentication, and Java launch services for Janex containers.
 
+pub mod authentication;
 mod error;
 pub mod import;
 pub mod java;

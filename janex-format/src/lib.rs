@@ -3,7 +3,7 @@
 
 //! Reads, writes, and validates Janex 0.1 containers.
 //!
-//! Format operations do not establish publisher trust or execute application code.
+//! Container decoding and checksum validation do not establish publisher trust or execute code.
 //! Callers control input ownership, parsing limits, and authentication policy.
 //!
 //! # Writing and reading a blob
@@ -42,6 +42,7 @@ pub mod content;
 mod error;
 pub mod localized;
 pub mod resource;
+pub mod signature;
 pub mod strings;
 pub mod version;
 mod wrapper;

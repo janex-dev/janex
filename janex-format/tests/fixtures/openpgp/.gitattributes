@@ -1,0 +1,4 @@
+*.pgp binary
+*.bin binary
+*.pem text eol=lf
+*.asc text eol=lf

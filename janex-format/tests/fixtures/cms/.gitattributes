@@ -1,0 +1,4 @@
+*.der binary
+*.bin binary
+*.pem text eol=lf
+password.txt text eol=lf

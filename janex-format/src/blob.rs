@@ -182,7 +182,7 @@ pub enum Entry {
     Unknown(u8),
 }
 
-/// One table page's authenticated descriptor.
+/// One table page's metadata descriptor, without a claim of publisher authentication.
 #[derive(Clone)]
 struct Page {
     /// Offset relative to bytes after the pool magic.

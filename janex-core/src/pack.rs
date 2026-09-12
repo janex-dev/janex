@@ -5,6 +5,7 @@
 
 use crate::{
     Result,
+    authentication::{CmsSigner, OpenPgpSigner},
     error::invalid,
     import::{ImportOptions, ImportedRoot, import_path},
 };
@@ -17,6 +18,7 @@ use janex_format::{
     container::{APPLICATION, BLOB_POOL, Writer},
     content::{Content, Source, Transform},
     resource::{Directory, DirectoryEntry, Layer, ResourceRoot},
+    signature::cms,
     strings::StringPool,
     version::JavaRange,
 };
@@ -25,6 +27,8 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
+    sync::Arc,
+    time::SystemTime,
 };
 
 /// Local inputs and Java launch data for one new application package.
@@ -56,6 +60,17 @@ pub struct PackOptions {
     pub compression_level: i32,
     /// Compare a CLASSFILE-transformed candidate and retain it only when the complete file is smaller.
     pub transform_classfiles: bool,
+    /// Optional publisher signer; absent uses Checksum verification.
+    pub signer: Option<PackSigner>,
+}
+
+/// Selects the single publisher-signature mechanism used by a package.
+#[derive(Clone, Debug)]
+pub enum PackSigner {
+    /// One CMS signer certificate and its matching private key.
+    Cms(Arc<CmsSigner>),
+    /// One certified, unlocked OpenPGP primary key or signing subkey.
+    OpenPgp(Arc<OpenPgpSigner>),
 }
 
 impl PackOptions {
@@ -75,6 +90,7 @@ impl PackOptions {
             import: ImportOptions::default(),
             compression_level: 3,
             transform_classfiles: true,
+            signer: None,
         }
     }
 }
@@ -325,10 +341,23 @@ fn write_package(
         Some(application.type_info().clone()),
     )?;
     let empty_region = Value::map([(Value::uint(0), Value::uint(0))])?;
-    writer.finish(Value::map([
+    let metadata = Value::map([
         (Value::uint(1), empty_region.clone()),
         (Value::uint(2), empty_region),
-    ])?)?;
+    ])?;
+    match &options.signer {
+        Some(PackSigner::Cms(signer)) => {
+            writer.finish_with(metadata, 3, |input| {
+                cms::sign(input, &[signer], SystemTime::now())
+            })?;
+        }
+        Some(PackSigner::OpenPgp(signer)) => {
+            writer.finish_with(metadata, 2, |input| signer.sign(input, SystemTime::now()))?;
+        }
+        None => {
+            writer.finish(metadata)?;
+        }
+    }
     Ok(transformed)
 }
 
