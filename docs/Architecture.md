@@ -337,24 +337,32 @@ Janex 的状态按所有权和生命周期分层：
 
 ## Module Boundaries
 
-以下名称表示目标逻辑边界，不要求初始实现立即为每个边界建立独立 crate：
+The workspace has five concrete crates:
 
-```text
-janex-cli
-janex-host
-janex-sdk
-janex-app
-janex-dependency
-janex-script
-janex-project
-janex-acquisition
-janex-toolchain
-janex-policy
-janex-process
-janex-store
-janex-format
-janex-protocol
-```
+| Crate | Responsibility |
+| --- | --- |
+| `janex-format` | Container codecs, resources, CLASSFILE transforms, format conditions, version ranges, compression, and checksums |
+| `janex-signature` | CMS/OpenPGP signatures, keys, certificate validation, and explicit authentication policy |
+| `janex-java` | Java runtime facts, bounded JAR reading, manifests, and direct/bootstrap launch preparation |
+| `janex-host` | Packaging and application workflows, trust-material loading, policy, resource materialization, and process/resource lifetimes |
+| `janex-cli` | Argument parsing, terminal interaction, and presentation |
+
+`janex-host` depends on the three capability libraries. Those libraries do not depend on the host
+or on each other. Frontends call host operations; they may use capability request types to construct
+those calls. They do not coordinate the underlying workflows themselves.
+
+The format library exposes the original verification input and opaque signature payloads. The
+signature library validates them using caller-supplied material. Host policy determines whether
+the authenticated publisher and full-container coverage permit the requested operation.
+
+The Java library reports runtime properties and accepts local paths and entry-point requests.
+The host applies format version rules, builds condition contexts, and converts evaluated application
+descriptors into Java requests. Runtime backends and bootstrap/direct entry strategies remain
+separate concepts; discovery does not require the bootstrap to execute.
+
+Future SDK, Application, Dependency, Script, and Project services remain logical host modules until
+independent reuse or dependency isolation justifies separate crates. Acquisition, Store, Policy,
+Toolchain, Process, and Protocol boundaries follow the same rule.
 
 依赖方向为：
 

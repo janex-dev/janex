@@ -1,0 +1,20 @@
+# Copyright (c) 2026 Glavo
+# SPDX-License-Identifier: MPL-2.0
+
+[package]
+name = "janex-java"
+version.workspace = true
+edition.workspace = true
+license = "MPL-2.0"
+description = "Java runtime discovery, manifests, and launch preparation"
+
+[dependencies]
+flate2 = "1"
+thiserror = "2"
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

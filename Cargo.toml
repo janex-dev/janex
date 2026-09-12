@@ -3,7 +3,7 @@
 
 [workspace]
 resolver = "3"
-members = ["janex-format", "janex-core", "janex-cli"]
+members = ["janex-format", "janex-signature", "janex-java", "janex-host", "janex-cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,8 +11,10 @@ authors = ["Glavo"]
 edition = "2024"
 
 [workspace.dependencies]
+janex-signature = { path = "janex-signature" }
+janex-java = { path = "janex-java" }
 janex-format = { path = "janex-format" }
-janex-core = { path = "janex-core" }
+janex-host = { path = "janex-host" }
 
 [workspace.lints.rust]
 missing_docs = "warn"

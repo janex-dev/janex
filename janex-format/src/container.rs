@@ -489,16 +489,17 @@ impl<W: Write> Writer<W> {
     /// return the complete payload for that type. This method validates framing only;
     /// the caller is responsible for signature profile and cryptographic correctness.
     /// Types are 0 (None), 1 (Checksum), 2 (OpenPGP), and 3 (CMS).
+    /// Callback errors are propagated unchanged; format and I/O failures convert through `Error`.
     /// No footer is written if payload generation fails. The output is not flushed.
-    pub fn finish_with(
+    pub fn finish_with<E: From<Error>>(
         mut self,
         metadata: Value,
         verification_type: u8,
-        payload: impl FnOnce(&[u8]) -> Result<Vec<u8>>,
-    ) -> Result<W> {
+        payload: impl FnOnce(&[u8]) -> std::result::Result<Vec<u8>, E>,
+    ) -> std::result::Result<W, E> {
         let mut fields = metadata.as_map()?;
         if metadata.get(0)?.is_some() {
-            return Err(invalid("writer supplies the section table"));
+            return Err(invalid("writer supplies the section table").into());
         }
         fields.push((Value::uint(0), Value::array(self.sections)));
         let metadata = Value::map(fields)?;
@@ -521,10 +522,14 @@ impl<W: Write> Writer<W> {
             .length
             .checked_add(metadata_length)
             .ok_or_else(|| invalid("container length overflow"))?;
-        self.output.write_all(&bytes)?;
-        self.output.write_all(END_MARK)?;
-        self.output.write_all(&metadata_length.to_le_bytes())?;
-        self.output.write_all(&file_length.to_le_bytes())?;
+        self.output.write_all(&bytes).map_err(Error::from)?;
+        self.output.write_all(END_MARK).map_err(Error::from)?;
+        self.output
+            .write_all(&metadata_length.to_le_bytes())
+            .map_err(Error::from)?;
+        self.output
+            .write_all(&file_length.to_le_bytes())
+            .map_err(Error::from)?;
         Ok(self.output)
     }
 }

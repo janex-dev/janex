@@ -12,7 +12,7 @@ use std::{
 /// Resolves public cryptographic fixtures shared with the format tests.
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../janex-format/tests/fixtures/cms")
+        .join("../janex-signature/tests/fixtures/cms")
         .join(name)
 }
 

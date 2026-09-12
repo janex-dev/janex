@@ -14,7 +14,7 @@ use std::io::Cursor;
 fn janex() -> Vec<u8> {
     Writer::new(Vec::new())
         .unwrap()
-        .finish_with(Value::empty_map(), 0, |_| Ok(Vec::new()))
+        .finish_with::<janex_format::Error>(Value::empty_map(), 0, |_| Ok(Vec::new()))
         .unwrap()
 }
 

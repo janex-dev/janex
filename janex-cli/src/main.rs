@@ -4,12 +4,12 @@
 //! Janex command-line entry point.
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use janex_core::pack::{PackOptions, PackSigner, pack};
-use janex_core::{
+use janex_host::pack::{PackOptions, PackSigner, pack};
+use janex_host::{
     authentication::{self, CmsAlgorithm, MATERIAL_LIMITS, OpenPgpAlgorithm},
-    java::JavaOptions,
     run::{LaunchMode, RunOptions, prepare},
 };
+use janex_java::runtime::JavaOptions;
 use std::{
     ffi::OsString,
     io::IsTerminal,
@@ -215,7 +215,7 @@ fn main() {
 }
 
 /// Executes a parsed command without interpreting argument contents as shell text.
-fn run(cli: Cli) -> janex_core::Result<i32> {
+fn run(cli: Cli) -> janex_host::Result<i32> {
     match cli.command {
         Command::Pack(args) => {
             let mut options = PackOptions::new(args.source, args.output);
@@ -277,17 +277,17 @@ fn run(cli: Cli) -> janex_core::Result<i32> {
                 .trust_cms_certificate
                 .iter()
                 .map(|path| authentication::load_certificate(path, MATERIAL_LIMITS))
-                .collect::<janex_core::Result<_>>()?;
+                .collect::<janex_host::Result<_>>()?;
             options.cms_trust.issuers = args
                 .cms_issuer
                 .iter()
                 .map(|path| authentication::load_certificate(path, MATERIAL_LIMITS))
-                .collect::<janex_core::Result<_>>()?;
+                .collect::<janex_host::Result<_>>()?;
             options.cms_trust.revocation_lists = args
                 .cms_crl
                 .iter()
                 .map(|path| authentication::load_revocation_list(path, MATERIAL_LIMITS))
-                .collect::<janex_core::Result<_>>()?;
+                .collect::<janex_host::Result<_>>()?;
             options.arguments = target.collect();
             return prepare(&options)?.execute().map(exit_code);
         }
@@ -296,7 +296,7 @@ fn run(cli: Cli) -> janex_core::Result<i32> {
 }
 
 /// Obtains a password without exposing it as a command-line value or echoing it to the terminal.
-fn key_password(path: Option<&Path>) -> janex_core::Result<Zeroizing<Vec<u8>>> {
+fn key_password(path: Option<&Path>) -> janex_host::Result<Zeroizing<Vec<u8>>> {
     if let Some(path) = path {
         let mut bytes = authentication::read_material(path, 65_536)?;
         if bytes.last() == Some(&b'\n') {
@@ -308,7 +308,7 @@ fn key_password(path: Option<&Path>) -> janex_core::Result<Zeroizing<Vec<u8>>> {
         return Ok(bytes);
     }
     if !std::io::stdin().is_terminal() {
-        return Err(janex_core::Error::InvalidInput(
+        return Err(janex_host::Error::InvalidInput(
             "encrypted keys require --key-password-file when standard input is not a terminal"
                 .into(),
         ));

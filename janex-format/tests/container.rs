@@ -43,6 +43,27 @@ fn reads_independent_minimal_container_and_preserves_signed_input() {
 }
 
 #[test]
+fn payload_callback_errors_retain_their_type_and_do_not_write_a_footer() {
+    let mut bytes = Vec::new();
+    let writer = Writer::new(&mut bytes).unwrap();
+    let error = writer
+        .finish_with::<Box<dyn std::error::Error>>(Value::empty_map(), 3, |input| {
+            assert!(input.starts_with(b"METADATA"));
+            assert_eq!(input.last(), Some(&3));
+            Err(
+                std::io::Error::new(std::io::ErrorKind::PermissionDenied, "signer unavailable")
+                    .into(),
+            )
+        })
+        .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<std::io::Error>().unwrap().kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
+    assert_eq!(bytes, b"JANEX\0\0\0");
+}
+
+#[test]
 fn every_truncation_of_the_minimal_file_is_rejected() {
     let bytes = minimal_file();
     for length in 0..bytes.len() {
@@ -167,24 +188,24 @@ fn writer_checks_identity_metadata_and_payloads() {
     assert!(
         Writer::new(Vec::new())
             .unwrap()
-            .finish_with(Value::empty_map(), 0, |_| Ok(vec![0]))
+            .finish_with::<janex_format::Error>(Value::empty_map(), 0, |_| Ok(vec![0]))
             .is_err()
     );
     assert!(
         Writer::new(Vec::new())
             .unwrap()
-            .finish_with(Value::empty_map(), 2, |_| Ok(vec![]))
+            .finish_with::<janex_format::Error>(Value::empty_map(), 2, |_| Ok(vec![]))
             .is_err()
     );
     assert!(
         Writer::new(Vec::new())
             .unwrap()
-            .finish_with(Value::empty_map(), 99, |_| Ok(vec![1]))
+            .finish_with::<janex_format::Error>(Value::empty_map(), 99, |_| Ok(vec![1]))
             .is_err()
     );
     let bytes = Writer::new(Vec::new())
         .unwrap()
-        .finish_with(Value::empty_map(), 0, |_| Ok(vec![]))
+        .finish_with::<janex_format::Error>(Value::empty_map(), 0, |_| Ok(vec![]))
         .unwrap();
     assert_eq!(bytes, minimal_file());
 }

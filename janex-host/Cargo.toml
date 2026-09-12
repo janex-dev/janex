@@ -1,0 +1,20 @@
+# Copyright (c) 2025 Glavo
+# SPDX-License-Identifier: MPL-2.0
+
+[package]
+name = "janex-host"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+janex-format.workspace = true
+janex-java.workspace = true
+janex-signature.workspace = true
+thiserror = "2"
+tempfile = "3"
+url = "2"
+zeroize = "1"
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2"] }
+
+[lints]
+workspace = true

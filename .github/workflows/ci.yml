@@ -34,12 +34,12 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --check
       - name: Verify embedded Java bootstrap
-        run: python janex-core/bootstrap/build.py --check
+        run: python janex-java/bootstrap/build.py --check
       - name: Check warnings
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Run tests and documentation examples
         run: cargo test --workspace --locked
       - name: Verify generated CMS signatures with OpenSSL
-        run: python janex-format/tests/fixtures/cms/check_generated.py
+        run: python janex-signature/tests/fixtures/cms/check_generated.py
       - name: Verify generated OpenPGP signatures with GnuPG
-        run: python janex-format/tests/fixtures/openpgp/check_generated.py
+        run: python janex-signature/tests/fixtures/openpgp/check_generated.py

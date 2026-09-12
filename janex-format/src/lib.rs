@@ -42,7 +42,6 @@ pub mod content;
 mod error;
 pub mod localized;
 pub mod resource;
-pub mod signature;
 pub mod strings;
 pub mod version;
 mod wrapper;

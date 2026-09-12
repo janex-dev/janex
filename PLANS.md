@@ -19,15 +19,20 @@ Update [FileFormat.md](docs/spec/FileFormat.md) before implementing the affected
   filename for Java path materialization. It must be a single filename. Materialize each resource
   root in a separate directory to avoid filename collisions. Use `resources.jar` when absent.
 
-Use three code boundaries:
+Use five code boundaries:
 
-- Add `janex-format` for format reading and writing, compression, resource trees, CLASSFILE
-  transforms, conditions, version comparison, and signature mechanisms. It must not depend on the
-  CLI, networking, or Java installation management.
-- Use `janex-core` for packaging services, loading trust material, Java discovery, launch planning,
-  and process execution.
-- Use `janex-cli` for argument parsing and result presentation. Update [CLI.md](docs/spec/CLI.md)
-  alongside the command implementation.
+- Use `janex-format` for container reading and writing, compression, resource trees, CLASSFILE
+  transforms, format conditions, version comparison, and checksums. It does not depend on the
+  Java runtime or signature libraries, CLI, networking, or installation management.
+- Use `janex-signature` for CMS and OpenPGP signatures, key decoding and unlocking, certificate
+  validation, and caller-supplied authentication policy. It owns its parsing limits and errors.
+- Use `janex-java` for runtime discovery and probes, bounded JAR reading, manifests, and native
+  or bootstrap launch argument preparation. Its inputs do not contain Janex format types.
+- Use `janex-host` to orchestrate local packaging, load trust material, apply execution policy,
+  prepare resources, select compatible runtimes, and own temporary files and process lifetimes.
+  It converts format limits, conditions, and application descriptors into capability inputs.
+- Use `janex-cli` for argument parsing, terminal interaction, and result presentation. Update
+  [CLI.md](docs/spec/CLI.md) alongside the command implementation.
 
 ## Implementation Order and Interfaces
 

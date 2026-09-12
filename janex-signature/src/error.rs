@@ -3,21 +3,23 @@
 
 use std::{fmt, io};
 
-/// A format operation's result.
+/// A signature operation's result.
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// The category of a decoding, encoding, or verification failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ErrorKind {
-    /// The input is truncated or violates the format.
+    /// The input is truncated or violates the signature or key encoding.
     Invalid,
-    /// The operation requires an unsupported format feature.
+    /// The operation requires an unsupported signature feature.
     Unsupported,
     /// A configured resource limit would be exceeded.
     Limit,
-    /// A digest does not match its input.
+    /// A digest or signature does not match its authenticated input.
     Verification,
+    /// A signer does not satisfy the caller's identity, time, usage, or revocation policy.
+    Trust,
     /// Reading or writing the underlying stream failed.
     Io,
 }
@@ -39,7 +41,7 @@ pub struct Error {
 }
 
 impl Error {
-    /// Creates a format error without an underlying I/O error.
+    /// Creates a signature error without an underlying I/O error.
     pub fn new(kind: ErrorKind, context: impl Into<String>) -> Self {
         Self {
             kind,
@@ -99,7 +101,7 @@ impl From<io::Error> for Error {
     }
 }
 
-/// Reports a violation of the current format.
+/// Reports a violation of the signature encoding.
 pub(crate) fn invalid(context: impl Into<String>) -> Error {
     Error::new(ErrorKind::Invalid, context)
 }

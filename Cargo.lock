@@ -1148,8 +1148,10 @@ name = "janex-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
- "janex-core",
  "janex-format",
+ "janex-host",
+ "janex-java",
+ "janex-signature",
  "pgp",
  "rpassword",
  "tempfile",
@@ -1157,11 +1159,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "janex-core"
+name = "janex-format"
 version = "0.1.0"
 dependencies = [
- "flate2",
+ "fluent-uri",
+ "half",
+ "language-tags",
+ "minicbor",
+ "packageurl",
+ "sha2 0.11.0",
+ "sm3",
+ "xxhash-rust",
+ "zstd",
+]
+
+[[package]]
+name = "janex-host"
+version = "0.1.0"
+dependencies = [
  "janex-format",
+ "janex-java",
+ "janex-signature",
  "tempfile",
  "thiserror",
  "url",
@@ -1170,30 +1188,31 @@ dependencies = [
 ]
 
 [[package]]
-name = "janex-format"
+name = "janex-java"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "tempfile",
+ "thiserror",
+ "zip",
+]
+
+[[package]]
+name = "janex-signature"
 version = "0.1.0"
 dependencies = [
  "cms",
  "der",
- "fluent-uri",
- "half",
- "language-tags",
- "minicbor",
  "p256",
  "p384",
- "packageurl",
  "pgp",
  "pkcs8",
  "rand",
  "rsa",
  "sha2 0.10.9",
- "sha2 0.11.0",
  "signature",
- "sm3",
  "x509-cert",
- "xxhash-rust",
  "zeroize",
- "zstd",
 ]
 
 [[package]]

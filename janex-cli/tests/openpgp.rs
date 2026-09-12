@@ -3,13 +3,13 @@
 
 //! OpenPGP authentication and Java execution through the command-line trust interface.
 
-use janex_core::pack::{PackOptions, pack};
 use janex_format::{
     binary::Limits,
     cbor::Value,
     container::{Reader, Writer},
-    signature::openpgp::{self, Algorithm},
 };
+use janex_host::pack::{PackOptions, pack};
+use janex_signature::openpgp::{self, Algorithm};
 use pgp::{
     packet::{PacketHeader, SecretKey},
     types::{PacketLength, Password},
@@ -25,7 +25,7 @@ use std::{
 /// Resolves public test key material without consulting a user keyring.
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../janex-format/tests/fixtures/openpgp")
+        .join("../janex-signature/tests/fixtures/openpgp")
         .join(name)
 }
 
@@ -73,8 +73,8 @@ fn signed(original: &[u8], complete: bool, kind: u8) -> Vec<u8> {
             .unwrap();
     }
     writer
-        .finish_with(metadata, kind, |input| {
-            if kind == 2 {
+        .finish_with::<janex_host::Error>(metadata, kind, |input| {
+            Ok(if kind == 2 {
                 openpgp::sign(
                     input,
                     &key,
@@ -84,7 +84,7 @@ fn signed(original: &[u8], complete: bool, kind: u8) -> Vec<u8> {
                 )
             } else {
                 Ok(vec![1])
-            }
+            }?)
         })
         .unwrap()
 }
@@ -223,7 +223,7 @@ fn cli_packs_with_encrypted_subkeys_and_rejects_conflicting_or_invalid_signing_o
     };
     let expected = openpgp::OpenPgpSignature::decode(
         &fs::read(fixture("encrypted.signature.pgp")).unwrap(),
-        Limits::default(),
+        janex_signature::Limits::default(),
     )
     .unwrap()
     .issuer()
