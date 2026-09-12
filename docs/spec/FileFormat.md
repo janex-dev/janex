@@ -173,13 +173,14 @@ Checksum algorithms:
 ```rust
 #[repr(u8)]
 enum ChecksumAlgorithm {
-    XXH64 = 1,  // 8 bytes
+    XXH3_64 = 1,  // 8 bytes
+    XXH3_128 = 2, // 16 bytes
     
-    SHA256 = 2, // 32 bytes
+    SHA256 = 3, // 32 bytes
 
-    SHA512 = 3, // 64 bytes
+    SHA512 = 4, // 64 bytes
     
-    SM3 = 4,    // 32 bytes
+    SM3 = 5,    // 32 bytes
 }
 ```
 
@@ -188,7 +189,9 @@ Readers may skip unknown algorithms when the containing field provides a byte bo
 validation accepts supported algorithms only.
 
 Digests use each algorithm's standard byte representation, independently of Janex's integer byte
-order. XXH64 uses seed `0` and its 8-byte big-endian canonical representation.
+order. `XXH3_64` and `XXH3_128` use standard `XXH3_64bits` and `XXH3_128bits`, respectively,
+with the default secret and seed `0`. Both use big-endian canonical representation; the 128-bit
+digest stores the high 64 bits before the low 64 bits. Neither is cryptographically secure.
 
 In CBOR:
 

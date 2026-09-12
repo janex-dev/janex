@@ -11,21 +11,24 @@ use std::io::Read;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum Algorithm {
-    /// XXH64 with seed zero and an eight-byte big-endian digest; not cryptographically secure.
-    Xxh64 = 1,
+    /// XXH3-64 with the default secret, seed zero, and a big-endian digest; not cryptographically secure.
+    Xxh3_64 = 1,
+    /// XXH3-128 with the default secret, seed zero, and a big-endian digest; not cryptographically secure.
+    Xxh3_128 = 2,
     /// SHA-256 with a 32-byte digest.
-    Sha256 = 2,
+    Sha256 = 3,
     /// SHA-512 with a 64-byte digest.
-    Sha512 = 3,
+    Sha512 = 4,
     /// SM3 with a 32-byte digest.
-    Sm3 = 4,
+    Sm3 = 5,
 }
 
 impl Algorithm {
     /// Returns the digest length in bytes.
     pub fn digest_length(self) -> usize {
         match self {
-            Self::Xxh64 => 8,
+            Self::Xxh3_64 => 8,
+            Self::Xxh3_128 => 16,
             Self::Sha256 | Self::Sm3 => 32,
             Self::Sha512 => 64,
         }
@@ -33,17 +36,18 @@ impl Algorithm {
 
     /// Returns whether this algorithm may authenticate section or external-region bytes.
     pub fn is_secure(self) -> bool {
-        self != Self::Xxh64
+        matches!(self, Self::Sha256 | Self::Sha512 | Self::Sm3)
     }
 
     /// Decodes a supported algorithm identifier; zero is invalid, other unknown IDs unsupported.
     pub fn from_id(id: u8) -> Result<Self> {
         match id {
             0 => Err(invalid("checksum algorithm zero is reserved")),
-            1 => Ok(Self::Xxh64),
-            2 => Ok(Self::Sha256),
-            3 => Ok(Self::Sha512),
-            4 => Ok(Self::Sm3),
+            1 => Ok(Self::Xxh3_64),
+            2 => Ok(Self::Xxh3_128),
+            3 => Ok(Self::Sha256),
+            4 => Ok(Self::Sha512),
+            5 => Ok(Self::Sm3),
             _ => Err(Error::new(
                 ErrorKind::Unsupported,
                 format!("checksum algorithm {id}"),
@@ -99,10 +103,14 @@ impl Checksum {
     /// An I/O failure may have consumed a prefix of the input. No partial checksum is returned.
     pub fn compute(algorithm: Algorithm, mut reader: impl Read) -> Result<Self> {
         let digest = match algorithm {
-            Algorithm::Xxh64 => {
-                let mut state = xxhash_rust::xxh64::Xxh64::new(0);
+            Algorithm::Xxh3_64 | Algorithm::Xxh3_128 => {
+                let mut state = xxhash_rust::xxh3::Xxh3::new();
                 read_chunks(&mut reader, |bytes| state.update(bytes))?;
-                state.digest().to_be_bytes().to_vec()
+                if algorithm == Algorithm::Xxh3_64 {
+                    state.digest().to_be_bytes().to_vec()
+                } else {
+                    state.digest128().to_be_bytes().to_vec()
+                }
             }
             Algorithm::Sha256 => hash::<Sha256>(&mut reader)?,
             Algorithm::Sha512 => hash::<Sha512>(&mut reader)?,

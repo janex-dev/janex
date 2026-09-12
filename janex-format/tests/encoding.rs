@@ -217,20 +217,41 @@ fn cbor_limits_apply_before_large_collections_and_nested_values() {
 
 #[test]
 fn digest_known_answers_and_wire_representation() {
-    for (algorithm, input, expected) in [
-        (Algorithm::Xxh64, "", "ef46db3751d8e999"),
+    for (algorithm, id, secure, input, expected) in [
+        (Algorithm::Xxh3_64, 1, false, "", "2d06800538d394c2"),
+        (Algorithm::Xxh3_64, 1, false, "abc", "78af5f94892f3950"),
+        (
+            Algorithm::Xxh3_128,
+            2,
+            false,
+            "",
+            "99aa06d3014798d86001c324468d497f",
+        ),
+        (
+            Algorithm::Xxh3_128,
+            2,
+            false,
+            "abc",
+            "06b05ab6733a618578af5f94892f3950",
+        ),
         (
             Algorithm::Sha256,
+            3,
+            true,
             "abc",
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
         ),
         (
             Algorithm::Sha512,
+            4,
+            true,
             "abc",
             "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f",
         ),
         (
             Algorithm::Sm3,
+            5,
+            true,
             "abc",
             "66c7f0f462eeedd9d1f2d46bdc10e4e24167c4875cf2f7a2297da02b8f4ba8e0",
         ),
@@ -242,8 +263,17 @@ fn digest_known_answers_and_wire_representation() {
             .map(|byte| format!("{byte:02x}"))
             .collect();
         assert_eq!(actual, expected);
-        assert_eq!(checksum.encode()[0], algorithm as u8);
+        assert_eq!(checksum.encode()[0], id);
+        assert_eq!(Algorithm::from_id(id).unwrap(), algorithm);
+        assert_eq!(algorithm.is_secure(), secure);
+        assert_eq!(checksum.digest().len(), algorithm.digest_length());
         assert_eq!(Checksum::decode(&checksum.encode()).unwrap(), checksum);
+        let mut truncated = checksum.encode();
+        truncated.pop();
+        assert!(Checksum::decode(&truncated).is_err());
+        let mut extended = checksum.encode();
+        extended.push(0);
+        assert!(Checksum::decode(&extended).is_err());
         checksum.verify(input.as_bytes()).unwrap();
         assert_eq!(
             checksum.verify(&b"wrong"[..]).unwrap_err().kind(),
@@ -261,4 +291,50 @@ fn digest_known_answers_and_wire_representation() {
         Checksum::decode(&[99, 0]).unwrap_err().kind(),
         ErrorKind::Unsupported
     );
+}
+
+#[test]
+fn xxh3_streaming_matches_independent_c_vectors() {
+    // Generated with xxHash 0.8.2's XXH3_64bits and XXH3_128bits C APIs.
+    // Input byte i is i % 251; digests use the canonical big-endian representation.
+    for (length, expected64, expected128) in [
+        (
+            16,
+            0x8355e3a6f61770dbu64,
+            0x72950631827607e2842812cc870dcae2u128,
+        ),
+        (17, 0x9ef341a99de37328, 0x685bc458b37d057fc06e233df7729217),
+        (128, 0x85c6174c7ff4c46b, 0x14792fc3af88dc6c05321a0b64d67b41),
+        (129, 0xec7642b431ba3e5a, 0xdd5e74ac6b45f54ebc30b63382b09a3b),
+        (240, 0x375a384d957fe865, 0x65b5be86da5540e7c92b68e16f83bbb6),
+        (241, 0x02e8cd95421c6d02, 0x1da1cb61bcb8a2a102e8cd95421c6d02),
+        (1024, 0xe5d78bafa45b2aa5, 0xd0ac1f7b93bf57b9e5d78bafa45b2aa5),
+        (
+            65537,
+            0x70331d53d92bbc56,
+            0x0924e7a3a30e818770331d53d92bbc56,
+        ),
+    ] {
+        let input: Vec<u8> = (0..length).map(|i| (i % 251) as u8).collect();
+        for (algorithm, expected) in [
+            (Algorithm::Xxh3_64, expected64.to_be_bytes().to_vec()),
+            (Algorithm::Xxh3_128, expected128.to_be_bytes().to_vec()),
+        ] {
+            assert_eq!(
+                Checksum::compute(algorithm, input.as_slice())
+                    .unwrap()
+                    .digest(),
+                expected,
+                "{algorithm:?}, length {length}",
+            );
+            for split in [1, length / 2, length - 1] {
+                let reader = std::io::Read::chain(&input[..split], &input[split..]);
+                assert_eq!(
+                    Checksum::compute(algorithm, reader).unwrap().digest(),
+                    expected,
+                    "{algorithm:?}, length {length}, split {split}",
+                );
+            }
+        }
+    }
 }
