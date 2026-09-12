@@ -21,11 +21,15 @@ final class Input {
 
     /// Rejects an invalid format condition with a diagnostic.
     static void require(boolean condition, String message) {
-        if (!condition) throw new IllegalArgumentException("Invalid Zstandard data: " + message);
+        if (!condition) {
+            throw new IllegalArgumentException("Invalid Zstandard data: " + message);
+        }
     }
 
     /// Returns the unread byte count.
-    int remaining() { return end - position; }
+    int remaining() {
+        return end - position;
+    }
 
     /// Reads one unsigned byte, rejecting a truncated slice.
     int octet() {
@@ -37,7 +41,9 @@ final class Input {
     long little(int count) {
         require(count <= remaining(), "truncated integer");
         long value = 0;
-        for (int i = 0; i < count; i++) value |= (long) octet() << (i * 8);
+        for (int i = 0; i < count; i++) {
+            value |= (long) octet() << (i * 8);
+        }
         return value;
     }
 
@@ -50,5 +56,7 @@ final class Input {
     }
 
     /// Rejects bytes left over after decoding a complete section.
-    void finish() { require(position == end, "trailing section bytes"); }
+    void finish() {
+        require(position == end, "trailing section bytes");
+    }
 }

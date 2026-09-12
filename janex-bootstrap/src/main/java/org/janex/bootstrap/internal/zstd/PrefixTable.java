@@ -4,6 +4,7 @@
 package org.janex.bootstrap.internal.zstd;
 
 import java.util.Arrays;
+
 import static org.janex.bootstrap.internal.zstd.Input.require;
 
 /// Decodes Huffman literals using a complete table of at most 2048 prefixes.
@@ -18,7 +19,9 @@ final class PrefixTable {
         int sum = 0;
         for (int i = 0; i < count; i++) {
             require(weights[i] <= 11, "Huffman weight exceeds limit");
-            if (weights[i] != 0) sum += 1 << (weights[i] - 1);
+            if (weights[i] != 0) {
+                sum += 1 << (weights[i] - 1);
+            }
         }
         require(sum > 0, "empty Huffman alphabet");
         depth = 32 - Integer.numberOfLeadingZeros(sum);
@@ -31,8 +34,12 @@ final class PrefixTable {
         int smallest = 0;
         for (int weight = 1; weight <= depth; weight++) {
             for (int symbol = 0; symbol < count; symbol++) {
-                if (weights[symbol] != weight) continue;
-                if (weight == 1) smallest++;
+                if (weights[symbol] != weight) {
+                    continue;
+                }
+                if (weight == 1) {
+                    smallest++;
+                }
                 int width = 1 << (weight - 1);
                 Arrays.fill(entries, position, position + width, symbol | ((depth + 1 - weight) << 8));
                 position += width;
@@ -52,13 +59,15 @@ final class PrefixTable {
             for (int i = 0; i < count; i += 2) {
                 int pair = input.octet();
                 weights[i] = pair >>> 4;
-                if (i + 1 < count) weights[i + 1] = pair & 15;
+                if (i + 1 < count) {
+                    weights[i + 1] = pair & 15;
+                }
             }
         } else {
             Input compressed = input.take(header);
             Fse table = Fse.read(compressed, 11, 6);
             ReverseBits bits = new ReverseBits(compressed);
-            int[] states = { bits.read(table.accuracy), bits.read(table.accuracy) };
+            int[] states = {bits.read(table.accuracy), bits.read(table.accuracy)};
             int turn = 0;
             count = 0;
             while (true) {

@@ -5,17 +5,24 @@ package org.janex.bootstrap;
 
 import java.io.*;
 import java.util.Arrays;
+
 import org.janex.bootstrap.internal.zstd.Zstandard;
 
 /// Compares the portable decoders with independent Rust-generated fixtures.
 public final class CodecTest {
     /// Prevents instantiation.
-    private CodecTest() {}
+    private CodecTest() {
+    }
+
     /// Reads a counted fixture byte array.
     private static byte[] bytes(DataInputStream input) throws IOException {
-        byte[] bytes = new byte[input.readInt()]; input.readFully(bytes); return bytes;
+        byte[] bytes = new byte[input.readInt()];
+        input.readFully(bytes);
+        return bytes;
     }
+
     /// Checks all supplied valid and invalid codec vectors.
+    ///
     /// @param args path to the independently generated fixture stream
     /// @throws Exception if a vector differs or a malformed input is accepted
     public static void main(String[] args) throws Exception {
@@ -30,7 +37,9 @@ public final class CodecTest {
                 String[] pool = new String[input.readInt()];
                 for (int j = 0; j < pool.length; j++) {
                     char[] text = new char[input.readInt()];
-                    for (int k = 0; k < text.length; k++) text[k] = input.readChar();
+                    for (int k = 0; k < text.length; k++) {
+                        text[k] = input.readChar();
+                    }
                     pool[j] = new String(text);
                 }
                 byte[] actual;
@@ -38,14 +47,18 @@ public final class CodecTest {
                     if (kind == 0) {
                         actual = new byte[expected.length];
                         int length = Zstandard.decompress(encoded, 0, encoded.length, actual, 0, actual.length);
-                        if (length != actual.length) throw new IOException("Decoded length mismatch");
+                        if (length != actual.length) {
+                            throw new IOException("Decoded length mismatch");
+                        }
                         byte[] paddedInput = new byte[encoded.length + 13];
                         System.arraycopy(encoded, 0, paddedInput, 5, encoded.length);
                         byte[] paddedOutput = new byte[expected.length + 19];
                         Arrays.fill(paddedOutput, (byte) 0x5a);
                         int paddedLength = Zstandard.decompress(paddedInput, 5, encoded.length,
                                 paddedOutput, 7, expected.length + 3);
-                        if (paddedLength != length) throw new AssertionError("Slice length differs for vector " + i);
+                        if (paddedLength != length) {
+                            throw new AssertionError("Slice length differs for vector " + i);
+                        }
                         if (!Arrays.equals(actual, Arrays.copyOfRange(paddedOutput, 7, 7 + length))) {
                             throw new AssertionError("Slice output differs for vector " + i);
                         }
@@ -54,15 +67,25 @@ public final class CodecTest {
                                 throw new AssertionError("Write outside decoded range for vector " + i);
                             }
                         }
-                    } else actual = ClassFiles.restore(encoded, pool, expected.length);
+                    } else {
+                        actual = ClassFiles.restore(encoded, pool, expected.length);
+                    }
                 } catch (IOException | IllegalArgumentException rejected) {
-                    if (valid) throw new AssertionError("Rejected valid vector " + i, rejected);
+                    if (valid) {
+                        throw new AssertionError("Rejected valid vector " + i, rejected);
+                    }
                     continue;
                 }
-                if (!valid) throw new AssertionError("Accepted invalid vector " + i);
-                if (!Arrays.equals(expected, actual)) throw new AssertionError("Incorrect vector " + i);
+                if (!valid) {
+                    throw new AssertionError("Accepted invalid vector " + i);
+                }
+                if (!Arrays.equals(expected, actual)) {
+                    throw new AssertionError("Incorrect vector " + i);
+                }
             }
-            if (input.read() != -1) throw new AssertionError("Trailing fixture data");
+            if (input.read() != -1) {
+                throw new AssertionError("Trailing fixture data");
+            }
             System.out.println("Verified " + count + " codec vectors");
         }
     }

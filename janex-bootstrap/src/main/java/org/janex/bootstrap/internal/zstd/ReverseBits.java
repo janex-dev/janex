@@ -33,7 +33,9 @@ final class ReverseBits {
         int shift = low & 7;
         long value = 0;
         int byteCount = (shift + available + 7) >>> 3;
-        for (int i = 0; i < byteCount; i++) value |= (long) (bytes[index + i] & 255) << (i * 8);
+        for (int i = 0; i < byteCount; i++) {
+            value |= (long) (bytes[index + i] & 255) << (i * 8);
+        }
         return (int) (((value >>> shift) & ((1L << available) - 1)) << (count - available));
     }
 
@@ -46,5 +48,7 @@ final class ReverseBits {
     }
 
     /// Rejects an incompletely consumed entropy stream.
-    void finish() { require(remaining == 0, "trailing entropy bits"); }
+    void finish() {
+        require(remaining == 0, "trailing entropy bits");
+    }
 }

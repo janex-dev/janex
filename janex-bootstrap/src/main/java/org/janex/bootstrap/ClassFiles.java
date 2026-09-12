@@ -23,11 +23,15 @@ final class ClassFiles {
         byte[] result = new byte[length];
         ByteArrayOutput output = new ByteArrayOutput(result);
         DataOutputStream data = new DataOutputStream(output);
-        if (input.readInt() != 0xcafeca70) throw new IOException("Invalid transformed class magic");
+        if (input.readInt() != 0xcafeca70) {
+            throw new IOException("Invalid transformed class magic");
+        }
         data.writeInt(0xcafebabe);
         data.writeInt(input.readInt());
         int count = input.readUnsignedShort();
-        if (count == 0) throw new IOException("Invalid constant pool count");
+        if (count == 0) {
+            throw new IOException("Invalid constant pool count");
+        }
         data.writeShort(count);
         for (int i = 1; i < count; i++) {
             int tag = input.readUnsignedByte();
@@ -35,7 +39,9 @@ final class ClassFiles {
                 String text = string(input, pool);
                 if (tag == 0xfe) {
                     String name = string(input, pool);
-                    if (name.isEmpty()) throw new IOException("Empty external class name");
+                    if (name.isEmpty()) {
+                        throw new IOException("Empty external class name");
+                    }
                     text = text.isEmpty() ? name : text + '/' + name;
                 }
                 data.writeByte(1);
@@ -60,7 +66,9 @@ final class ClassFiles {
                         break;
                     case 5:
                     case 6:
-                        if (++i >= count) throw new IOException("Missing constant pool reserved slot");
+                        if (++i >= count) {
+                            throw new IOException("Missing constant pool reserved slot");
+                        }
                         size = 8;
                         break;
                     case 7:
@@ -76,11 +84,17 @@ final class ClassFiles {
                     default:
                         throw new IOException("Unknown constant pool tag");
                 }
-                for (int j = 0; j < size; j++) data.writeByte(input.readUnsignedByte());
+                for (int j = 0; j < size; j++) {
+                    data.writeByte(input.readUnsignedByte());
+                }
             }
         }
-        while (input.available() != 0) data.writeByte(input.readUnsignedByte());
-        if (output.position != result.length) throw new IOException("CLASSFILE decoded size mismatch");
+        while (input.available() != 0) {
+            data.writeByte(input.readUnsignedByte());
+        }
+        if (output.position != result.length) {
+            throw new IOException("CLASSFILE decoded size mismatch");
+        }
         return result;
     }
 
@@ -89,10 +103,14 @@ final class ClassFiles {
         long value = 0;
         for (int shift = 0; shift < 70; shift += 7) {
             int next = input.readUnsignedByte();
-            if (shift == 63 && next > 1) throw new IOException("String index overflow");
+            if (shift == 63 && next > 1) {
+                throw new IOException("String index overflow");
+            }
             value |= (long) (next & 127) << shift;
             if (next < 128) {
-                if (value < 0 || value >= pool.length) throw new IOException("String index out of range");
+                if (value < 0 || value >= pool.length) {
+                    throw new IOException("String index out of range");
+                }
                 return pool[(int) value];
             }
         }
@@ -114,7 +132,9 @@ final class ClassFiles {
         /// Writes one byte or rejects output exceeding the declared size.
         @Override
         public void write(int value) throws IOException {
-            if (position == bytes.length) throw new IOException("CLASSFILE exceeds declared size");
+            if (position == bytes.length) {
+                throw new IOException("CLASSFILE exceeds declared size");
+            }
             bytes[position++] = (byte) value;
         }
     }

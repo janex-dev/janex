@@ -34,14 +34,18 @@ final class Fse {
         for (int symbol = 0; symbol < frequencies.length; symbol++) {
             int frequency = frequencies[symbol];
             occurrences[symbol] = Math.abs(frequency);
-            if (frequency == -1) table.rows[tail--] = symbol;
+            if (frequency == -1) {
+                table.rows[tail--] = symbol;
+            }
         }
         int position = 0;
         int stride = size / 2 + size / 8 + 3;
         for (int symbol = 0; symbol < frequencies.length; symbol++) {
             for (int n = 0; n < frequencies[symbol]; n++) {
                 table.rows[position] = symbol;
-                do { position = (position + stride) & (size - 1); } while (position > tail);
+                do {
+                    position = (position + stride) & (size - 1);
+                } while (position > tail);
             }
         }
         require(position == 0, "incomplete FSE distribution");
@@ -72,14 +76,17 @@ final class Fse {
             int value = bits.read(width - 1);
             if (value >= shortValues) {
                 value += bits.read(1) << (width - 1);
-                if (value >= 1 << (width - 1)) value -= shortValues;
+                if (value >= 1 << (width - 1)) {
+                    value -= shortValues;
+                }
             }
             int frequency = value - 1;
             require(Math.abs(frequency) <= remaining, "FSE probability exceeds total");
             frequencies[symbol++] = frequency;
             remaining -= Math.abs(frequency);
-            if (frequency != 0) present++;
-            else {
+            if (frequency != 0) {
+                present++;
+            } else {
                 int run;
                 do {
                     run = bits.read(2);
@@ -108,7 +115,9 @@ final class Fse {
         private int available;
 
         /// Creates an empty reservoir over a section cursor.
-        ForwardBits(Input input) { this.input = input; }
+        ForwardBits(Input input) {
+            this.input = input;
+        }
 
         /// Reads a field of at most ten bits, rejecting truncation.
         int read(int count) {

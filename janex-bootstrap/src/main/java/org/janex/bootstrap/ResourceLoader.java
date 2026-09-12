@@ -49,18 +49,26 @@ public final class ResourceLoader extends URLClassLoader {
     public ResourceLoader(ClassLoader parent) throws IOException {
         super(new URL[0], parent);
         InputStream data = ResourceLoader.class.getResourceAsStream("resources.bin");
-        if (data == null) throw new IOException("Missing Janex resource index");
+        if (data == null) {
+            throw new IOException("Missing Janex resource index");
+        }
         index = new ResourceIndex(data);
         try {
             for (ResourceIndex.Root root : index.roots) {
                 Root entry = new Root(root, allRoots.size());
                 allRoots.add(entry);
-                if (!root.module) roots.add(entry);
+                if (!root.module) {
+                    roots.add(entry);
+                }
             }
             try {
                 Class.forName("org.janex.bootstrap.ModuleSupport").getMethod("initialize", ResourceLoader.class).invoke(null, this);
             } catch (ClassNotFoundException java8) {
-                for (Root root : allRoots) if (root.root.module) throw new IOException("Modules require Java 9 or later");
+                for (Root root : allRoots) {
+                    if (root.root.module) {
+                        throw new IOException("Modules require Java 9 or later");
+                    }
+                }
             } catch (ReflectiveOperationException failure) {
                 throw new IOException("Cannot initialize Janex modules", failure.getCause() == null ? failure : failure.getCause());
             }
@@ -81,23 +89,29 @@ public final class ResourceLoader extends URLClassLoader {
     }
 
     /// Preserves inherited lookup while allowing independent package definitions on Java 8.
-    @Override protected Package getPackage(String name) {
+    @Override
+    protected Package getPackage(String name) {
         synchronized (packages) {
-            if (Boolean.TRUE.equals(definingPackage.get())) return packages.get(name);
+            if (Boolean.TRUE.equals(definingPackage.get())) {
+                return packages.get(name);
+            }
             return super.getPackage(name);
         }
     }
 
     /// Records local packages, including packages defined from instrumentation-appended JARs.
-    @Override protected Package definePackage(String name, String specTitle, String specVersion, String specVendor,
-                                               String implTitle, String implVersion, String implVendor, URL sealBase) {
+    @Override
+    protected Package definePackage(String name, String specTitle, String specVersion, String specVendor,
+                                    String implTitle, String implVersion, String implVendor, URL sealBase) {
         synchronized (packages) {
             definingPackage.set(true);
             try {
                 Package result = super.definePackage(name, specTitle, specVersion, specVendor, implTitle, implVersion, implVendor, sealBase);
                 packages.put(name, result);
                 return result;
-            } finally { definingPackage.remove(); }
+            } finally {
+                definingPackage.remove();
+            }
         }
     }
 
@@ -106,15 +120,21 @@ public final class ResourceLoader extends URLClassLoader {
     protected Class<?> findClass(String name) throws ClassNotFoundException {
         int separator = name.lastIndexOf('.');
         Root module = modulePackages.get(separator < 0 ? "" : name.substring(0, separator));
-        if (module != null) return define(name, module);
+        if (module != null) {
+            return define(name, module);
+        }
         String path = name.replace('.', '/') + ".class";
         for (Root root : roots) {
             ResourceIndex.Resource resource = root.root.files.get(path);
-            if (resource == null || resource.id == -1) continue;
+            if (resource == null || resource.id == -1) {
+                continue;
+            }
             try {
                 byte[] bytes = resource.read();
                 int dot = name.lastIndexOf('.');
-                if (dot != -1) ensurePackage(name.substring(0, dot), root);
+                if (dot != -1) {
+                    ensurePackage(name.substring(0, dot), root);
+                }
                 return defineClass(name, bytes, 0, bytes.length, new CodeSource(root.base, (Certificate[]) null));
             } catch (IOException failure) {
                 throw new ClassNotFoundException(name, failure);
@@ -126,21 +146,37 @@ public final class ResourceLoader extends URLClassLoader {
     /// Defines a class from one exact module root without searching unrelated roots.
     private Class<?> define(String name, Root root) throws ClassNotFoundException {
         ResourceIndex.Resource resource = root.root.files.get(name.replace('.', '/') + ".class");
-        if (resource == null || resource.id == -1) throw new ClassNotFoundException(name);
-        try { byte[] bytes = resource.read(); return defineClass(name, bytes, 0, bytes.length, new CodeSource(root.base, (Certificate[]) null)); }
-        catch (IOException failure) { throw new ClassNotFoundException(name, failure); }
+        if (resource == null || resource.id == -1) {
+            throw new ClassNotFoundException(name);
+        }
+        try {
+            byte[] bytes = resource.read();
+            return defineClass(name, bytes, 0, bytes.length, new CodeSource(root.base, (Certificate[]) null));
+        } catch (IOException failure) {
+            throw new ClassNotFoundException(name, failure);
+        }
     }
 
     /// Implements the Java 9 module-aware class-loading hook while retaining Java 8 bytecode.
     protected Class<?> findClass(String moduleName, String name) {
         Root root = moduleRoots.get(moduleName);
-        if (root == null) return null;
+        if (root == null) {
+            return null;
+        }
         int dot = name.lastIndexOf('.');
-        if (modulePackages.get(dot < 0 ? "" : name.substring(0, dot)) != root) return null;
+        if (modulePackages.get(dot < 0 ? "" : name.substring(0, dot)) != root) {
+            return null;
+        }
         synchronized (getClassLoadingLock(name)) {
             Class<?> loaded = findLoadedClass(name);
-            if (loaded != null) return loaded;
-            try { return define(name, root); } catch (ClassNotFoundException absent) { return null; }
+            if (loaded != null) {
+                return loaded;
+            }
+            try {
+                return define(name, root);
+            } catch (ClassNotFoundException absent) {
+                return null;
+            }
         }
     }
 
@@ -168,8 +204,16 @@ public final class ResourceLoader extends URLClassLoader {
     /// Returns the first visible module or classpath resource, followed by agent-appended JARs.
     @Override
     public URL findResource(String name) {
-        for (Root root : moduleRoots.values()) if (visible(root, name)) return root.url(name);
-        for (Root root : roots) if (root.resource(name) != null) return root.url(name);
+        for (Root root : moduleRoots.values()) {
+            if (visible(root, name)) {
+                return root.url(name);
+            }
+        }
+        for (Root root : roots) {
+            if (root.resource(name) != null) {
+                return root.url(name);
+            }
+        }
         return super.findResource(name);
     }
 
@@ -177,33 +221,59 @@ public final class ResourceLoader extends URLClassLoader {
     @Override
     public Enumeration<URL> findResources(String name) throws IOException {
         List<URL> matches = new ArrayList<URL>();
-        for (Root root : moduleRoots.values()) if (visible(root, name)) matches.add(root.url(name));
-        for (Root root : roots) if (root.resource(name) != null) matches.add(root.url(name));
+        for (Root root : moduleRoots.values()) {
+            if (visible(root, name)) {
+                matches.add(root.url(name));
+            }
+        }
+        for (Root root : roots) {
+            if (root.resource(name) != null) {
+                matches.add(root.url(name));
+            }
+        }
         Enumeration<URL> appended = super.findResources(name);
-        while (appended.hasMoreElements()) matches.add(appended.nextElement());
+        while (appended.hasMoreElements()) {
+            matches.add(appended.nextElement());
+        }
         return Collections.enumeration(matches);
     }
 
     /// Tests module resource visibility for ordinary class-loader lookup.
     private boolean visible(Root root, String name) {
-        if (root.resource(name) == null) return false;
-        if (name.endsWith(".class") || !name.contains("/")) return true;
+        if (root.resource(name) == null) {
+            return false;
+        }
+        if (name.endsWith(".class") || !name.contains("/")) {
+            return true;
+        }
         String pkg = name.substring(0, name.lastIndexOf('/')).replace('/', '.');
-        if (!modulePackages.containsKey(pkg)) return true;
-        try { return (Boolean) Class.forName("java.lang.Module").getMethod("isOpen", String.class).invoke(root.module, pkg); }
-        catch (ReflectiveOperationException failure) { throw new IllegalStateException(failure); }
+        if (!modulePackages.containsKey(pkg)) {
+            return true;
+        }
+        try {
+            return (Boolean) Class.forName("java.lang.Module").getMethod("isOpen", String.class).invoke(root.module, pkg);
+        } catch (ReflectiveOperationException failure) {
+            throw new IllegalStateException(failure);
+        }
     }
 
     /// Obtains or remounts the system loader's closeable NIO view.
     static JanexFileSystem fileSystem(JanexFileSystemProvider provider, boolean create) {
         ResourceLoader loader = active;
-        if (loader == null || loader.index.isClosed()) throw new java.nio.file.FileSystemNotFoundException("No active Janex snapshot");
+        if (loader == null || loader.index.isClosed()) {
+            throw new java.nio.file.FileSystemNotFoundException("No active Janex snapshot");
+        }
         synchronized (loader) {
-            if (loader.fileSystem == null) loader.fileSystem = new JanexFileSystem(provider, loader.index);
-            else if (create) {
-                if (loader.fileSystem.isOpen()) throw new java.nio.file.FileSystemAlreadyExistsException();
+            if (loader.fileSystem == null) {
                 loader.fileSystem = new JanexFileSystem(provider, loader.index);
-            } else if (!loader.fileSystem.isOpen()) throw new java.nio.file.FileSystemNotFoundException("Janex view is closed");
+            } else if (create) {
+                if (loader.fileSystem.isOpen()) {
+                    throw new java.nio.file.FileSystemAlreadyExistsException();
+                }
+                loader.fileSystem = new JanexFileSystem(provider, loader.index);
+            } else if (!loader.fileSystem.isOpen()) {
+                throw new java.nio.file.FileSystemNotFoundException("Janex view is closed");
+            }
             return loader.fileSystem;
         }
     }
@@ -276,7 +346,9 @@ public final class ResourceLoader extends URLClassLoader {
         URL url(String name) {
             try {
                 ResourceIndex.Resource resource = resource(name);
-                if (!name.isEmpty() && !name.endsWith("/") && resource != null && resource.id == -1) name += "/";
+                if (!name.isEmpty() && !name.endsWith("/") && resource != null && resource.id == -1) {
+                    name += "/";
+                }
                 return new URL(null, new URI("janex", null, prefix + name, null).toASCIIString(), this);
             } catch (URISyntaxException | MalformedURLException invalid) {
                 throw new IllegalArgumentException(invalid);
@@ -288,21 +360,29 @@ public final class ResourceLoader extends URLClassLoader {
             ResourceIndex.Resource result = root.files.get(name);
             if (result == null && name.endsWith("/")) {
                 result = root.files.get(name.substring(0, name.length() - 1));
-                if (result != null && result.id != -1) return null;
+                if (result != null && result.id != -1) {
+                    return null;
+                }
             }
             if (result == null && !name.endsWith("/")) {
                 result = root.files.get(name + "/");
-                if (result != null && result.id != -1) return null;
+                if (result != null && result.id != -1) {
+                    return null;
+                }
             }
             return result;
         }
 
         /// Tests manifest sealing with package attributes overriding main attributes.
         boolean sealed(String name) {
-            if (manifest == null) return false;
+            if (manifest == null) {
+                return false;
+            }
             Attributes attributes = manifest.getAttributes(name.replace('.', '/') + "/");
             String value = attributes == null ? null : attributes.getValue(Attributes.Name.SEALED);
-            if (value == null) value = manifest.getMainAttributes().getValue(Attributes.Name.SEALED);
+            if (value == null) {
+                value = manifest.getMainAttributes().getValue(Attributes.Name.SEALED);
+            }
             return "true".equalsIgnoreCase(value);
         }
 
@@ -316,9 +396,13 @@ public final class ResourceLoader extends URLClassLoader {
                 throw new IOException(invalid);
             }
             if (url.getAuthority() != null || url.getQuery() != null || url.getRef() != null
-                    || path == null || !(path.startsWith(prefix) || path.equals(prefix.substring(0, prefix.length() - 1)))) throw new FileNotFoundException(url.toString());
+                    || path == null || !(path.startsWith(prefix) || path.equals(prefix.substring(0, prefix.length() - 1)))) {
+                throw new FileNotFoundException(url.toString());
+            }
             final ResourceIndex.Resource resource = resource(path.length() < prefix.length() ? "" : path.substring(prefix.length()));
-            if (resource == null) throw new FileNotFoundException(url.toString());
+            if (resource == null) {
+                throw new FileNotFoundException(url.toString());
+            }
             return new URLConnection(url) {
                 /// Marks this exact resource connection as established without decoding it.
                 @Override

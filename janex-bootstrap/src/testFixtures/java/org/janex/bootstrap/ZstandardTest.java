@@ -5,24 +5,30 @@ package org.janex.bootstrap;
 
 import java.io.ByteArrayOutputStream;
 import java.util.Arrays;
+
 import org.janex.bootstrap.internal.zstd.Zstandard;
 
 /// Exercises format boundaries and array contracts with small, explicitly encoded frames.
 public final class ZstandardTest {
     /// Prevents instantiation.
-    private ZstandardTest() {}
+    private ZstandardTest() {
+    }
 
     /// Converts unsigned byte literals to their array representation.
     private static byte[] bytes(int... values) {
         byte[] result = new byte[values.length];
-        for (int i = 0; i < values.length; i++) result[i] = (byte) values[i];
+        for (int i = 0; i < values.length; i++) {
+            result[i] = (byte) values[i];
+        }
         return result;
     }
 
     /// Concatenates complete byte sequences.
     private static byte[] join(byte[]... parts) {
         ByteArrayOutputStream result = new ByteArrayOutputStream();
-        for (byte[] part : parts) result.write(part, 0, part.length);
+        for (byte[] part : parts) {
+            result.write(part, 0, part.length);
+        }
         return result.toByteArray();
     }
 
@@ -53,8 +59,12 @@ public final class ZstandardTest {
     private static void valid(byte[] input, byte[] expected) {
         byte[] output = new byte[expected.length];
         int length = Zstandard.decompress(input, 0, input.length, output, 0, output.length);
-        if (length != expected.length || !Arrays.equals(output, expected)) throw new AssertionError("Incorrect fixture output");
-        for (int end = 0; end < input.length; end++) invalid(Arrays.copyOf(input, end), output.length);
+        if (length != expected.length || !Arrays.equals(output, expected)) {
+            throw new AssertionError("Incorrect fixture output");
+        }
+        for (int end = 0; end < input.length; end++) {
+            invalid(Arrays.copyOf(input, end), output.length);
+        }
     }
 
     /// Requires a format rejection, allowing no accidental array exceptions.
@@ -65,15 +75,19 @@ public final class ZstandardTest {
 
     /// Requires exactly the documented exception type for a failing operation.
     private static void expect(Class<? extends RuntimeException> type, Runnable operation) {
-        try { operation.run(); }
-        catch (RuntimeException failure) {
-            if (failure.getClass() == type) return;
+        try {
+            operation.run();
+        } catch (RuntimeException failure) {
+            if (failure.getClass() == type) {
+                return;
+            }
             throw new AssertionError("Unexpected exception type", failure);
         }
         throw new AssertionError("Expected " + type.getSimpleName());
     }
 
     /// Runs array, frame, entropy-table, and history-boundary checks.
+    ///
     /// @param args unused
     public static void main(String[] args) {
         byte[] raw = frame(block(0, true, 3, bytes(10, 20, 30)));

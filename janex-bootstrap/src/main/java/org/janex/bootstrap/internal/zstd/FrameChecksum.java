@@ -17,7 +17,8 @@ final class FrameChecksum {
     private static final long P5 = 0x27d4eb2f165667c5L;
 
     /// Prevents instantiation.
-    private FrameChecksum() {}
+    private FrameChecksum() {
+    }
 
     /// Mixes an eight-byte input lane into an accumulator.
     private static long lane(long accumulator, long value) {
@@ -29,18 +30,28 @@ final class FrameChecksum {
         Input input = new Input(bytes, start, end);
         long hash = P5;
         if (input.remaining() >= 32) {
-            long[] lanes = { P1 + P2, P2, 0, -P1 };
+            long[] lanes = {P1 + P2, P2, 0, -P1};
             do {
-                for (int i = 0; i < lanes.length; i++) lanes[i] = lane(lanes[i], input.little(8));
+                for (int i = 0; i < lanes.length; i++) {
+                    lanes[i] = lane(lanes[i], input.little(8));
+                }
             } while (input.remaining() >= 32);
             hash = Long.rotateLeft(lanes[0], 1) + Long.rotateLeft(lanes[1], 7)
                     + Long.rotateLeft(lanes[2], 12) + Long.rotateLeft(lanes[3], 18);
-            for (long value : lanes) hash = (hash ^ lane(0, value)) * P1 + P4;
+            for (long value : lanes) {
+                hash = (hash ^ lane(0, value)) * P1 + P4;
+            }
         }
         hash += end - start;
-        while (input.remaining() >= 8) hash = Long.rotateLeft(hash ^ lane(0, input.little(8)), 27) * P1 + P4;
-        if (input.remaining() >= 4) hash = Long.rotateLeft(hash ^ input.little(4) * P1, 23) * P2 + P3;
-        while (input.remaining() > 0) hash = Long.rotateLeft(hash ^ input.octet() * P5, 11) * P1;
+        while (input.remaining() >= 8) {
+            hash = Long.rotateLeft(hash ^ lane(0, input.little(8)), 27) * P1 + P4;
+        }
+        if (input.remaining() >= 4) {
+            hash = Long.rotateLeft(hash ^ input.little(4) * P1, 23) * P2 + P3;
+        }
+        while (input.remaining() > 0) {
+            hash = Long.rotateLeft(hash ^ input.octet() * P5, 11) * P1;
+        }
         hash = (hash ^ (hash >>> 33)) * P2;
         hash = (hash ^ (hash >>> 29)) * P3;
         return (int) (hash ^ (hash >>> 32));

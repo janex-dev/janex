@@ -5,6 +5,7 @@ package org.janex.bootstrap.internal.zstd;
 
 import java.util.Arrays;
 import java.util.Objects;
+
 import static org.janex.bootstrap.internal.zstd.Input.require;
 
 /// Decodes dictionary-free Zstandard frames into a caller-provided byte array.
@@ -20,9 +21,9 @@ public final class Zstandard {
     /// Maximum encoded and decoded block size permitted by the format.
     private static final int BLOCK_LIMIT = 128 * 1024;
     /// Additional-bit widths for literal-length codes 16 through 35.
-    private static final int[] LITERAL_BITS = { 1, 1, 1, 1, 2, 2, 3, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
+    private static final int[] LITERAL_BITS = {1, 1, 1, 1, 2, 2, 3, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
     /// Additional-bit widths for match-length codes 32 through 52.
-    private static final int[] MATCH_BITS = { 1, 1, 1, 1, 2, 2, 3, 3, 4, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
+    private static final int[] MATCH_BITS = {1, 1, 1, 1, 2, 2, 3, 3, 4, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
     /// Baselines generated from the literal-length code widths.
     private static final int[] LITERAL_BASE = bases(16, 16, LITERAL_BITS);
     /// Baselines generated from the match-length code widths.
@@ -31,7 +32,8 @@ public final class Zstandard {
     private static final Fse[] DEFAULTS = defaults();
 
     /// Prevents instantiation.
-    private Zstandard() {}
+    private Zstandard() {
+    }
 
     /// Decodes all frames in an input slice and returns the number of bytes written.
     ///
@@ -40,22 +42,24 @@ public final class Zstandard {
     /// callers must discard it. Input and output arrays must be distinct, even for disjoint ranges.
     /// A failed call does not affect subsequent calls.
     ///
-    /// @param input encoded bytes
-    /// @param inputOffset first encoded byte
-    /// @param inputLength number of encoded bytes
-    /// @param output destination array
+    /// @param input        encoded bytes
+    /// @param inputOffset  first encoded byte
+    /// @param inputLength  number of encoded bytes
+    /// @param output       destination array
     /// @param outputOffset first writable byte
     /// @param outputLength maximum number of writable bytes
     /// @return number of decoded bytes written starting at {@code outputOffset}
-    /// @throws NullPointerException if either array is null
+    /// @throws NullPointerException      if either array is null
     /// @throws IndexOutOfBoundsException if either range is outside its array
-    /// @throws IllegalArgumentException if the arrays are identical, data is malformed,
+    /// @throws IllegalArgumentException  if the arrays are identical, data is malformed,
     ///         a nonzero dictionary ID is present, or output capacity is insufficient
     public static int decompress(byte[] input, int inputOffset, int inputLength,
                                  byte[] output, int outputOffset, int outputLength) {
         range(input, inputOffset, inputLength);
         range(output, outputOffset, outputLength);
-        if (input == output) throw new IllegalArgumentException("Input and output arrays must be distinct");
+        if (input == output) {
+            throw new IllegalArgumentException("Input and output arrays must be distinct");
+        }
         Input cursor = new Input(input, inputOffset, inputOffset + inputLength);
         int position = outputOffset;
         int limit = outputOffset + outputLength;
@@ -79,13 +83,17 @@ public final class Zstandard {
     /// Checks an array range without overflowing offset arithmetic.
     private static void range(byte[] bytes, int offset, int length) {
         Objects.requireNonNull(bytes);
-        if (offset < 0 || length < 0 || offset > bytes.length - length) throw new IndexOutOfBoundsException("Invalid array range");
+        if (offset < 0 || length < 0 || offset > bytes.length - length) {
+            throw new IndexOutOfBoundsException("Invalid array range");
+        }
     }
 
     /// Generates consecutive length intervals from their additional-bit widths.
     private static int[] bases(int first, int initial, int[] widths) {
         int[] values = new int[first + widths.length];
-        for (int i = 0; i < first; i++) values[i] = i + (first == 32 ? 3 : 0);
+        for (int i = 0; i < first; i++) {
+            values[i] = i + (first == 32 ? 3 : 0);
+        }
         for (int i = 0; i < widths.length; i++) {
             values[first + i] = initial;
             initial += 1 << widths[i];
@@ -113,7 +121,7 @@ public final class Zstandard {
         Arrays.fill(matches, 46, 53, -1);
         matches[1] = 4;
         matches[2] = 3;
-        return new Fse[] { Fse.distribution(6, literals), Fse.distribution(5, offsets), Fse.distribution(6, matches) };
+        return new Fse[]{Fse.distribution(6, literals), Fse.distribution(5, offsets), Fse.distribution(6, matches)};
     }
 
     /// Holds output and entropy history for exactly one frame.
@@ -135,7 +143,7 @@ public final class Zstandard {
         /// Previous literal-length, offset, and match-length tables, initially absent.
         private final Fse[] tables = new Fse[3];
         /// Most recent three match distances.
-        private final int[] offsets = { 1, 4, 8 };
+        private final int[] offsets = {1, 4, 8};
 
         /// Creates fresh entropy and match history at an output position.
         Frame(byte[] output, int position, int limit) {
@@ -155,17 +163,23 @@ public final class Zstandard {
                 window = base + base / 8 * (description & 7);
             }
             int dictionaryWidth = descriptor & 3;
-            if (dictionaryWidth == 3) dictionaryWidth = 4;
+            if (dictionaryWidth == 3) {
+                dictionaryWidth = 4;
+            }
             require(input.little(dictionaryWidth) == 0, "external dictionary is required");
             int sizeFlag = descriptor >>> 6;
             int sizeWidth = sizeFlag == 0 ? (single ? 1 : 0) : 1 << sizeFlag;
             long contentSize = -1;
             if (sizeWidth != 0) {
                 contentSize = input.little(sizeWidth);
-                if (sizeWidth == 2) contentSize += 256;
+                if (sizeWidth == 2) {
+                    contentSize += 256;
+                }
                 require(contentSize >= 0 && contentSize <= limit - position, "frame exceeds output capacity");
             }
-            if (single) window = contentSize;
+            if (single) {
+                window = contentSize;
+            }
             blockLimit = (int) Math.min(window, BLOCK_LIMIT);
             boolean last;
             do {
@@ -184,8 +198,11 @@ public final class Zstandard {
                     space(size);
                     Arrays.fill(output, position, position + size, (byte) input.octet());
                     position += size;
-                } else if (type == 2) compressed(input.take(size));
-                else require(false, "reserved block type");
+                } else if (type == 2) {
+                    compressed(input.take(size));
+                } else {
+                    require(false, "reserved block type");
+                }
                 require(position - before <= blockLimit, "decoded block exceeds limit");
                 require(contentSize < 0 || position - start <= contentSize, "frame content size mismatch");
             } while (!last);
@@ -208,14 +225,19 @@ public final class Zstandard {
             int format = (first >>> 2) & 3;
             int size;
             if (type < 2) {
-                if ((format & 1) == 0) size = first >>> 3;
-                else size = (first >>> 4) | ((int) input.little(format == 1 ? 1 : 2) << 4);
+                if ((format & 1) == 0) {
+                    size = first >>> 3;
+                } else {
+                    size = (first >>> 4) | ((int) input.little(format == 1 ? 1 : 2) << 4);
+                }
                 require(size <= blockLimit, "literal size exceeds block limit");
                 byte[] result = new byte[size];
                 if (type == 0) {
                     Input raw = input.take(size);
                     System.arraycopy(raw.bytes, raw.position, result, 0, size);
-                } else Arrays.fill(result, (byte) input.octet());
+                } else {
+                    Arrays.fill(result, (byte) input.octet());
+                }
                 return result;
             }
             int width = format < 2 ? 10 : (format == 2 ? 14 : 18);
@@ -225,13 +247,16 @@ public final class Zstandard {
             int encodedSize = (int) (header >>> (4 + width));
             require(size <= blockLimit, "literal size exceeds block limit");
             Input encoded = input.take(encodedSize);
-            if (type == 2) prefixes = PrefixTable.read(encoded);
+            if (type == 2) {
+                prefixes = PrefixTable.read(encoded);
+            }
             require(prefixes != null, "missing Huffman table");
             byte[] result = new byte[size];
-            if (format == 0) prefixes.decode(encoded, result, 0, size);
-            else {
+            if (format == 0) {
+                prefixes.decode(encoded, result, 0, size);
+            } else {
                 require(size >= 6, "four-stream literal size is too small");
-                int[] lengths = { (int) encoded.little(2), (int) encoded.little(2), (int) encoded.little(2) };
+                int[] lengths = {(int) encoded.little(2), (int) encoded.little(2), (int) encoded.little(2)};
                 int stride = (size + 3) / 4;
                 for (int i = 0; i < 4; i++) {
                     Input stream = encoded.take(i < 3 ? lengths[i] : encoded.remaining());
@@ -245,13 +270,17 @@ public final class Zstandard {
         /// Selects or reads the next sequence table for one symbol alphabet.
         private void table(Input input, int index, int mode) {
             int maximumSymbol = index == 0 ? 35 : (index == 1 ? 31 : 52);
-            if (mode == 0) tables[index] = DEFAULTS[index];
-            else if (mode == 1) {
+            if (mode == 0) {
+                tables[index] = DEFAULTS[index];
+            } else if (mode == 1) {
                 int symbol = input.octet();
                 require(symbol <= maximumSymbol, "sequence symbol exceeds alphabet");
                 tables[index] = Fse.repeated(symbol);
-            } else if (mode == 2) tables[index] = Fse.read(input, maximumSymbol, index == 1 ? 8 : 9);
-            else require(tables[index] != null, "missing repeated FSE table");
+            } else if (mode == 2) {
+                tables[index] = Fse.read(input, maximumSymbol, index == 1 ? 8 : 9);
+            } else {
+                require(tables[index] != null, "missing repeated FSE table");
+            }
         }
 
         /// Decodes sequences, copies their literals and matches, and appends remaining literals.
@@ -259,17 +288,24 @@ public final class Zstandard {
             int blockStart = position;
             byte[] literals = literals(input);
             int count = input.octet();
-            if (count == 255) count = (int) input.little(2) + 0x7f00;
-            else if (count >= 128) count = ((count - 128) << 8) + input.octet();
+            if (count == 255) {
+                count = (int) input.little(2) + 0x7f00;
+            } else if (count >= 128) {
+                count = ((count - 128) << 8) + input.octet();
+            }
             int used = 0;
             if (count > 0) {
                 require(count <= blockLimit / 3, "sequence count exceeds block limit");
                 int modes = input.octet();
                 require((modes & 3) == 0, "reserved sequence bits");
-                for (int i = 0; i < 3; i++) table(input, i, (modes >>> (6 - i * 2)) & 3);
+                for (int i = 0; i < 3; i++) {
+                    table(input, i, (modes >>> (6 - i * 2)) & 3);
+                }
                 ReverseBits bits = new ReverseBits(input);
                 int[] states = new int[3];
-                for (int i = 0; i < 3; i++) states[i] = bits.read(tables[i].accuracy);
+                for (int i = 0; i < 3; i++) {
+                    states[i] = bits.read(tables[i].accuracy);
+                }
                 for (int sequence = 0; sequence < count; sequence++) {
                     int literalCode = tables[0].rows[states[0]] & 255;
                     int offsetCode = tables[1].rows[states[1]] & 255;
@@ -323,10 +359,14 @@ public final class Zstandard {
                 if (selected == 3) {
                     distance = offsets[0] - 1;
                     selected = 2;
-                } else distance = offsets[selected];
+                } else {
+                    distance = offsets[selected];
+                }
             }
             require(distance > 0 && distance <= Integer.MAX_VALUE, "unsupported match distance");
-            for (int i = selected; i > 0; i--) offsets[i] = offsets[i - 1];
+            for (int i = selected; i > 0; i--) {
+                offsets[i] = offsets[i - 1];
+            }
             offsets[0] = (int) distance;
             return (int) distance;
         }
