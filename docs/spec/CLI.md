@@ -63,7 +63,8 @@ following them, and maps Multi-Release JAR versions to conditional layers. Times
 Manifest `Class-Path` entries do not cause dependency acquisition; supply dependencies explicitly.
 Malformed paths, duplicate entries, unsupported filesystem nodes, and corrupt archives are errors.
 
-The output uses SHA-256 checksums and constrains both external regions to be absent. A shared string
+File entries use XXH3-64 checksums; sections, blob-table pages, and Checksum verification use SHA-256.
+The output constrains both external regions to be absent. A shared string
 pool and identical-file blob reuse reduce repetition within each root. Zstandard is used where it
 reduces storage. CLASSFILE transforms are selected only when their complete candidate package is
 smaller, including string-pool and index costs. Unrecognized class files remain ordinary resources.

@@ -7,6 +7,7 @@ use janex_format::{
     application::{JavaLaunch, PathEntry, read_applications},
     binary::Limits,
     blob::BlobStore,
+    checksum::{Algorithm, Checksum},
     condition::{Context, RuntimeContext},
     container::{Reader, Verification},
     content::Source,
@@ -109,6 +110,17 @@ fn packages_directory_resources_arguments_and_ordered_dependencies() {
     let resource = root(&launch.class_path[0], &mut blobs);
     let tree = resource.merge(&context(), Limits::default()).unwrap();
     assert_eq!(tree.read_file("a.bin", &mut blobs).unwrap(), shared);
+    for path in ["a.bin", "b.bin", "empty", "invalid.class"] {
+        let Node::File { metadata, .. } = tree.get(path).unwrap() else {
+            panic!("expected file")
+        };
+        let field = metadata.get(0).unwrap().unwrap();
+        let checksum = Checksum::decode(field.as_byte_string().unwrap()).unwrap();
+        assert_eq!(checksum.algorithm(), Algorithm::Xxh3_64);
+        checksum
+            .verify(tree.read_file(path, &mut blobs).unwrap().as_slice())
+            .unwrap();
+    }
     assert_eq!(
         tree.read_file("invalid.class", &mut blobs).unwrap(),
         b"ordinary non-class resource"

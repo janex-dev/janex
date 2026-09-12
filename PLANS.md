@@ -79,8 +79,9 @@ janex pack <SOURCE> --output <FILE>
   acquisition; dependencies must be supplied explicitly through command arguments.
 - Preserve the original JAR filename and resource contents. Do not follow symbolic links while
   importing directories. Report unrepresentable paths, duplicate entries, and conflicts as errors.
-- Write shared string pools, blob data, and SHA-256 checksums, using the Checksum verification type
-  by default. Write to a temporary file and publish the result only after successful completion.
+- Write shared string pools and blob data with XXH3-64 checksums for file entries. Use SHA-256 for
+  sections, blob-table pages, and the default Checksum verification type. Write to a temporary file
+  and publish the result only after successful completion.
   Report an error if the destination already exists.
 
 ### 3. Signatures and Authentication

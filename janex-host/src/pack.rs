@@ -114,7 +114,8 @@ pub struct PackReport {
 /// replacement. Failures before publication leave no destination file.
 ///
 /// Each input has its own root and pool. Identical file bytes within a root share a blob;
-/// checksums alone never establish equality. The smaller complete container wins when
+/// file entries use XXH3-64 checksums; checksums alone never establish equality.
+/// The smaller complete container wins when
 /// comparing transformed and ordinary class files. Ties retain ordinary class files.
 pub fn pack(options: &PackOptions) -> Result<PackReport> {
     match fs::symlink_metadata(&options.output) {
@@ -395,7 +396,7 @@ fn build_pool(
                 } = entry
                 {
                     let bytes = imported_bytes(content)?;
-                    let digest = Checksum::compute(Algorithm::Sha256, bytes)?;
+                    let digest = Checksum::compute(Algorithm::Xxh3_64, bytes)?;
                     let content = if bytes.is_empty() {
                         Content::inline(Vec::new())
                     } else if let Some(previous) = shared
