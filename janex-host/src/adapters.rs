@@ -56,6 +56,7 @@ mod tests {
     #[test]
     fn runtime_facts_are_validated_before_format_condition_evaluation() {
         let mut runtime = JavaRuntime {
+            vm_name: None,
             executable: "java".into(),
             home: "jdk".into(),
             feature: 8,

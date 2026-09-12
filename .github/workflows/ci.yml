@@ -34,7 +34,8 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --check
       - name: Verify embedded Java bootstrap
-        run: python janex-java/bootstrap/build.py --check
+        shell: bash
+        run: bash ./gradlew --no-daemon check
       - name: Check warnings
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Run tests and documentation examples

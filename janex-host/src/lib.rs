@@ -5,6 +5,7 @@
 
 mod adapters;
 pub mod authentication;
+mod bootstrap;
 mod error;
 pub mod import;
 pub mod materialize;

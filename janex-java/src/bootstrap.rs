@@ -8,7 +8,7 @@ use crate::{Result, error::invalid};
 use std::{
     ffi::OsString,
     fs::File,
-    io::Write,
+    io::{Cursor, Read, Write},
     path::{Path, PathBuf},
 };
 use zip::{ZipWriter, write::SimpleFileOptions};
@@ -27,6 +27,7 @@ pub(crate) fn write(
     arguments: &[OsString],
     instance_main: bool,
     limits: Limits,
+    resources: Option<&[u8]>,
 ) -> Result<PathBuf> {
     if entry.main_class.as_deref() == Some(MAIN_CLASS) {
         return Err(invalid(
@@ -65,12 +66,36 @@ pub(crate) fn write(
     let path = directory.join("bootstrap.jar");
     let mut jar = ZipWriter::new(File::create(&path)?);
     let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    jar.start_file("org/janex/bootstrap/Bootstrap.class", options)
-        .map_err(std::io::Error::other)?;
-    jar.write_all(include_bytes!("../bootstrap/Bootstrap.class"))?;
+    let mut embedded = zip::ZipArchive::new(Cursor::new(include_bytes!(
+        "../../janex-bootstrap/bootstrap.jar"
+    )))
+    .map_err(std::io::Error::other)?;
+    for index in 0..embedded.len() {
+        let mut entry = embedded.by_index(index).map_err(std::io::Error::other)?;
+        if entry.is_dir() {
+            continue;
+        }
+        if resources.is_none()
+            && entry.name() != "org/janex/bootstrap/Bootstrap.class"
+            && !entry.name().starts_with("META-INF/")
+        {
+            continue;
+        }
+        jar.start_file(entry.name(), options)
+            .map_err(std::io::Error::other)?;
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes)?;
+        jar.write_all(&bytes)?;
+    }
     jar.start_file("org/janex/bootstrap/launch.bin", options)
         .map_err(std::io::Error::other)?;
     jar.write_all(&data)?;
+    if let Some(resources) = resources {
+        limits.bytes(resources.len() as u64)?;
+        jar.start_file("org/janex/bootstrap/resources.bin", options)
+            .map_err(std::io::Error::other)?;
+        jar.write_all(resources)?;
+    }
     jar.finish().map_err(std::io::Error::other)?;
     Ok(path)
 }

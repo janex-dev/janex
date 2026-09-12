@@ -65,6 +65,38 @@ impl LaunchRequest {
         directory: &Path,
         limits: Limits,
     ) -> Result<Vec<OsString>> {
+        self.prepare_with_resources(runtime, directory, limits, None)
+    }
+
+    /// Prepares a launch with an optional private classpath resource index.
+    ///
+    /// `resources` must be Host-generated launch data matching the embedded Java bootstrap.
+    /// It requires bootstrap mode and a classpath entry point. The caller must retain the
+    /// referenced private snapshot until Java exits. Other behavior matches [`Self::prepare`].
+    pub fn prepare_with_resources(
+        &self,
+        runtime: &JavaRuntime,
+        directory: &Path,
+        limits: Limits,
+        resources: Option<&[u8]>,
+    ) -> Result<Vec<OsString>> {
+        if resources.is_some()
+            && (self.mode != LaunchMode::Bootstrap || self.entry_point.main_module.is_some())
+        {
+            return Err(invalid(
+                "resource loading requires a classpath bootstrap launch",
+            ));
+        }
+        if resources.is_some()
+            && self
+                .jvm_options
+                .iter()
+                .any(|option| option.starts_with("-Djava.system.class.loader="))
+        {
+            return Err(invalid(
+                "resource loading requires the Janex system class loader; use direct mode for a custom loader",
+            ));
+        }
         limits.elements(self.arguments.len() as u64)?;
         if runtime.feature < 9
             && (self.entry_point.main_module.is_some() || !self.module_path.is_empty())
@@ -90,6 +122,7 @@ impl LaunchRequest {
                             .iter()
                             .any(|option| option == "--enable-preview")),
                 limits,
+                resources,
             )?)
         } else {
             None
@@ -98,7 +131,21 @@ impl LaunchRequest {
         if runtime.feature >= 9 {
             arguments.push("--disable-@files".into());
         }
+        if resources.is_some()
+            && runtime.feature >= 9
+            && runtime
+                .vm_name
+                .as_deref()
+                .is_some_and(|name| name.contains("OpenJDK") || name.contains("HotSpot"))
+        {
+            // Custom system loaders cannot use archived application classes. Keep the
+            // expected HotSpot CDS notice out of application output; user options follow.
+            arguments.push("-Xlog:cds=error".into());
+        }
         arguments.extend(self.jvm_options.iter().map(OsString::from));
+        if resources.is_some() {
+            arguments.push("-Djava.system.class.loader=org.janex.bootstrap.ResourceLoader".into());
+        }
         if self.entry_point.main_module.is_none()
             && let Some(bridge) = &bridge
         {

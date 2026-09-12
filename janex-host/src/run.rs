@@ -11,7 +11,7 @@ use crate::{
     materialize::materialize,
 };
 use janex_format::{
-    application::{Application, JavaLaunch, PathEntry, read_applications, select_application},
+    application::{Application, PathEntry, read_applications, select_application},
     binary::Limits,
     blob::{BlobRef, BlobStore},
     condition::Context,
@@ -62,7 +62,9 @@ pub struct RunOptions {
     pub limits: Limits,
     /// Maximum complete input snapshot size in bytes, including external regions.
     pub max_snapshot_bytes: u64,
-    /// Maximum aggregate logical bytes written across distinct materialized roots.
+    /// Maximum aggregate logical resource bytes prepared for classpath, module paths, and agents.
+    ///
+    /// Indexed classpath files count by their declared restored size, even when never read.
     pub max_materialized_bytes: u64,
 }
 
@@ -85,7 +87,7 @@ impl RunOptions {
     }
 }
 
-/// A selected Java invocation owning its temporary JARs until dropped.
+/// A selected Java invocation owning its private snapshot, index JAR, and materialized paths.
 ///
 /// Preparation verifies one owned input snapshot. Later changes to the source file do not
 /// affect this plan. It is not a persistent verification cache or a publisher trust claim.
@@ -273,7 +275,7 @@ pub fn prepare(options: &RunOptions) -> Result<ExecutionPlan> {
     }))
 }
 
-/// Resolves and materializes the configuration evaluated against one candidate runtime.
+/// Prepares indexed or materialized resources for one candidate runtime.
 fn prepare_runtime(
     options: &RunOptions,
     application: &Application,
@@ -293,17 +295,35 @@ fn prepare_runtime(
         return Err(invalid("module launching requires Java 9 or later"));
     }
     let directory = tempfile::Builder::new().prefix("janex-run-").tempdir()?;
+    let resources = if options.launch_mode == LaunchMode::Bootstrap
+        && launch.entry_point.main_module.is_none()
+    {
+        Some(crate::bootstrap::prepare(
+            &launch.class_path,
+            &context,
+            blobs,
+            roots,
+            directory.path(),
+            options.max_materialized_bytes,
+        )?)
+    } else {
+        None
+    };
     let mut materializer = Paths {
         directory: directory.path(),
         context: &context,
         roots,
         blobs,
         paths: BTreeMap::new(),
-        remaining_bytes: options.max_materialized_bytes,
+        remaining_bytes: options.max_materialized_bytes
+            - resources
+                .as_ref()
+                .map_or(0, |resources| resources.logical_bytes),
     };
     let class_path = launch
         .class_path
         .iter()
+        .filter(|_| resources.is_none())
         .map(|entry| materializer.local(entry))
         .collect::<Result<Vec<_>>>()?;
     let mut module_path = Vec::new();
@@ -354,14 +374,34 @@ fn prepare_runtime(
         }
         agents.push(argument);
     }
-    let arguments = arguments(
-        &runtime,
-        &launch,
+    options
+        .limits
+        .elements(launch.arguments.len() as u64 + options.arguments.len() as u64)?;
+    let program_arguments: Vec<_> = launch
+        .arguments
+        .iter()
+        .map(OsString::from)
+        .chain(options.arguments.iter().cloned())
+        .collect();
+    let arguments = LaunchRequest {
+        entry_point: EntryPoint {
+            main_class: launch.entry_point.main_class.clone(),
+            main_module: launch.entry_point.main_module.clone(),
+        },
+        mode: options.launch_mode,
+        jvm_options: launch.jvm_options.clone(),
         class_path,
         module_path,
         agents,
-        &directory,
-        options,
+        arguments: program_arguments,
+    }
+    .prepare_with_resources(
+        &runtime,
+        directory.path(),
+        java_limits(options.limits),
+        resources
+            .as_ref()
+            .map(|resources| resources.data.as_slice()),
     )?;
     Ok(ExecutionPlan {
         runtime,
@@ -419,40 +459,6 @@ impl Paths<'_> {
         self.paths.insert(*reference, result.path.clone());
         Ok(result.path)
     }
-}
-
-/// Assembles native arguments without interpreting whitespace or shell metacharacters.
-fn arguments(
-    runtime: &JavaRuntime,
-    launch: &JavaLaunch,
-    class_path: Vec<PathBuf>,
-    module_path: Vec<PathBuf>,
-    agents: Vec<OsString>,
-    directory: &TempDir,
-    options: &RunOptions,
-) -> Result<Vec<OsString>> {
-    options
-        .limits
-        .elements(launch.arguments.len() as u64 + options.arguments.len() as u64)?;
-    let program_arguments: Vec<_> = launch
-        .arguments
-        .iter()
-        .map(OsString::from)
-        .chain(options.arguments.iter().cloned())
-        .collect();
-    Ok(LaunchRequest {
-        entry_point: EntryPoint {
-            main_class: launch.entry_point.main_class.clone(),
-            main_module: launch.entry_point.main_module.clone(),
-        },
-        mode: options.launch_mode,
-        jvm_options: launch.jvm_options.clone(),
-        class_path,
-        module_path,
-        agents,
-        arguments: program_arguments,
-    }
-    .prepare(runtime, directory.path(), java_limits(options.limits))?)
 }
 
 /// Reads an owned bounded snapshot, avoiding later reads from a mutable source file.

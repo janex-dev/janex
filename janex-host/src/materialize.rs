@@ -171,7 +171,7 @@ fn zip_options(metadata: Option<&Value>) -> Result<SimpleFileOptions> {
 }
 
 /// Identifies standard JAR signature files directly inside META-INF.
-fn jar_signature(path: &str) -> bool {
+pub(crate) fn jar_signature(path: &str) -> bool {
     let Some((parent, name)) = path.rsplit_once('/') else {
         return false;
     };

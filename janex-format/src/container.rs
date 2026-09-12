@@ -404,6 +404,11 @@ impl<R: Read + Seek> Reader<R> {
     pub fn into_inner(self) -> R {
         self.source
     }
+
+    /// Borrows the underlying source without changing its cursor or verifying its contents.
+    pub fn get_ref(&self) -> &R {
+        &self.source
+    }
 }
 
 /// A sequential writer for one Janex container, beginning at the output's current position.

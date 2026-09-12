@@ -40,6 +40,8 @@ pub struct JavaRuntime {
     pub version_text: String,
     /// Exact `java.vendor` property for condition matching.
     pub vendor: String,
+    /// Runtime-reported VM name, when included in the property probe.
+    pub vm_name: Option<String>,
     /// System module names and optional descriptor versions; empty for Java 8.
     pub modules: BTreeMap<String, Option<String>>,
 }
@@ -58,6 +60,11 @@ impl JavaRuntime {
             true,
         )?;
         let (home, version_text, vendor) = settings(&properties)?;
+        let vm_name = properties.lines().find_map(|line| {
+            line.trim_start()
+                .strip_prefix("java.vm.name = ")
+                .map(str::to_owned)
+        });
         let feature = feature_version(&version_text)?;
         let modules = if feature >= 9 {
             module_list(&probe_output(&executable, &["--list-modules"], false)?)?
@@ -70,6 +77,7 @@ impl JavaRuntime {
             feature,
             version_text,
             vendor,
+            vm_name,
             modules,
         })
     }

@@ -235,8 +235,8 @@ Only supplied revocation information is checked; no network or global keyring is
 
 ### Execution
 
-The launcher reads a bounded, owned snapshot and verifies all recorded checksums once before
-selecting a runtime. The result is reused for this launch. Later changes to the source file do not
+The launcher reads a bounded, owned snapshot and verifies container and external-region checksums
+once before selecting a runtime. The result is reused for this launch. Later changes to the source file do not
 change the prepared invocation; there is no verification cache shared across launches.
 Signed files additionally require secure checksum coverage of every section and both external regions.
 
@@ -251,17 +251,19 @@ It supports classpath and module entry points, including Java 25 instance and no
 methods. Direct mode invokes the native application entry point without this layer and retains
 the runtime's argument-conversion limits. Both modes preserve argument order and boundaries.
 On Unix, non-Unicode native argument bytes require direct mode. JVM options, Java paths, and
-agent options use the native launcher in both modes.
+agent options use the native launcher in both modes. A custom `java.system.class.loader` requires
+direct mode for classpath applications.
 
 Conditions, overlays, and resource layers use the selected runtime and invocation `run`.
-Each distinct local resource root becomes a JAR in its own temporary directory, retaining its
-JAR filename for automatic-module naming. Module requirements use the selected Java runtime
-and supplied local module-path entries; unresolved external references fail without downloading.
+Classpath bootstrap entry points load resources on demand from the verified snapshot, using a
+Janex system class loader. Modules, agents, direct launches, and module entry-point launches
+use temporary JARs, retaining their filenames for automatic-module naming. Module requirements use
+the selected Java runtime and supplied local module-path entries; unresolved external references fail without downloading.
 Symbolic links expand into resource contents; dangling links, cycles, and root escapes fail.
 
-Runtime JARs omit manifest `Class-Path`, JAR signature files, and signature-only manifest attributes.
+Runtime resources omit manifest `Class-Path`, JAR signature files, and signature-only manifest attributes.
 Other manifest attributes, including sealing information, are retained. The original resources in
-the Janex file remain unchanged. Temporary JARs are removed after the child process exits.
+the Janex file remain unchanged. Temporary launch files are removed after the child process exits.
 
 Java starts directly without a shell, inheriting the working directory and standard streams.
 JVM options and agent options retain their argument boundaries. Preset program arguments precede

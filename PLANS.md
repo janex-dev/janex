@@ -19,7 +19,7 @@ Update [FileFormat.md](docs/spec/FileFormat.md) before implementing the affected
   filename for Java path materialization. It must be a single filename. Materialize each resource
   root in a separate directory to avoid filename collisions. Use `resources.jar` when absent.
 
-Use five code boundaries:
+Use five Rust crates and one Java bootstrap project:
 
 - Use `janex-format` for container reading and writing, compression, resource trees, CLASSFILE
   transforms, format conditions, version comparison, and checksums. It does not depend on the
@@ -28,6 +28,8 @@ Use five code boundaries:
   validation, and caller-supplied authentication policy. It owns its parsing limits and errors.
 - Use `janex-java` for runtime discovery and probes, bounded JAR reading, manifests, and native
   or bootstrap launch argument preparation. Its inputs do not contain Janex format types.
+- Use `janex-bootstrap` for portable Java resource loading and entry invocation. The Host supplies
+  an evaluated resource index over its verified snapshot; Java does not repeat launch policy.
 - Use `janex-host` to orchestrate local packaging, load trust material, apply execution policy,
   prepare resources, select compatible runtimes, and own temporary files and process lifetimes.
   It converts format limits, conditions, and application descriptors into capability inputs.
@@ -126,9 +128,14 @@ janex run [OPTIONS] <TARGET> [ARGS...]
 - Evaluate conditions, overlays, and resource layers against each candidate runtime. Check local
   modules and modules supplied by the runtime. Report missing dependencies without downloading
   content or invoking remote providers.
-- Rebuild each resource root as a JAR in its own temporary directory, preserving its filename to
-  retain automatic-module naming. Resolve resource symbolic links during materialization; report
-  dangling links, cycles, and attempts to escape the resource root as errors.
+- For classpath bootstrap entry points, write a private snapshot and resource index. Read ordinary
+  Stored blobs, Extents, Zstandard frames, and CLASSFILE transforms on demand in Java. Preserve root
+  order, resource enumeration, manifest package attributes, sealing, and service discovery.
+- Materialize module paths, agents, and direct-mode paths as JARs, preserving automatic-module
+  naming. Module entry points retain the existing native module layer and bootstrap patch.
+- Decode external-dictionary blobs in the Host until the portable Java decoder supports dictionaries.
+  Bound index size, logical expansion, and Java blob-cache retention. Resolve symbolic links before
+  launching, rejecting dangling links, cycles, and root escapes.
 - Produce a structured execution plan, then start Java directly without a shell. Preserve JVM and
   program argument boundaries. Place preset program arguments before user-supplied arguments.
   Inherit the working directory and standard streams, and propagate the process exit status.
@@ -157,3 +164,16 @@ janex run [OPTIONS] <TARGET> [ARGS...]
 
 Acceptance requires working packaging, signing, verification, and launching. Type skeletons and
 placeholder interfaces do not constitute completion.
+
+## Java Bootstrap Follow-up
+
+The classpath stage uses standard Java 8 APIs and a system class loader, with a checked-array
+Zstandard decoder adapted from japp. The root Gradle multi-project build uses JDK 25 with `--release 8`. Its `jar` task
+builds the reproducible artifact, `check` verifies the embedded copy, and
+`:janex-bootstrap:updateEmbeddedBootstrap` updates it. CI invokes the root Gradle Wrapper; normal Cargo builds do not require Java or network downloads.
+
+Direct loading of named modules and a read-only NIO file-system provider remain subsequent stages.
+Do not replace the current module path until module resolution, agents, service discovery, access
+options, and native boot-layer behavior have equivalent coverage. Keep direct mode independently
+usable throughout. Custom system loaders require direct mode. Host authentication covers the
+complete snapshot once; the Java reader does not add per-resource publisher authentication.

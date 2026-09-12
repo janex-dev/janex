@@ -712,6 +712,7 @@ public class Agent {
         System.out.println("agent:" + option);
     }
 }
+
 "#).unwrap();
     fs::write(temp.path().join("Main.java"), "public class Main { public static void main(String[] args) { System.out.println(\"main\"); } }").unwrap();
     tool(
@@ -775,4 +776,161 @@ public class Agent {
         "agent:one=two words\nmain\n"
     );
     assert_eq!(fs::read(marker).unwrap(), b"one=two words");
+}
+
+#[test]
+fn bootstrap_loads_snapshot_resources_services_and_sealed_packages() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::write(
+        temp.path().join("Service.java"),
+        "package sample; public interface Service { String value(); }",
+    )
+    .unwrap();
+    fs::write(temp.path().join("Main.java"), r#"
+package sample;
+import java.io.*;
+import java.net.*;
+import java.util.*;
+public class Main {
+    static byte[] read(URL url) throws Exception {
+        try (InputStream input = url.openStream(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            byte[] block = new byte[4096]; int count;
+            while ((count = input.read(block)) != -1) output.write(block, 0, count);
+            return output.toByteArray();
+        }
+    }
+    static void check(boolean value) { if (!value) throw new AssertionError(); }
+    public static void main(String[] args) throws Exception {
+        ClassLoader loader = Main.class.getClassLoader();
+        check(loader == ClassLoader.getSystemClassLoader());
+        check(loader == Thread.currentThread().getContextClassLoader());
+        check(Main.class.getPackage().isSealed());
+        check("fixture".equals(Main.class.getPackage().getImplementationTitle()));
+        URL first = loader.getResource("dupe.txt");
+        check("one".equals(new String(read(first), "UTF-8")));
+        Enumeration<URL> matches = loader.getResources("dupe.txt");
+        check("one".equals(new String(read(matches.nextElement()), "UTF-8")));
+        check("two".equals(new String(read(matches.nextElement()), "UTF-8")));
+        check(!matches.hasMoreElements());
+        check(loader.getResource("META-INF/OLD.SF") == null);
+        check(loader.getResource("missing.txt") == null);
+        URL escaped = loader.getResource("space # percent % \u4e2d.txt");
+        check("escaped".equals(new String(read(escaped), "UTF-8")));
+        check(Arrays.equals(read(escaped), read(new URL(escaped.toString()))));
+        byte[] large = read(loader.getResource("large.bin"));
+        check(large.length == 1024 * 1024);
+        for (int i = 0; i < large.length; i++) check(large[i] == (byte) (i % 251));
+        Iterator<Service> services = ServiceLoader.load(Service.class).iterator();
+        check("provider".equals(services.next().value())); check(!services.hasNext());
+        try { Class.forName("sample.Foreign"); throw new AssertionError("sealing ignored"); }
+        catch (SecurityException expected) {}
+        if (args[0].equals("bootstrap")) {
+            check("janex".equals(first.getProtocol()));
+            check(first.openConnection().getPermission() == null);
+            check("janex".equals(Main.class.getProtectionDomain().getCodeSource().getLocation().getProtocol()));
+            check(loader.getResources("").hasMoreElements());
+        }
+        System.out.println("resources-ok");
+    }
+}
+"#).unwrap();
+    tool(
+        temp.path(),
+        "javac",
+        &["--release", "8", "-d", "main", "Service.java", "Main.java"],
+    );
+    fs::write(temp.path().join("Provider.java"), "package other; public class Provider implements sample.Service { public String value() { return \"provider\"; } }").unwrap();
+    fs::write(
+        temp.path().join("Foreign.java"),
+        "package sample; public class Foreign {}",
+    )
+    .unwrap();
+    tool(
+        temp.path(),
+        "javac",
+        &[
+            "--release",
+            "8",
+            "-cp",
+            temp.path().join("main").to_str().unwrap(),
+            "-d",
+            "dep",
+            "Provider.java",
+            "Foreign.java",
+        ],
+    );
+    for root in ["main", "dep"] {
+        fs::create_dir_all(temp.path().join(root).join("META-INF/services")).unwrap();
+    }
+    fs::write(temp.path().join("main/META-INF/MANIFEST.MF"), "Manifest-Version: 1.0\nSealed: true\nImplementation-Title: fixture\nClass-Path: absent.jar\n\n").unwrap();
+    fs::write(temp.path().join("main/META-INF/OLD.SF"), b"not retained").unwrap();
+    fs::write(
+        temp.path().join("dep/META-INF/services/sample.Service"),
+        "# comment\nother.Provider\n",
+    )
+    .unwrap();
+    fs::write(temp.path().join("main/dupe.txt"), b"one").unwrap();
+    fs::write(temp.path().join("dep/dupe.txt"), b"two").unwrap();
+    fs::write(
+        temp.path().join("main/space # percent % \u{4e2d}.txt"),
+        b"escaped",
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join("main/large.bin"),
+        (0..1024 * 1024)
+            .map(|i| (i % 251) as u8)
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let mut packing = PackOptions::new(
+        temp.path().join("main"),
+        temp.path().join("resources.janex"),
+    );
+    packing.main_class = Some("sample.Main".into());
+    packing.class_path.push(temp.path().join("dep"));
+    pack(&packing).unwrap();
+    for mode in [LaunchMode::Bootstrap, LaunchMode::Direct] {
+        let mut running = options(&packing.output);
+        running.launch_mode = mode;
+        running.arguments = vec![
+            if mode == LaunchMode::Bootstrap {
+                "bootstrap"
+            } else {
+                "direct"
+            }
+            .into(),
+        ];
+        let plan = prepare(&running).unwrap();
+        if mode == LaunchMode::Bootstrap {
+            let mut files = fs::read_dir(plan.directory())
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect::<Vec<_>>();
+            files.sort();
+            assert_eq!(files, ["bootstrap.jar", "snapshot.janex"]);
+            assert_eq!(
+                fs::read(plan.directory().join("snapshot.janex")).unwrap(),
+                fs::read(&packing.output).unwrap()
+            );
+        }
+        let output = capture(&plan);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap().trim(),
+            "resources-ok"
+        );
+    }
+    let mut running = options(&packing.output);
+    running.max_materialized_bytes = 100;
+    assert!(
+        prepare(&running)
+            .unwrap_err()
+            .to_string()
+            .contains("resource byte limit")
+    );
 }

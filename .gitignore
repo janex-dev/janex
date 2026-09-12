@@ -1,3 +1,21 @@
-/target
-/.idea
+target
+.project
+.classpath
+.settings
+.idea
+.vscode
+*.iml
+*.jar
+*.class
+*~
 __pycache__/
+/.externalToolBuilders/
+/maven-eclipse.xml
+gradle.properties
+
+# Ignore Gradle project-specific cache directory
+.gradle
+
+# Ignore Gradle build output directory
+build/
+
