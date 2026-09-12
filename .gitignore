@@ -6,6 +6,7 @@ target
 .vscode
 *.iml
 *.jar
+!/janex-bootstrap/bootstrap.jar
 *.class
 *~
 __pycache__/

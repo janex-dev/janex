@@ -5,7 +5,7 @@ package org.janex.bootstrap;
 
 import java.io.*;
 import java.util.*;
-import org.janex.bootstrap.internal.zstd.ZstdFrameDecompressor;
+import org.janex.bootstrap.internal.zstd.Zstandard;
 
 /// Reads Host-selected resources from a private snapshot without rebuilding classpath JARs.
 ///
@@ -159,7 +159,7 @@ final class ResourceIndex implements Closeable {
             try {
                 for (int length : source.filters) {
                     byte[] output = new byte[length];
-                    int written = new ZstdFrameDecompressor().decompress(bytes, 0, bytes.length, output, 0, output.length);
+                    int written = Zstandard.decompress(bytes, 0, bytes.length, output, 0, output.length);
                     if (written != length) throw new IOException("Zstd decoded size mismatch");
                     bytes = output;
                 }

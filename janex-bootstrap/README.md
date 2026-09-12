@@ -10,8 +10,9 @@ Use the root Wrapper (`gradlew.bat` on Windows):
 ./gradlew check
 ```
 
-`./gradlew build` compiles Java sources and test fixtures, builds the JAR, and verifies the recorded
-artifact. Cross-language codec and launch tests run through `cargo test --workspace`.
+`./gradlew build` compiles Java sources and test fixtures, tests Zstandard format boundaries,
+builds the JAR, and verifies the recorded artifact. Cross-language codec and launch tests run
+through `cargo test --workspace`.
 
 The Host authenticates an owned snapshot once, evaluates conditions and layers, resolves links,
 and produces a bounded resource index. The Java system loader reads ordinary Stored blobs and
@@ -44,5 +45,9 @@ contains a magic, limits, snapshot path, topologically ordered sources, shared p
 roots. The Host and embedded Java artifact are built together. The snapshot and index must remain
 private and alive until the child exits. The Java reader does not reopen the original package.
 
-The vendored Zstandard decoder derives from japp/Airlift. See [NOTICE](NOTICE) and
-[LICENSE-APACHE-2.0](LICENSE-APACHE-2.0) for provenance and modifications.
+The Java Zstandard decoder is implemented in this project under MPL-2.0, using
+[RFC 8878](https://www.rfc-editor.org/rfc/rfc8878.html), the
+[Zstandard format description](https://github.com/facebook/zstd/blob/dev/doc/zstd_compression_format.md),
+and the [XXH64 algorithm description](https://github.com/Cyan4973/xxHash/blob/dev/doc/xxhash_spec.md).
+It supports dictionary-free frames, raw/RLE/compressed blocks, Huffman literals, FSE sequences,
+frame checksums, and skippable frames. Codec tests compare it with native libzstd output.

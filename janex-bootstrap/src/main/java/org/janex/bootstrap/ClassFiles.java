@@ -8,11 +8,13 @@ import java.io.*;
 /// Restores the two external UTF-8 constant-pool entry forms defined by Janex 0.1.
 final class ClassFiles {
     /// Prevents instantiation.
-    private ClassFiles() {}
+    private ClassFiles() {
+    }
 
     /// Restores exact class bytes within the declared size; JVM verification checks bytecode.
-    /// @param bytes transformed class bytes
-    /// @param pool selected root or file override pool
+    ///
+    /// @param bytes  transformed class bytes
+    /// @param pool   selected root or file override pool
     /// @param length required original class length
     /// @return a new ordinary class file
     /// @throws IOException if framing, references, or output length are invalid
@@ -42,14 +44,37 @@ final class ClassFiles {
                 data.writeByte(tag);
                 int size;
                 switch (tag) {
-                    case 1: size = input.readUnsignedShort(); data.writeShort(size); break;
-                    case 3: case 4: case 9: case 10: case 11: case 12: case 17: case 18: size = 4; break;
-                    case 5: case 6:
+                    case 1:
+                        size = input.readUnsignedShort();
+                        data.writeShort(size);
+                        break;
+                    case 3:
+                    case 4:
+                    case 9:
+                    case 10:
+                    case 11:
+                    case 12:
+                    case 17:
+                    case 18:
+                        size = 4;
+                        break;
+                    case 5:
+                    case 6:
                         if (++i >= count) throw new IOException("Missing constant pool reserved slot");
-                        size = 8; break;
-                    case 7: case 8: case 16: case 19: case 20: size = 2; break;
-                    case 15: size = 3; break;
-                    default: throw new IOException("Unknown constant pool tag");
+                        size = 8;
+                        break;
+                    case 7:
+                    case 8:
+                    case 16:
+                    case 19:
+                    case 20:
+                        size = 2;
+                        break;
+                    case 15:
+                        size = 3;
+                        break;
+                    default:
+                        throw new IOException("Unknown constant pool tag");
                 }
                 for (int j = 0; j < size; j++) data.writeByte(input.readUnsignedByte());
             }
@@ -80,10 +105,15 @@ final class ClassFiles {
         private final byte[] bytes;
         /// Number of bytes written.
         int position;
+
         /// Binds an empty output to its result buffer.
-        ByteArrayOutput(byte[] bytes) { this.bytes = bytes; }
+        ByteArrayOutput(byte[] bytes) {
+            this.bytes = bytes;
+        }
+
         /// Writes one byte or rejects output exceeding the declared size.
-        @Override public void write(int value) throws IOException {
+        @Override
+        public void write(int value) throws IOException {
             if (position == bytes.length) throw new IOException("CLASSFILE exceeds declared size");
             bytes[position++] = (byte) value;
         }

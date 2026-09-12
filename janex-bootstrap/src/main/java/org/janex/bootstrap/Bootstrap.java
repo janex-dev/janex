@@ -21,7 +21,8 @@ import java.util.Optional;
 /// The class targets Java 8. Module APIs are accessed only when the selected launch is modular.
 public final class Bootstrap {
     /// Prevents instantiation of the launcher.
-    private Bootstrap() {}
+    private Bootstrap() {
+    }
 
     /// Restores UTF-16 arguments and invokes the main method on the current thread.
     ///
@@ -123,9 +124,9 @@ public final class Bootstrap {
 
     /// Finds a main method, retaining inheritance and package-access restrictions.
     ///
-    /// @param application the class named by the launch description
+    /// @param application  the class named by the launch description
     /// @param instanceMain whether non-private instance and no-argument main methods are allowed
-    /// @param parameters the candidate main signature
+    /// @param parameters   the candidate main signature
     /// @return an eligible main method, or `null`
     private static Method findMain(Class<?> application, boolean instanceMain, Class<?>... parameters) {
         if (!instanceMain) {
@@ -167,7 +168,7 @@ public final class Bootstrap {
 
     /// Tests runtime package identity for inheritance of package-access methods.
     ///
-    /// @param first a class in the candidate runtime package
+    /// @param first  a class in the candidate runtime package
     /// @param second another class whose package is compared
     /// @return whether the package names and defining loaders match
     private static boolean samePackage(Class<?> first, Class<?> second) {

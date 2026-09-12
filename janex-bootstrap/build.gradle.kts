@@ -16,10 +16,6 @@ java {
     toolchain.languageVersion = JavaLanguageVersion.of(25)
 }
 
-sourceSets.main {
-    java.srcDir("src/vendor/java")
-}
-
 tasks.withType<JavaCompile>().configureEach {
     options.release = 8
     options.encoding = "UTF-8"
@@ -37,11 +33,6 @@ tasks.withType<Jar>().configureEach {
 
 tasks.jar {
     archiveFileName = "janex-bootstrap.jar"
-    from(files("LICENSE-APACHE-2.0", "NOTICE")) {
-        into("META-INF")
-        filteringCharset = "UTF-8"
-        filter<FixCrLfFilter>("eol" to FixCrLfFilter.CrLf.newInstance("lf"))
-    }
     from(rootProject.file("LICENSE")) {
         into("META-INF")
         rename { "LICENSE-MPL-2.0" }
@@ -82,5 +73,13 @@ tasks.register("updateEmbeddedBootstrap") {
 }
 
 tasks.check {
-    dependsOn(verifyEmbeddedBootstrap, tasks.testFixturesClasses)
+    dependsOn(verifyEmbeddedBootstrap, tasks.testFixturesClasses, "checkZstandard")
+}
+
+tasks.register<JavaExec>("checkZstandard") {
+    group = "verification"
+    description = "Checks Zstandard format boundaries and array contracts."
+    classpath = sourceSets.testFixtures.get().runtimeClasspath
+    mainClass = "org.janex.bootstrap.ZstandardTest"
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
 }
