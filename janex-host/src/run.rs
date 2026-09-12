@@ -9,14 +9,14 @@ use crate::{
     authentication::{Authentication, CmsTrust, OpenPgpCertificate},
     error::invalid,
     materialize::materialize,
+    roots::{RootKey, Roots},
 };
 use janex_format::{
     application::{Application, PathEntry, read_applications, select_application},
     binary::Limits,
-    blob::{BlobRef, BlobStore},
+    blob::BlobStore,
     condition::Context,
     container::{IntegrityReport, Reader, Verification},
-    resource::ResourceRoot,
 };
 pub use janex_java::launch::LaunchMode;
 use janex_java::{
@@ -25,7 +25,7 @@ use janex_java::{
 };
 use janex_signature::{cms::CmsSignature, openpgp::OpenPgpSignature};
 use std::{
-    collections::{BTreeMap, btree_map::Entry},
+    collections::BTreeMap,
     ffi::OsString,
     fs,
     io::{Cursor, Read},
@@ -38,7 +38,7 @@ use tempfile::TempDir;
 /// Local input, runtime overrides, and per-launch resource limits.
 #[derive(Clone, Debug)]
 pub struct RunOptions {
-    /// Native local path or local `file:` URI; remote acquisition is unsupported.
+    /// Native local path or local `file:` URI; downloading the target itself is unsupported.
     pub target: PathBuf,
     /// Explicit application ID; absent selects the sole application.
     pub application: Option<String>,
@@ -46,6 +46,8 @@ pub struct RunOptions {
     pub java: JavaOptions,
     /// Entry-point invocation strategy; defaults to lossless bootstrap argument transport.
     pub launch_mode: LaunchMode,
+    /// HTTP(S), Maven repository, cache, and offline policy for external dependencies.
+    pub dependencies: crate::dependency::DependencyOptions,
     /// Arguments appended after the descriptor's preset program arguments.
     pub arguments: Vec<OsString>,
     /// Explicit permission to execute None or Checksum verification types.
@@ -76,6 +78,7 @@ impl RunOptions {
             application: None,
             java: JavaOptions::default(),
             launch_mode: LaunchMode::default(),
+            dependencies: crate::dependency::DependencyOptions::default(),
             arguments: Vec::new(),
             allow_unsigned: false,
             cms_trust: CmsTrust::default(),
@@ -174,11 +177,12 @@ impl ExecutionPlan {
     }
 }
 
-/// Verifies a local snapshot and prepares the first compatible Java invocation.
+/// Verifies a local snapshot, resolves explicit dependencies, and prepares a compatible Java invocation.
 ///
 /// Explicit runtime selection disables fallback. None and Checksum inputs require
 /// `allow_unsigned`; signed inputs require signature support and never fall back to that policy.
 /// No application main method or descriptor-supplied agent runs during preparation.
+/// Dependency acquisition follows `options.dependencies` after authentication and condition evaluation.
 pub fn prepare(options: &RunOptions) -> Result<ExecutionPlan> {
     if options.openpgp_trust.is_some() && !options.cms_trust.signers.is_empty() {
         return Err(invalid(
@@ -246,7 +250,7 @@ pub fn prepare(options: &RunOptions) -> Result<ExecutionPlan> {
     let applications = read_applications(&mut reader)?;
     let application = select_application(&applications, options.application.as_deref())?;
     let mut blobs = BlobStore::new(reader);
-    let mut roots = BTreeMap::new();
+    let mut roots = Roots::default();
     let mut failures = Vec::new();
     for executable in java::candidates(&options.java)? {
         let result = JavaRuntime::probe(&executable)
@@ -281,7 +285,7 @@ fn prepare_runtime(
     application: &Application,
     runtime: JavaRuntime,
     blobs: &mut BlobStore<Cursor<Vec<u8>>>,
-    roots: &mut BTreeMap<BlobRef, ResourceRoot>,
+    roots: &mut Roots,
     integrity: IntegrityReport,
     authentication: Authentication,
 ) -> Result<ExecutionPlan> {
@@ -295,6 +299,19 @@ fn prepare_runtime(
         return Err(invalid("module launching requires Java 9 or later"));
     }
     let directory = tempfile::Builder::new().prefix("janex-run-").tempdir()?;
+    roots.acquire(
+        launch
+            .class_path
+            .iter()
+            .chain(&launch.module_path)
+            .chain(launch.agents.iter().map(|agent| &agent.reference)),
+        &options.dependencies,
+        crate::import::ImportOptions {
+            limits: options.limits,
+            max_total_bytes: options.max_materialized_bytes,
+        },
+        !matches!(authentication, Authentication::Unsigned),
+    )?;
     let resources = if options.launch_mode == LaunchMode::Bootstrap {
         Some(crate::bootstrap::prepare(
             &launch.class_path,
@@ -419,31 +436,23 @@ struct Paths<'a> {
     /// Candidate context controlling resource layers.
     context: &'a Context,
     /// Decoded roots shared between runtime attempts over the same immutable snapshot.
-    roots: &'a mut BTreeMap<BlobRef, ResourceRoot>,
+    roots: &'a mut Roots,
     /// Source container and decoded table-page cache.
     blobs: &'a mut BlobStore<Cursor<Vec<u8>>>,
     /// Materialized paths for this candidate only.
-    paths: BTreeMap<BlobRef, PathBuf>,
+    paths: BTreeMap<RootKey, PathBuf>,
     /// Remaining aggregate materialization allowance.
     remaining_bytes: u64,
 }
 
 impl Paths<'_> {
-    /// Resolves a local reference without consulting external providers.
+    /// Materializes a local or already acquired external root without further network access.
     fn local(&mut self, entry: &PathEntry) -> Result<PathBuf> {
-        let PathEntry::Local(reference) = entry else {
-            return Err(Error::Unsupported("external Java path entries require a resolver; supply local dependencies when packing".into()));
-        };
-        if let Some(path) = self.paths.get(reference) {
+        let key = RootKey::of(entry);
+        if let Some(path) = self.paths.get(&key) {
             return Ok(path.clone());
         }
-        let root = match self.roots.entry(*reference) {
-            Entry::Occupied(entry) => entry.into_mut(),
-            Entry::Vacant(entry) => {
-                let bytes = self.blobs.resolve(*reference)?;
-                entry.insert(ResourceRoot::decode(&bytes, self.blobs)?)
-            }
-        };
+        let root = self.roots.get(entry, self.blobs)?;
         let directory = self.directory.join(self.paths.len().to_string());
         fs::create_dir(&directory)?;
         let result = materialize(
@@ -454,7 +463,7 @@ impl Paths<'_> {
             self.remaining_bytes,
         )?;
         self.remaining_bytes -= result.logical_bytes;
-        self.paths.insert(*reference, result.path.clone());
+        self.paths.insert(key, result.path.clone());
         Ok(result.path)
     }
 }

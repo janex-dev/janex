@@ -108,6 +108,20 @@ pub fn import_path(path: &Path, options: ImportOptions) -> Result<ImportedRoot> 
     build_layers(jar_name, items, options)
 }
 
+/// Imports owned JAR bytes without extracting paths or consulting the filesystem.
+///
+/// `jar_name` is the original filename, used for automatic-module naming. Limits, resource
+/// validation, metadata retention, and multi-release processing match [`import_path`].
+pub fn import_jar(bytes: &[u8], jar_name: &str, options: ImportOptions) -> Result<ImportedRoot> {
+    if !jar_name.ends_with(".jar") || jar_name.contains(['/', '\\', '\0']) {
+        return Err(invalid("input JAR must have a representable .jar filename"));
+    }
+    if bytes.len() as u64 > options.max_total_bytes {
+        return Err(invalid("input archive byte limit exceeded"));
+    }
+    build_layers(jar_name.into(), read_jar(bytes, options)?, options)
+}
+
 /// Reads a directory tree, retaining symbolic links as links instead of traversing their targets.
 fn read_directory(
     path: &Path,

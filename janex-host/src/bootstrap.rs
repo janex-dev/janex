@@ -34,7 +34,7 @@ pub(crate) fn prepare(
     modules: &[PathEntry],
     context: &Context,
     blobs: &mut BlobStore<Cursor<Vec<u8>>>,
-    roots: &mut BTreeMap<BlobRef, ResourceRoot>,
+    roots: &mut crate::roots::Roots,
     directory: &Path,
     max_bytes: u64,
 ) -> Result<Resources> {
@@ -79,14 +79,7 @@ pub(crate) fn prepare(
         .collect();
     number(&mut root_data, selected.len() as u64)?;
     for (entry, module) in selected {
-        let PathEntry::Local(reference) = entry else {
-            return Err(invalid("bootstrap paths require resolved local resources"));
-        };
-        if !roots.contains_key(reference) {
-            let bytes = builder.blobs.resolve(*reference)?;
-            roots.insert(*reference, ResourceRoot::decode(&bytes, builder.blobs)?);
-        }
-        let root = &roots[reference];
+        let root = roots.get(entry, builder.blobs)?;
         string(&mut root_data, root.jar_name()?)?;
         root_data.push(u8::from(module));
         let tree = root.merge(context, builder.blobs.reader().limits())?;
@@ -627,7 +620,10 @@ public class Main {
                 ],
             }],
         };
-        let mut roots = BTreeMap::from([(reference(98), root)]);
+        let mut roots = crate::roots::Roots::default();
+        roots
+            .entries
+            .insert(crate::roots::RootKey::Local(reference(98)), root);
         let context = Context {
             os: "linux".into(),
             arch: "x86-64".into(),

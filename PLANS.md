@@ -1,11 +1,11 @@
-# Initial Janex Implementation: Local Packaging, Signing, and Java Launching
+# Janex Implementation: Packaging, Dependencies, Signing, and Java Launching
 
 ## Goals and Boundaries
 
 Implement the complete directory or JAR -> `.janex` -> Java process workflow, supporting classpath
 and module-path applications, together with OpenPGP and CMS signature generation and verification.
 
-Use an existing Java runtime. Defer installation, SDK management, remote dependency acquisition,
+Use an existing Java runtime. Defer installation, SDK management,
 global trust stores, and persistent verification caches. Keep the file format at version **0.1**.
 
 ## Specification and Module Boundaries
@@ -124,10 +124,11 @@ janex run [OPTIONS] <TARGET> [ARGS...]
   an explicitly selected runtime does not meet requirements; otherwise try the next candidate.
   Support classpath launching on Java 8; module launching requires Java 9 or later.
 - Obtain a stable input snapshot and verify it completely once. Reuse the result during parsing
-  and materialization for the current launch. Do not implement a cache shared across launches.
+  and materialization for the current launch. Do not persist publisher-authentication results.
 - Evaluate conditions, overlays, and resource layers against each candidate runtime. Check local
   modules and modules supplied by the runtime. Report missing dependencies without downloading
-  content or invoking remote providers.
+  arbitrary module providers. Resolve explicit HTTP(S) JARs and exact Maven PURLs after package
+  authentication, verify declared checksums, and support an atomic local cache and offline mode.
 - For bootstrap entry points, write a private snapshot and resource index. Read ordinary
   Stored blobs, Extents, Zstandard frames, and CLASSFILE transforms on demand in Java. Preserve root
   order, resource enumeration, manifest package attributes, sealing, and service discovery.

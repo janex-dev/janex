@@ -14,6 +14,7 @@ path = "src/main.rs"
 clap = { version = "4", features = ["derive"] }
 janex-host.workspace = true
 janex-java.workspace = true
+janex-format.workspace = true
 rpassword = "7"
 zeroize = "1"
 
@@ -21,7 +22,6 @@ zeroize = "1"
 janex-signature.workspace = true
 pgp = { version = "0.20", default-features = false }
 tempfile = "3"
-janex-format.workspace = true
 
 [lints]
 workspace = true

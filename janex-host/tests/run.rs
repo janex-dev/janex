@@ -3,6 +3,9 @@
 
 //! Complete local package launches against a real JDK.
 
+#[path = "support/http.rs"]
+mod http;
+
 use janex_format::{
     application::{Application, PathEntry},
     binary::Limits,
@@ -20,6 +23,245 @@ use std::{
     path::Path,
     process::{Command, Output, Stdio},
 };
+
+#[test]
+fn remote_jars_support_both_modes_modules_agents_and_offline_snapshots() {
+    use janex_format::checksum::{Algorithm, Checksum};
+    let temp = tempfile::tempdir().unwrap();
+    let server = http::Server::new();
+    fs::create_dir_all(temp.path().join("src/library")).unwrap();
+    fs::create_dir_all(temp.path().join("src/app")).unwrap();
+    fs::write(temp.path().join("src/library/Lib.java"), r#"
+package library;
+public class Lib {
+    public static String value(boolean bootstrap) throws Exception {
+        java.net.URL resource = Lib.class.getResource("value.txt");
+        if (bootstrap) {
+            return new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(resource.toURI())), "UTF-8");
+        }
+        try (java.io.InputStream input = resource.openStream()) {
+            java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+            for (int value; (value = input.read()) != -1;) {
+                output.write(value);
+            }
+            return new String(output.toByteArray(), "UTF-8");
+        }
+    }
+}
+"#).unwrap();
+    fs::write(
+        temp.path().join("src/app/Main.java"),
+        r#"
+package app;
+public class Main {
+    public static void main(String[] args) throws Exception {
+        System.setOut(new java.io.PrintStream(System.out, true, "UTF-8"));
+        System.out.println(library.Lib.value(Boolean.parseBoolean(args[0])));
+        System.out.println(args[1]);
+    }
+}
+"#,
+    )
+    .unwrap();
+    fs::write(temp.path().join("Agent.java"), r#"
+public class Agent {
+    public static void premain(String option) throws Exception {
+        java.nio.file.Files.write(java.nio.file.Paths.get(System.getProperty("agent.marker")),
+            option.getBytes("UTF-8"), java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
+    }
+}
+"#).unwrap();
+    tool(
+        temp.path(),
+        "javac",
+        &["--release", "8", "-d", "library", "src/library/Lib.java"],
+    );
+    tool(
+        temp.path(),
+        "javac",
+        &[
+            "--release",
+            "8",
+            "-cp",
+            "library",
+            "-d",
+            "app",
+            "src/app/Main.java",
+        ],
+    );
+    tool(
+        temp.path(),
+        "javac",
+        &["--release", "8", "-d", "agent", "Agent.java"],
+    );
+    fs::write(temp.path().join("library/library/value.txt"), b"base").unwrap();
+    fs::create_dir_all(temp.path().join("library/META-INF/versions/9/library")).unwrap();
+    fs::write(
+        temp.path()
+            .join("library/META-INF/versions/9/library/value.txt"),
+        b"current",
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join("library.mf"),
+        "Manifest-Version: 1.0\nMulti-Release: true\n\n",
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join("agent.mf"),
+        "Manifest-Version: 1.0\nPremain-Class: Agent\n\n",
+    )
+    .unwrap();
+    tool(
+        temp.path(),
+        "jar",
+        &[
+            "--create",
+            "--file",
+            "library-1.2.jar",
+            "--manifest",
+            "library.mf",
+            "-C",
+            "library",
+            ".",
+        ],
+    );
+    tool(
+        temp.path(),
+        "jar",
+        &["--create", "--file", "app.jar", "-C", "app", "."],
+    );
+    tool(
+        temp.path(),
+        "jar",
+        &[
+            "--create",
+            "--file",
+            "agent.jar",
+            "--manifest",
+            "agent.mf",
+            "-C",
+            "agent",
+            ".",
+        ],
+    );
+    let library = fs::read(temp.path().join("library-1.2.jar")).unwrap();
+    let agent = fs::read(temp.path().join("agent.jar")).unwrap();
+    server.file("/maven/example/library/1.2/library-1.2.jar", &library);
+    server.file("/agent.jar", &agent);
+    let dependency = PathEntry::External {
+        uri: "pkg:maven/example/library@1.2".into(),
+        checksum: Some(Checksum::compute(Algorithm::Sha256, library.as_slice()).unwrap()),
+    };
+    let agent = PathEntry::External {
+        uri: format!("{}/agent.jar", server.url),
+        checksum: Some(Checksum::compute(Algorithm::Sha512, agent.as_slice()).unwrap()),
+    };
+    let marker = temp.path().join("marker");
+    for modular in [false, true] {
+        let mut packing = PackOptions::new(
+            temp.path().join("app.jar"),
+            temp.path().join(format!("app-{modular}.janex")),
+        );
+        packing.main_class = Some("app.Main".into());
+        packing
+            .jvm_options
+            .push(format!("-Dagent.marker={}", marker.display()));
+        if modular {
+            packing.main_module = Some("app".into());
+            packing.external_module_path.push(dependency.clone());
+        } else {
+            packing.external_class_path.push(dependency.clone());
+        }
+        pack(&packing).unwrap();
+        change_launch(&packing.output, |config| {
+            replace(
+                config,
+                4,
+                Value::array([Value::map([
+                    (Value::uint(0), agent.to_value(false).unwrap()),
+                    (Value::uint(1), Value::text("once")),
+                ])
+                .unwrap()]),
+            )
+        });
+        let mut launch = options(&packing.output);
+        launch.dependencies.cache_directory = Some(temp.path().join("cache"));
+        launch.dependencies.maven_repository = format!("{}/maven", server.url);
+        if !modular {
+            launch.allow_unsigned = false;
+            assert!(prepare(&launch).is_err());
+            assert!(server.requests.lock().unwrap().is_empty());
+            launch.allow_unsigned = true;
+        }
+        for mode in [LaunchMode::Bootstrap, LaunchMode::Direct] {
+            launch.launch_mode = mode;
+            launch.dependencies.offline = !server.requests.lock().unwrap().is_empty();
+            launch.arguments = vec![
+                (mode == LaunchMode::Bootstrap).to_string().into(),
+                "@literal".into(),
+            ];
+            let plan = prepare(&launch).unwrap();
+            assert!(!marker.exists());
+            let output = capture(&plan);
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                String::from_utf8(output.stdout)
+                    .unwrap()
+                    .replace("\r\n", "\n"),
+                "current\n@literal\n"
+            );
+            assert_eq!(fs::read(&marker).unwrap(), b"once");
+            fs::remove_file(&marker).unwrap();
+        }
+        if !modular && let Some(home) = std::env::var_os("JANEX_TEST_JAVA8_HOME") {
+            launch.java = JavaOptions {
+                java: None,
+                java_home: Some(home.into()),
+            };
+            launch.launch_mode = LaunchMode::Bootstrap;
+            launch.arguments = vec!["true".into(), "unicode \u{4e2d}\u{1f680}".into()];
+            let plan = prepare(&launch).unwrap();
+            let output = capture(&plan);
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                String::from_utf8(output.stdout)
+                    .unwrap()
+                    .replace("\r\n", "\n"),
+                "base\nunicode \u{4e2d}\u{1f680}\n"
+            );
+            fs::remove_file(&marker).unwrap();
+        }
+    }
+    assert_eq!(server.requests.lock().unwrap().len(), 2);
+    let mut launch = options(&temp.path().join("app-false.janex"));
+    launch.dependencies.cache_directory = Some(temp.path().join("cache"));
+    launch.dependencies.maven_repository = format!("{}/maven", server.url);
+    launch.dependencies.offline = true;
+    launch.arguments = vec!["true".into(), "snapshot".into()];
+    let plan = prepare(&launch).unwrap();
+    for entry in fs::read_dir(temp.path().join("cache")).unwrap() {
+        let path = entry.unwrap().path();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "cache")
+        {
+            fs::write(path, b"cache changed after preparation").unwrap();
+        }
+    }
+    assert!(capture(&plan).status.success());
+    fs::remove_file(&marker).unwrap();
+    assert!(prepare(&launch).is_err());
+    assert!(!marker.exists());
+}
 
 /// Runs a JDK fixture tool with diagnostics retained on failure.
 fn tool(directory: &Path, program: &str, arguments: &[&str]) -> Output {

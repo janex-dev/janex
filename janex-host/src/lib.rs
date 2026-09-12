@@ -6,10 +6,12 @@
 mod adapters;
 pub mod authentication;
 mod bootstrap;
+pub mod dependency;
 mod error;
 pub mod import;
 pub mod materialize;
 pub mod pack;
+mod roots;
 pub mod run;
 
 pub use error::{Error, Result};

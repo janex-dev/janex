@@ -57,6 +57,18 @@ struct RunArgs {
     /// Preserve Unicode arguments through a bootstrap, or use the native Java entry point.
     #[arg(long, value_enum, default_value = "bootstrap")]
     launch_mode: LaunchModeArg,
+    /// Resolve external dependencies only from the verified local cache.
+    #[arg(long, conflicts_with = "refresh_dependencies")]
+    offline: bool,
+    /// Store dependency cache entries in this directory.
+    #[arg(long, value_name = "DIRECTORY")]
+    dependency_cache: Option<PathBuf>,
+    /// Refresh dependencies even when cache entries are valid.
+    #[arg(long)]
+    refresh_dependencies: bool,
+    /// Override Maven Central for PURLs without a repository_url qualifier.
+    #[arg(long, value_name = "URL")]
+    maven_repository: Option<String>,
     /// Permit local None or Checksum inputs; signed input still requires authentication.
     #[arg(long)]
     allow_unsigned: bool,
@@ -100,6 +112,12 @@ struct PackArgs {
     /// Append a local directory or JAR to the module path.
     #[arg(long, value_name = "PATH")]
     module_path: Vec<PathBuf>,
+    /// Append an external classpath JAR; CHECKSUM is algorithm:hex or none.
+    #[arg(long, value_names = ["URI", "CHECKSUM"], num_args = 2, action = clap::ArgAction::Append)]
+    external_class_path: Vec<String>,
+    /// Append an external module JAR or virtual module requirement, with a checksum or none.
+    #[arg(long, value_names = ["URI", "CHECKSUM"], num_args = 2, action = clap::ArgAction::Append)]
+    external_module_path: Vec<String>,
     /// Binary main-class name, overriding entry-point inference.
     #[arg(long, value_name = "NAME")]
     main_class: Option<String>,
@@ -221,6 +239,8 @@ fn run(cli: Cli) -> janex_host::Result<i32> {
             let mut options = PackOptions::new(args.source, args.output);
             options.class_path = args.class_path;
             options.module_path = args.module_path;
+            options.external_class_path = external_entries(&args.external_class_path, false)?;
+            options.external_module_path = external_entries(&args.external_module_path, true)?;
             options.main_class = args.main_class;
             options.main_module = args.main_module;
             options.application = args.application;
@@ -268,6 +288,12 @@ fn run(cli: Cli) -> janex_host::Result<i32> {
                 LaunchModeArg::Direct => LaunchMode::Direct,
             };
             options.allow_unsigned = args.allow_unsigned;
+            options.dependencies.offline = args.offline;
+            options.dependencies.refresh = args.refresh_dependencies;
+            options.dependencies.cache_directory = args.dependency_cache;
+            if let Some(repository) = args.maven_repository {
+                options.dependencies.maven_repository = repository;
+            }
             options.openpgp_trust = args
                 .trust_openpgp_key
                 .as_deref()
@@ -293,6 +319,62 @@ fn run(cli: Cli) -> janex_host::Result<i32> {
         }
     }
     Ok(0)
+}
+
+/// Parses external declarations without fetching dependencies while packing.
+fn external_entries(
+    values: &[String],
+    module_path: bool,
+) -> janex_host::Result<Vec<janex_format::application::PathEntry>> {
+    use janex_format::{
+        application::PathEntry,
+        checksum::{Algorithm, Checksum},
+    };
+    values
+        .chunks_exact(2)
+        .map(|pair| {
+            let checksum = if pair[1] == "none" {
+                None
+            } else {
+                let (algorithm, hex) = pair[1].split_once(':').ok_or_else(|| {
+                    janex_host::Error::InvalidInput("checksum must be algorithm:hex or none".into())
+                })?;
+                let algorithm = match algorithm {
+                    "xxh3-64" => Algorithm::Xxh3_64,
+                    "xxh3-128" => Algorithm::Xxh3_128,
+                    "sha256" => Algorithm::Sha256,
+                    "sha512" => Algorithm::Sha512,
+                    "sm3" => Algorithm::Sm3,
+                    _ => {
+                        return Err(janex_host::Error::InvalidInput(
+                            "unknown dependency checksum algorithm".into(),
+                        ));
+                    }
+                };
+                if hex.len() != algorithm.digest_length() * 2
+                    || !hex.bytes().all(|value| value.is_ascii_hexdigit())
+                {
+                    return Err(janex_host::Error::InvalidInput(
+                        "invalid dependency checksum hex or length".into(),
+                    ));
+                }
+                let mut bytes = vec![algorithm as u8];
+                for offset in (0..hex.len()).step_by(2) {
+                    bytes.push(
+                        u8::from_str_radix(&hex[offset..offset + 2], 16)
+                            .expect("validated hexadecimal"),
+                    );
+                }
+                Some(Checksum::decode(&bytes)?)
+            };
+            let entry = PathEntry::External {
+                uri: pair[0].clone(),
+                checksum,
+            };
+            entry.to_value(module_path)?;
+            Ok(entry)
+        })
+        .collect()
 }
 
 /// Obtains a password without exposing it as a command-line value or echoing it to the terminal.

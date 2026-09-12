@@ -32,6 +32,8 @@ janex pack <SOURCE> --output <FILE>
     [--main-module <NAME>]
     [--application <ID>]
     [--jvm-option <ARG>]...
+    [--external-class-path <URI> <CHECKSUM>]...
+    [--external-module-path <URI> <CHECKSUM>]...
     [--argument <ARG>]...
     [--java-version <VERS>]
     [--cms-certificate <FILE> --cms-key <FILE>]
@@ -42,10 +44,16 @@ janex pack <SOURCE> --output <FILE>
     [--key-password-file <FILE>]
 ```
 
-`SOURCE` and every path entry must be a local directory or JAR. Each input becomes a separate
+`SOURCE`, `--class-path`, and `--module-path` take local directories or JARs. Each input becomes a separate
 resource root. The primary input comes first on the module path when `--main-module` is present,
 otherwise first on the classpath. Repeated path options retain their order. JAR filenames are
 preserved; directory inputs use `resources.jar`.
+
+`--external-class-path <URI> <CHECKSUM>` and `--external-module-path <URI> <CHECKSUM>` append
+external declarations after the corresponding local inputs, without downloading them. Repeat an
+option to preserve declaration order. `CHECKSUM` is `none` or `algorithm:hex`, where the algorithm
+is `xxh3-64`, `xxh3-128`, `sha256`, `sha512`, or `sm3`. The digest covers the complete original JAR.
+For example, `--external-class-path pkg:maven/org.example/library@1.2.3 sha256:<64-hex-digits>`.
 
 `--main-class` overrides entry-point inference. Otherwise the main manifest supplies `Main-Class`;
 for classpath launching, a module descriptor's main class is used when the manifest supplies none.
@@ -198,7 +206,7 @@ janex run [OPTIONS] <TARGET> [ARGS...]
 ```
 
 `TARGET` is a local Janex file path or a local `file:` URI without a query or fragment.
-Remote acquisition and installed-package lookup are outside the local execution interface.
+Downloading the target itself and installed-package lookup are outside this execution interface.
 All arguments after the target are forwarded to the application, including empty strings,
 `--`, and arguments resembling Janex options. Janex options must precede the target.
 
@@ -208,6 +216,11 @@ All arguments after the target are forwarded to the application, including empty
 - `--java <PATH>` selects a Java executable or a bare executable name on `PATH`.
 - `--java-home <PATH>` selects the Java executable under that home. It conflicts with `--java`.
 - `--launch-mode <bootstrap|direct>` selects entry-point invocation. The default is `bootstrap`.
+- `--offline` resolves external dependencies only from the local cache.
+- `--dependency-cache <DIRECTORY>` overrides the platform user cache directory.
+- `--refresh-dependencies` downloads dependencies again and replaces cache entries after verification;
+  it conflicts with `--offline`.
+- `--maven-repository <URL>` overrides Maven Central for PURLs without a `repository_url` qualifier.
 - `--allow-unsigned` permits local files using None or Checksum verification. It never bypasses
   authentication for a signed file or an explicit signer requirement.
 - `--trust-cms-certificate <FILE>` requires that signer certificate. Repeat it to require every
@@ -260,8 +273,34 @@ using a Janex system class loader. Resource URLs support `Paths.get(uri)` and re
 On Java 9+, application modules occupy a child of the native boot layer; module access options are
 applied to that layer through the JDK module-access bridge. Agents and direct launches use
 temporary JARs. Original filenames are retained for automatic-module naming. Module requirements use
-the selected Java runtime and supplied local module-path entries; unresolved external references fail without downloading.
+the selected Java runtime and resolved module-path entries; virtual module requirements do not trigger
+provider discovery or dependency downloads by themselves.
 Symbolic links expand into resource contents; dangling links, cycles, and root escapes fail.
+
+### External dependencies
+
+After package authentication and runtime condition evaluation, the Host resolves explicit HTTP(S)
+JAR URLs and canonical Maven PURLs for classpath, module-path, and agent entries. HTTP URLs must
+end in a `.jar` filename; query strings are allowed. Maven PURLs require a group, artifact, and
+exact release or timestamped snapshot version. `classifier`, JAR-producing `type`, and
+`repository_url` qualifiers are supported. Floating versions, `-SNAPSHOT` metadata resolution,
+PURL subpaths, and transitive POM resolution are not implemented.
+
+Declared checksums are verified before importing or caching the raw JAR. Signed packages require
+a secure checksum for each external dependency; plain HTTP also requires one. HTTPS verifies
+server certificates. Up to five redirects are followed, with no HTTPS downgrade, URL credentials,
+or non-HTTP(S) redirects. Downloads have size and time limits; failed downloads never publish partial
+cache entries. Manifest `Class-Path` does not trigger additional downloads.
+Per-entry operating-system locks serialize concurrent acquisition and are released when the process
+closes the lock or exits; offline readers use shared locks.
+
+The cache key binds the resolved URL and declared checksum. Cache hits are copied into owned memory
+and checked against both their stored SHA-256 digest and the declared checksum. A corrupt entry is
+refetched online and rejected offline. Cache entries remain reusable until refreshed or removed;
+their stored digest does not establish publisher identity. Java reads launch-owned data, so later
+changes to the cache cannot change a prepared invocation. Cache defaults are
+`%LOCALAPPDATA%/Janex/Cache/dependencies` on Windows, `~/Library/Caches/janex/dependencies` on macOS,
+and `$XDG_CACHE_HOME/janex/dependencies` (or `~/.cache/janex/dependencies`) elsewhere.
 
 Runtime resources omit manifest `Class-Path`, JAR signature files, and signature-only manifest attributes.
 Other manifest attributes, including sealing information, are retained. The original resources in

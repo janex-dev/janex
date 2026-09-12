@@ -22,6 +22,10 @@ retains up to 64 MiB of decoded blob data within the configured byte limit. Root
 string pools retain their identities. Resource checksums are not rehashed in Java; authentication
 comes from the Host's verified snapshot. Manifests are sanitized in the Host.
 
+Explicit external JAR dependencies are fetched and checked by the Host, then imported into the
+same resource index. Their original filenames and multi-release layers are retained. Java does not
+access the network or persistent dependency cache; direct mode and agents use launch-owned JARs.
+
 The loader preserves parent-first delegation, classpath root order, duplicate resource enumeration,
 package metadata and sealing, code-source URLs, and service lookup through the context loader.
 Serialized resource URLs use Java's protocol-handler package lookup; the bootstrap appends its

@@ -42,6 +42,12 @@ pub struct PackOptions {
     pub class_path: Vec<PathBuf>,
     /// Additional module-path inputs in order.
     pub module_path: Vec<PathBuf>,
+    /// External declarations appended after the local classpath inputs, without downloading them.
+    /// Entries must be `PathEntry::External`.
+    pub external_class_path: Vec<PathEntry>,
+    /// External declarations appended after local module-path inputs, including virtual requirements.
+    /// Entries must be `PathEntry::External`.
+    pub external_module_path: Vec<PathEntry>,
     /// Explicit binary main-class name, overriding inferred names.
     pub main_class: Option<String>,
     /// Main module; when present, the primary input is placed on the module path.
@@ -81,6 +87,8 @@ impl PackOptions {
             output: output.into(),
             class_path: Vec::new(),
             module_path: Vec::new(),
+            external_class_path: Vec::new(),
+            external_module_path: Vec::new(),
             main_class: None,
             main_module: None,
             application: "main".into(),
@@ -285,6 +293,19 @@ fn write_package(
     }
     for root in &roots[1 + options.class_path.len()..] {
         module_path.push(local(*root)?);
+    }
+    for (entries, output, modular) in [
+        (&options.external_class_path, &mut class_path, false),
+        (&options.external_module_path, &mut module_path, true),
+    ] {
+        for entry in entries {
+            if !matches!(entry, PathEntry::External { .. }) {
+                return Err(invalid(
+                    "external path declarations must use external references",
+                ));
+            }
+            output.push(entry.to_value(modular)?);
+        }
     }
     let mut launch = vec![
         (Value::uint(1), entry.to_value()?),
