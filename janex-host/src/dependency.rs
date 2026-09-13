@@ -4,11 +4,15 @@
 //! Bounded HTTP(S) acquisition of explicitly named Java dependencies.
 
 use crate::{Error, Result, error::invalid};
-use janex_format::checksum::{Algorithm, Checksum};
+use janex_format::{
+    binary::Limits,
+    cbor::Value,
+    checksum::{Algorithm, Checksum},
+};
 use std::{
     fs,
     io::{Read, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 use url::Url;
@@ -16,7 +20,7 @@ use url::Url;
 /// Network and persistent-cache policy for external Java path entries.
 #[derive(Clone, Debug)]
 pub struct DependencyOptions {
-    /// Cache directory; absent uses the current user's platform cache directory.
+    /// Cache directory; absent uses `JANEX_HOME/cache/dependencies`.
     pub cache_directory: Option<PathBuf>,
     /// Allows only verified cache hits, without starting network requests.
     pub offline: bool,
@@ -60,7 +64,7 @@ pub struct Dependency {
 /// server certificates. Redirects cannot downgrade HTTPS, and at most five redirects are followed.
 /// Cache hits are rechecked and copied into owned memory. Corrupt entries are refreshed online and
 /// fail offline. Complete downloads are published atomically; failures never publish partial bytes.
-/// A per-entry operating-system lock serializes cache updates across processes. Cache access may
+/// A per-request operating-system lock serializes cache updates across native processes. Cache access may
 /// block until another holder releases its lock; offline readers use a shared read-only lock.
 /// Maven resolution does not read POMs, expand transitive dependencies, or select version ranges.
 pub fn resolve(
@@ -70,6 +74,7 @@ pub fn resolve(
     require_secure: bool,
 ) -> Result<Dependency> {
     let (url, jar_name) = address(uri, options)?;
+    filename(&jar_name)?;
     let secure = checksum.is_some_and(|value| value.algorithm().is_secure());
     if (require_secure || url.scheme() == "http") && !secure {
         return Err(Error::Trust(
@@ -86,7 +91,9 @@ pub fn resolve(
         Some(path) => path.clone(),
         None => cache_directory()?,
     };
-    let mut identity = url.as_str().as_bytes().to_vec();
+    let mut identity = uri.as_bytes().to_vec();
+    identity.push(0);
+    identity.extend(url.as_str().as_bytes());
     identity.push(0);
     if let Some(checksum) = checksum {
         identity.extend(checksum.encode());
@@ -97,16 +104,24 @@ pub fn resolve(
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect();
-    let path = directory.join(format!("{key}.cache"));
+    let kind = if uri.starts_with("pkg:") {
+        "maven"
+    } else {
+        "urls"
+    };
+    let path = directory
+        .join("metadata")
+        .join(kind)
+        .join(format!("{key}.cbor"));
     if !options.offline {
-        fs::create_dir_all(&directory)?;
+        fs::create_dir_all(directory.join("locks"))?;
     }
     let lock = match fs::OpenOptions::new()
         .read(true)
         .write(!options.offline)
         .create(!options.offline)
         .truncate(false)
-        .open(directory.join(format!("{key}.lock")))
+        .open(directory.join("locks").join(format!("{key}.lock")))
     {
         Ok(file) => file,
         Err(error) if options.offline && error.kind() == std::io::ErrorKind::NotFound => {
@@ -121,18 +136,29 @@ pub fn resolve(
     }
     if !options.refresh {
         match fs::File::open(&path) {
-            Ok(mut file) => {
+            Ok(file) => {
                 let cached = (|| -> Result<Vec<u8>> {
-                    let mut header = [0u8; 40];
-                    file.read_exact(&mut header)?;
-                    if &header[..8] != b"JNXDEP01" {
-                        return Err(invalid("invalid dependency cache header"));
+                    let record = Value::from_bytes(
+                        &bounded(file, 1024 * 1024)?,
+                        Limits {
+                            max_bytes: 1024 * 1024,
+                            max_elements: 32,
+                            max_depth: 4,
+                        },
+                    )?;
+                    let digest = record.required(5)?;
+                    let digest = digest.as_byte_string()?;
+                    if digest.len() != 32
+                        || record != metadata(uri, &url, &jar_name, checksum, digest)?
+                    {
+                        return Err(invalid("dependency cache metadata mismatch"));
                     }
-                    let bytes = bounded(file, options.max_bytes)?;
-                    if verify(&bytes, checksum)?.digest() != &header[8..] {
-                        return Err(invalid("dependency cache checksum mismatch"));
-                    }
-                    Ok(bytes)
+                    read_content(
+                        &content_path(&directory, digest, &jar_name),
+                        digest,
+                        checksum,
+                        options.max_bytes,
+                    )
                 })();
                 match cached {
                     Ok(bytes) => return Ok(Dependency { jar_name, bytes }),
@@ -147,15 +173,138 @@ pub fn resolve(
     if options.offline {
         return Err(invalid("dependency is unavailable in the offline cache"));
     }
-    let bytes = download(url, options)?;
+    let reused = if !options.refresh {
+        checksum
+            .filter(|value| value.algorithm() == Algorithm::Sha256)
+            .and_then(|pin| {
+                read_content(
+                    &content_path(&directory, pin.digest(), &jar_name),
+                    pin.digest(),
+                    checksum,
+                    options.max_bytes,
+                )
+                .ok()
+            })
+    } else {
+        None
+    };
+    let reused = reused.or_else(|| {
+        if !options.refresh && secure && uri.starts_with("pkg:") {
+            maven_local(uri, &jar_name).and_then(|path| {
+                let bytes = bounded(fs::File::open(path).ok()?, options.max_bytes).ok()?;
+                verify(&bytes, checksum).ok()?;
+                Some(bytes)
+            })
+        } else {
+            None
+        }
+    });
+    let bytes = match reused {
+        Some(bytes) => bytes,
+        None => download(url.clone(), options)?,
+    };
     let digest = verify(&bytes, checksum)?;
-    let mut temporary = tempfile::NamedTempFile::new_in(&directory)?;
-    temporary.write_all(b"JNXDEP01")?;
-    temporary.write_all(digest.digest())?;
-    temporary.write_all(&bytes)?;
-    temporary.as_file().sync_all()?;
-    temporary.persist(&path).map_err(|error| error.error)?;
+    let record = metadata(uri, &url, &jar_name, checksum, digest.digest())?;
+    if record.as_bytes().len() > 1024 * 1024 {
+        return Err(invalid("dependency cache metadata exceeds byte limit"));
+    }
+    let content = content_path(&directory, digest.digest(), &jar_name);
+    if read_content(&content, digest.digest(), checksum, options.max_bytes).is_err() {
+        publish(&directory, &content, &bytes)?;
+    }
+    publish(&directory, &path, record.as_bytes())?;
     Ok(Dependency { jar_name, bytes })
+}
+
+/// Encodes a request binding and its verified content reference.
+fn metadata(
+    uri: &str,
+    url: &Url,
+    name: &str,
+    pin: Option<&Checksum>,
+    digest: &[u8],
+) -> Result<Value> {
+    Ok(Value::map([
+        (Value::uint(0), Value::uint(1)),
+        (Value::uint(1), Value::text(uri)),
+        (Value::uint(2), Value::text(url.as_str())),
+        (Value::uint(3), Value::text(name)),
+        (
+            Value::uint(4),
+            pin.map(|value| Value::bytes(&value.encode()))
+                .unwrap_or_else(Value::null),
+        ),
+        (Value::uint(5), Value::bytes(digest)),
+    ])?)
+}
+
+/// Locates original bytes using a content digest and a validated filename.
+fn content_path(directory: &Path, digest: &[u8], name: &str) -> PathBuf {
+    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    directory
+        .join("files/sha256")
+        .join(&hex[..2])
+        .join(&hex[2..])
+        .join(name)
+}
+
+/// Locates a conventional Maven repository candidate for an already validated PURL.
+fn maven_local(uri: &str, name: &str) -> Option<PathBuf> {
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })?;
+    let mut path = PathBuf::from(home);
+    if !path.is_absolute() {
+        return None;
+    }
+    path.push(".m2/repository");
+    let purl = uri.parse::<packageurl::PackageUrl>().ok()?;
+    for part in purl.namespace()?.split('.') {
+        path.push(part);
+    }
+    Some(
+        path.join(purl.name())
+            .join(snapshot_base(purl.version()?))
+            .join(name),
+    )
+}
+
+/// Reads bounded original bytes and validates the content address and requested checksum.
+fn read_content(path: &Path, digest: &[u8], pin: Option<&Checksum>, limit: u64) -> Result<Vec<u8>> {
+    let bytes = bounded(fs::File::open(path)?, limit)?;
+    if verify(&bytes, pin)?.digest() != digest {
+        return Err(invalid("dependency cache checksum mismatch"));
+    }
+    Ok(bytes)
+}
+
+/// Publishes a synced complete file without modifying an existing inode in place.
+fn publish(directory: &Path, path: &Path, bytes: &[u8]) -> Result<()> {
+    fs::create_dir_all(directory.join("tmp"))?;
+    fs::create_dir_all(path.parent().unwrap())?;
+    let mut temporary = tempfile::NamedTempFile::new_in(directory.join("tmp"))?;
+    temporary.write_all(bytes)?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path).map_err(|error| error.error)?;
+    Ok(())
+}
+
+/// Rejects filenames with path, alternate-stream, or Windows device semantics.
+fn filename(name: &str) -> Result<()> {
+    segment(name)?;
+    let stem = name.split('.').next().unwrap().to_ascii_uppercase();
+    if name.ends_with(['.', ' '])
+        || matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ["COM", "LPT"].iter().any(|prefix| {
+            stem.strip_prefix(prefix).is_some_and(|suffix| {
+                matches!(
+                    suffix,
+                    "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+                )
+            })
+        })
+    {
+        return Err(invalid("invalid dependency filename"));
+    }
+    Ok(())
 }
 
 /// Returns the cache digest after verifying the declared checksum, sharing the SHA-256 calculation.

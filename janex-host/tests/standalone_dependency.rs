@@ -274,6 +274,39 @@ public class Main {
             server.requests.lock().unwrap().len(),
             if module { 4 } else { 2 }
         );
+        if module {
+            let home = temp.path().join("maven-home");
+            let candidate =
+                home.join(".m2/repository/example/remote-library/1.2/remote-library-1.2.jar");
+            fs::create_dir_all(candidate.parent().unwrap()).unwrap();
+            for (index, valid) in [true, false].iter().enumerate() {
+                let original = if *valid { library.as_slice() } else { b"wrong" };
+                fs::write(&candidate, original).unwrap();
+                dependencies.cache_directory =
+                    Some(temp.path().join(format!("maven-cache-{index}")));
+                dependencies.offline = false;
+                let before = server.requests.lock().unwrap().len();
+                success(
+                    standalone(Path::new("java"), &packing.output, &dependencies)
+                        .env("HOME", &home)
+                        .env("USERPROFILE", &home)
+                        .output()
+                        .unwrap(),
+                );
+                assert_eq!(fs::read(&candidate).unwrap(), original);
+                assert_eq!(
+                    server.requests.lock().unwrap().len(),
+                    before + usize::from(!valid)
+                );
+                dependencies.offline = true;
+                assert_eq!(
+                    resolve(&uri, Some(&checksum), &dependencies, false)
+                        .unwrap()
+                        .bytes,
+                    library
+                );
+            }
+        }
     }
 }
 
@@ -346,7 +379,8 @@ fn standalone_cache_rejects_bad_responses_and_repairs_corruption() {
     ] {
         server.raw("/library.jar", response);
         assert!(!standalone(java, &packing.output, &options).output().unwrap().status.success());
-        assert!(fs::read_dir(options.cache_directory.as_ref().unwrap()).unwrap().all(|entry| entry.unwrap().path().extension().unwrap() == "lock"));
+        assert!(!options.cache_directory.as_ref().unwrap().join("files").exists());
+        assert!(!options.cache_directory.as_ref().unwrap().join("metadata").exists());
     }
     server.raw("/library.jar", b"HTTP/1.1 302 Found\r\nLocation: /download\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec());
     server.file("/download", &library);
@@ -355,11 +389,20 @@ fn standalone_cache_rejects_bad_responses_and_repairs_corruption() {
             .output()
             .unwrap(),
     );
-    let cache = fs::read_dir(options.cache_directory.as_ref().unwrap())
+    let sha = Checksum::compute(Algorithm::Sha256, library.as_slice()).unwrap();
+    let hash: String = sha
+        .digest()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let cache = options
+        .cache_directory
+        .as_ref()
         .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .find(|path| path.extension().unwrap() == "cache")
-        .unwrap();
+        .join("files/sha256")
+        .join(&hash[..2])
+        .join(&hash[2..])
+        .join("library.jar");
     let original = fs::read(&cache).unwrap();
     let requests = server.requests.lock().unwrap().len();
     options.offline = true;
@@ -379,6 +422,51 @@ fn standalone_cache_rejects_bad_responses_and_repairs_corruption() {
             .unwrap(),
     );
     assert_eq!(fs::read(&cache).unwrap(), original);
+    let requests = server.requests.lock().unwrap().len();
+    // A second origin can bind the same pinned content without another download.
+    let mut mirror = packing.clone();
+    mirror.output = temp.path().join("mirror.janex");
+    let mirror_uri = format!("{}/mirror/library.jar", server.url);
+    mirror.external_class_path = vec![PathEntry::External {
+        uri: mirror_uri.clone(),
+        checksum: Some(sha.clone()),
+    }];
+    pack(&mirror).unwrap();
+    success(standalone(java, &mirror.output, &options).output().unwrap());
+    assert_eq!(server.requests.lock().unwrap().len(), requests);
+    options.offline = true;
+    assert_eq!(
+        resolve(&mirror_uri, Some(&sha), &options, false)
+            .unwrap()
+            .bytes,
+        library
+    );
+    // Invalid request metadata is rejected offline and repaired from verified content online.
+    for entry in fs::read_dir(
+        options
+            .cache_directory
+            .as_ref()
+            .unwrap()
+            .join("metadata/urls"),
+    )
+    .unwrap()
+    {
+        fs::write(entry.unwrap().path(), b"invalid").unwrap();
+    }
+    assert!(
+        !standalone(java, &packing.output, &options)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    options.offline = false;
+    success(
+        standalone(java, &packing.output, &options)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(server.requests.lock().unwrap().len(), requests);
     options.refresh = true;
     server.file("/download", b"wrong checksum");
     assert!(

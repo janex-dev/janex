@@ -19,6 +19,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.glavo.janex.reader.Checksum;
 import org.glavo.janex.reader.JanexReader;
 import org.glavo.janex.reader.PackageUrl;
+import org.glavo.janex.reader.ReadLimits;
+import org.glavo.janex.reader.internal.Input;
 
 /// Acquires exact external JARs using the Host's dependency cache representation.
 ///
@@ -52,10 +54,13 @@ public final class Dependencies implements JanexReader.DependencyResolver {
     @Override
     public JanexReader.Dependency resolve(String uri, byte[] checksum) throws IOException {
         Address address = address(uri, repository);
+        filename(address.name);
         Checksum expected = checksum == null ? null : Checksum.decode(checksum);
         require(!address.url.getScheme().equals("http") || expected != null && expected.algorithm().isSecure(),
                 "HTTP dependencies require a secure checksum");
         ByteArrayOutputStream identity = new ByteArrayOutputStream();
+        identity.write(uri.getBytes(StandardCharsets.UTF_8));
+        identity.write(0);
         identity.write(address.url.toASCIIString().getBytes(StandardCharsets.UTF_8));
         identity.write(0);
         if (checksum != null) {
@@ -66,20 +71,33 @@ public final class Dependencies implements JanexReader.DependencyResolver {
         // FileChannel locks overlap within a JVM instead of blocking. Serialize local callers.
         synchronized (Dependencies.class) {
             if (!offline) {
-                Files.createDirectories(directory);
+                Files.createDirectories(directory.resolve("locks"));
             }
-            Path path = directory.resolve(key + ".cache");
+            Path path = directory.resolve("metadata").resolve(uri.startsWith("pkg:") ? "maven" : "urls")
+                    .resolve(key + ".cbor");
             Set<StandardOpenOption> options = EnumSet.of(StandardOpenOption.READ);
             if (!offline) {
                 options.add(StandardOpenOption.WRITE);
                 options.add(StandardOpenOption.CREATE);
             }
-            try (FileChannel channel = FileChannel.open(directory.resolve(key + ".lock"), options);
+            try (FileChannel channel = FileChannel.open(directory.resolve("locks").resolve(key + ".lock"), options);
                  FileLock lock = channel.lock(0, Long.MAX_VALUE, offline)) {
                 require(lock.isValid(), "Dependency cache lock is unavailable");
                 if (!refresh) {
                     try {
-                        return new JanexReader.Dependency(address.name, cached(path, expected));
+                        byte[] record;
+                        try (InputStream input = Files.newInputStream(path)) {
+                            record = bounded(input, 1024 * 1024);
+                        }
+                        Input input = new Input(record, new ReadLimits(1024 * 1024, 32, 4));
+                        Map<Object, Object> values = Input.map(input.cbor(0));
+                        input.end();
+                        Object value = Input.get(values, 5);
+                        require(value instanceof byte[] && ((byte[]) value).length == 32, "Invalid cache digest");
+                        byte[] digest = (byte[]) value;
+                        require(Arrays.equals(record, metadata(uri, address, checksum, digest)), "Dependency cache metadata mismatch");
+                        return new JanexReader.Dependency(address.name,
+                                cached(contentPath(directory, digest, address.name), digest, expected));
                     } catch (NoSuchFileException missing) {
                         // A missing entry is acquired online below.
                     } catch (IOException invalid) {
@@ -89,20 +107,43 @@ public final class Dependencies implements JanexReader.DependencyResolver {
                     }
                 }
                 require(!offline, "Dependency is unavailable in the offline cache");
-                byte[] bytes = download(address.url);
-                byte[] digest = verify(bytes, expected);
-                Path temporary = Files.createTempFile(directory, key + ".", ".tmp");
-                try {
-                    try (FileChannel output = FileChannel.open(temporary, StandardOpenOption.WRITE)) {
-                        write(output, "JNXDEP01".getBytes(StandardCharsets.US_ASCII));
-                        write(output, digest);
-                        write(output, bytes);
-                        output.force(true);
+                byte[] bytes = null;
+                if (!refresh && expected != null && expected.algorithm() == Checksum.Algorithm.SHA256) {
+                    try {
+                        bytes = cached(contentPath(directory, expected.digest(), address.name), expected.digest(), expected);
+                    } catch (IOException missing) {
+                        // Missing or corrupt shared content is acquired below.
                     }
-                    Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-                } finally {
-                    Files.deleteIfExists(temporary);
                 }
+                if (bytes == null) {
+                    if (!refresh && expected != null && expected.algorithm().isSecure() && uri.startsWith("pkg:")) {
+                        try {
+                            Path local = mavenLocal(uri, address.name);
+                            if (local != null) {
+                                try (InputStream input = Files.newInputStream(local)) {
+                                    byte[] candidate = bounded(input, MAX_BYTES);
+                                    verify(candidate, expected);
+                                    bytes = candidate;
+                                }
+                            }
+                        } catch (IOException invalid) {
+                            // The external repository is a read-only candidate, never authoritative.
+                        }
+                    }
+                }
+                if (bytes == null) {
+                    bytes = download(address.url);
+                }
+                byte[] digest = verify(bytes, expected);
+                byte[] record = metadata(uri, address, checksum, digest);
+                require(record.length <= 1024 * 1024, "Dependency cache metadata exceeds byte limit");
+                Path content = contentPath(directory, digest, address.name);
+                try {
+                    cached(content, digest, expected);
+                } catch (IOException missing) {
+                    publish(directory, content, bytes);
+                }
+                publish(directory, path, record);
                 return new JanexReader.Dependency(address.name, bytes);
             } catch (NoSuchFileException missing) {
                 throw new IOException("Dependency is unavailable in the offline cache", missing);
@@ -110,16 +151,95 @@ public final class Dependencies implements JanexReader.DependencyResolver {
         }
     }
 
-    /// Reads one cache record and verifies both its stored digest and optional declared checksum.
-    private static byte[] cached(Path path, Checksum checksum) throws IOException {
-        try (DataInputStream input = new DataInputStream(Files.newInputStream(path))) {
-            byte[] header = new byte[40];
-            input.readFully(header);
-            require(Arrays.equals(Arrays.copyOf(header, 8), "JNXDEP01".getBytes(StandardCharsets.US_ASCII)), "Invalid dependency cache header");
+    /// Reads original bytes and verifies the content address and optional declared checksum.
+    private static byte[] cached(Path path, byte[] digest, Checksum checksum) throws IOException {
+        try (InputStream input = Files.newInputStream(path)) {
             byte[] bytes = bounded(input, MAX_BYTES);
-            require(MessageDigest.isEqual(verify(bytes, checksum), Arrays.copyOfRange(header, 8, 40)), "Dependency cache checksum mismatch");
+            require(MessageDigest.isEqual(verify(bytes, checksum), digest), "Dependency cache checksum mismatch");
             return bytes;
         }
+    }
+
+    /// Locates original bytes by digest and validated filename.
+    private static Path contentPath(Path directory, byte[] digest, String name) {
+        String key = hex(digest);
+        return directory.resolve("files").resolve("sha256").resolve(key.substring(0, 2)).resolve(key.substring(2)).resolve(name);
+    }
+
+    /// Locates a conventional Maven local-repository candidate for an already validated PURL.
+    private static Path mavenLocal(String uri, String name) throws IOException {
+        String home = System.getenv(System.getProperty("os.name").startsWith("Windows") ? "USERPROFILE" : "HOME");
+        if (home == null || !Paths.get(home).isAbsolute()) {
+            return null;
+        }
+        PackageUrl purl = PackageUrl.parse(uri);
+        Path path = Paths.get(home, ".m2", "repository");
+        for (String component : purl.namespace().split("\\.")) {
+            path = path.resolve(component);
+        }
+        return path.resolve(purl.name()).resolve(purl.version().replaceFirst("-[0-9]{8}\\.[0-9]{6}-[0-9]+$", "-SNAPSHOT")).resolve(name);
+    }
+
+    /// Publishes a synced complete file without overwriting an existing inode in place.
+    private static void publish(Path directory, Path path, byte[] bytes) throws IOException {
+        Files.createDirectories(directory.resolve("tmp"));
+        Files.createDirectories(path.getParent());
+        Path temporary = Files.createTempFile(directory.resolve("tmp"), "download-", ".tmp");
+        try {
+            try (FileChannel output = FileChannel.open(temporary, StandardOpenOption.WRITE)) {
+                write(output, bytes);
+                output.force(true);
+            }
+            Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } finally {
+            Files.deleteIfExists(temporary);
+        }
+    }
+
+    /// Encodes a deterministic CBOR request binding and content reference.
+    private static byte[] metadata(String uri, Address address, byte[] checksum, byte[] digest) throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        output.write(0xA6);
+        output.write(0);
+        output.write(1);
+        String[] text = {uri, address.url.toASCIIString(), address.name};
+        for (int index = 0; index < text.length; index++) {
+            output.write(index + 1);
+            cborBytes(output, 0x60, text[index].getBytes(StandardCharsets.UTF_8));
+        }
+        output.write(4);
+        if (checksum == null) {
+            output.write(0xF6);
+        } else {
+            cborBytes(output, 0x40, checksum);
+        }
+        output.write(5);
+        cborBytes(output, 0x40, digest);
+        return output.toByteArray();
+    }
+
+    /// Writes a text or byte string with its shortest CBOR length encoding.
+    private static void cborBytes(ByteArrayOutputStream output, int major, byte[] bytes) throws IOException {
+        int length = bytes.length;
+        if (length < 24) {
+            output.write(major | length);
+        } else {
+            int count = length <= 255 ? 1 : length <= 65535 ? 2 : 4;
+            output.write(major | (count == 1 ? 24 : count == 2 ? 25 : 26));
+            for (int shift = (count - 1) * 8; shift >= 0; shift -= 8) {
+                output.write(length >>> shift);
+            }
+        }
+        output.write(bytes);
+    }
+
+    /// Rejects filenames with path, alternate-stream, or Windows device semantics.
+    private static void filename(String name) throws IOException {
+        segment(name);
+        String stem = name.split("\\.", -1)[0].toUpperCase(Locale.ROOT);
+        require(!name.endsWith(".") && !name.endsWith(" ")
+                && !Arrays.asList("CON", "PRN", "AUX", "NUL").contains(stem)
+                && !stem.matches("(?:COM|LPT)[1-9¹²³]"), "Invalid dependency filename");
     }
 
     /// Writes a complete byte array to a channel without closing it.

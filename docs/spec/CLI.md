@@ -354,9 +354,12 @@ cache entries. Manifest `Class-Path` does not trigger additional downloads.
 Per-entry operating-system locks serialize concurrent acquisition and are released when the process
 closes the lock or exits; offline readers use shared locks.
 
-The cache key binds the resolved URL and declared checksum. Cache hits are copied into owned memory
+Request metadata binds the original URI, resolved URL, and declared checksum. Original JARs are stored
+under `files/sha256/<prefix>/<remaining-hash>/<filename>`, separately from CBOR metadata and locks.
+Securely pinned Maven dependencies may reuse verified files from `~/.m2/repository` without modifying
+that repository. Cache hits are copied into owned memory
 and checked against both their stored SHA-256 digest and the declared checksum. A corrupt entry is
-refetched online and rejected offline. Cache entries remain reusable until refreshed or removed;
+recovered online and rejected offline. Cache entries remain reusable until refreshed or removed;
 their stored digest does not establish publisher identity. Java reads launch-owned data, so later
 changes to the cache cannot change a prepared invocation. The cache defaults to
 `<JANEX_HOME>/cache/dependencies`. `JANEX_HOME` defaults to `%USERPROFILE%/.janex` on Windows

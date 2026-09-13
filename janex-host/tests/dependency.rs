@@ -15,16 +15,24 @@ fn digest(bytes: &[u8]) -> Checksum {
     Checksum::compute(Algorithm::Sha256, bytes).unwrap()
 }
 
-/// Lists published cache data, excluding persistent per-entry lock files.
+/// Lists raw dependency files below the content store.
 fn cache_files(path: &std::path::Path) -> Vec<std::path::PathBuf> {
-    fs::read_dir(path)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| {
-            path.extension()
-                .is_some_and(|extension| extension == "cache")
-        })
-        .collect()
+    fn visit(path: &std::path::Path, result: &mut Vec<std::path::PathBuf>) {
+        if !path.exists() {
+            return;
+        }
+        for entry in fs::read_dir(path).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                visit(&path, result);
+            } else {
+                result.push(path);
+            }
+        }
+    }
+    let mut result = Vec::new();
+    visit(&path.join("files"), &mut result);
+    result
 }
 
 #[test]
@@ -65,6 +73,8 @@ fn verifies_downloads_cache_hits_corruption_and_offline_refresh() {
     );
     assert_eq!(server.requests.lock().unwrap().len(), 1);
     let cache = cache_files(temp.path()).remove(0);
+    assert_eq!(cache.file_name().unwrap(), "library.jar");
+    assert_eq!(fs::read(&cache).unwrap(), b"original");
     fs::write(&cache, b"corrupt").unwrap();
     assert!(resolve(&uri, Some(&expected), &options, true).is_err());
     options.offline = false;
@@ -201,6 +211,8 @@ fn maven_coordinates_preserve_names_classifiers_and_repository_identity() {
         "pkg:maven/org.example/library@1?repository_url=file:%2F%2F%2Ftmp",
         "https://example.com/a%2Fb.jar",
         "https://user:password@example.com/file.jar",
+        "https://example.com/CON.jar",
+        "https://example.com/COM1.jar",
     ] {
         assert!(
             resolve(uri, Some(&checksum), &options, false).is_err(),
@@ -211,6 +223,119 @@ fn maven_coordinates_preserve_names_classifiers_and_repository_identity() {
 }
 
 use std::str::FromStr;
+
+#[test]
+fn shared_content_preserves_names_and_repairs_request_metadata() {
+    let server = http::Server::new();
+    let temp = tempfile::tempdir().unwrap();
+    let mut options = DependencyOptions {
+        cache_directory: Some(temp.path().into()),
+        ..Default::default()
+    };
+    let pin = digest(b"shared");
+    let first = format!("{}/first/library.jar", server.url);
+    let second = format!("{}/second/library.jar", server.url);
+    server.file("/first/library.jar", b"shared");
+    resolve(&first, Some(&pin), &options, false).unwrap();
+    resolve(&second, Some(&pin), &options, false).unwrap();
+    assert_eq!(server.requests.lock().unwrap().len(), 1);
+    assert_eq!(cache_files(temp.path()).len(), 1);
+    let records: Vec<_> = fs::read_dir(temp.path().join("metadata/urls"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(records.len(), 2);
+    // A record from another request must not be accepted even when its content matches.
+    fs::copy(&records[0], &records[1]).unwrap();
+    options.offline = true;
+    let failures = [&first, &second]
+        .iter()
+        .filter(|uri| resolve(uri, Some(&pin), &options, false).is_err())
+        .count();
+    assert_eq!(failures, 1);
+    options.offline = false;
+    for uri in [&first, &second] {
+        resolve(uri, Some(&pin), &options, false).unwrap();
+    }
+    assert_eq!(server.requests.lock().unwrap().len(), 1);
+    server.file("/renamed.jar", b"shared");
+    let renamed = resolve(
+        &format!("{}/renamed.jar", server.url),
+        Some(&pin),
+        &options,
+        false,
+    )
+    .unwrap();
+    assert_eq!(renamed.jar_name, "renamed.jar");
+    assert_eq!(cache_files(temp.path()).len(), 2);
+    // Refresh must contact the requested origin despite reusable content.
+    options.refresh = true;
+    assert!(resolve(&second, Some(&pin), &options, false).is_err());
+    options.refresh = false;
+    options.offline = true;
+    resolve(&second, Some(&pin), &options, false).unwrap();
+}
+
+#[test]
+fn maven_local_candidates_are_verified_and_never_modified() {
+    const CHILD: &str = "JANEX_TEST_MAVEN_CACHE_CHILD";
+    if let Ok(root) = std::env::var(CHILD) {
+        let options = DependencyOptions {
+            cache_directory: Some(std::path::Path::new(&root).join("cache")),
+            maven_repository: std::env::var("JANEX_TEST_MAVEN_REPOSITORY").unwrap(),
+            ..Default::default()
+        };
+        let pin = Checksum::compute(Algorithm::Sha512, &b"verified"[..]).unwrap();
+        assert_eq!(
+            resolve(
+                "pkg:maven/org.example/library@1",
+                Some(&pin),
+                &options,
+                false
+            )
+            .unwrap()
+            .bytes,
+            b"verified"
+        );
+        return;
+    }
+    let server = http::Server::new();
+    let temp = tempfile::tempdir().unwrap();
+    for (index, candidate) in [b"verified".as_slice(), b"wrong".as_slice()]
+        .iter()
+        .enumerate()
+    {
+        let root = temp.path().join(index.to_string());
+        let local = root.join(".m2/repository/org/example/library/1/library-1.jar");
+        fs::create_dir_all(local.parent().unwrap()).unwrap();
+        fs::write(&local, candidate).unwrap();
+        server.file("/org/example/library/1/library-1.jar", b"verified");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "maven_local_candidates_are_verified_and_never_modified",
+                "--nocapture",
+            ])
+            .env(CHILD, &root)
+            .env("JANEX_TEST_MAVEN_REPOSITORY", &server.url)
+            .env("HOME", &root)
+            .env("USERPROFILE", &root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(fs::read(&local).unwrap(), *candidate);
+        assert_eq!(server.requests.lock().unwrap().len(), index);
+        assert_eq!(
+            fs::read(cache_files(&root.join("cache")).remove(0)).unwrap(),
+            b"verified"
+        );
+    }
+}
 
 #[test]
 fn concurrent_publication_never_exposes_partial_cache_entries() {
