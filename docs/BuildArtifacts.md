@@ -6,6 +6,9 @@ from the workflow run page. Artifacts expire after 14 days and include an archiv
 and its SHA-256 checksum. Windows uses ZIP; Unix uses tar.gz to preserve executable
 permissions.
 
+CI and artifact builds use BellSoft Liberica JDK. Builds use JDK 25; compatibility
+tests additionally use Liberica JDK 8.
+
 | System | Architectures | Build tools | Contents |
 | --- | --- | --- | --- |
 | Linux | x86-64, ARM64 | cargo-zigbuild on Linux x64 | CLI and native launcher |

@@ -44,7 +44,7 @@ jobs:
           targets: ${{ matrix.target }}
       - uses: actions/setup-java@v6
         with:
-          distribution: ${{ matrix.os == 'windows-11-arm' && 'microsoft' || 'temurin' }}
+          distribution: liberica
           java-version: '25'
       - uses: mlugg/setup-zig@v2
         if: runner.os == 'Linux'

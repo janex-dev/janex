@@ -25,14 +25,14 @@ jobs:
         run: rustup target add i686-pc-windows-msvc
       - uses: actions/setup-java@v6
         with:
-          distribution: zulu
+          distribution: liberica
           java-version: '8'
       - name: Retain Java 8 for launch tests
         shell: bash
         run: echo "JANEX_TEST_JAVA8_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
       - uses: actions/setup-java@v6
         with:
-          distribution: temurin
+          distribution: liberica
           java-version: '25'
       - name: Build and test
         shell: bash
