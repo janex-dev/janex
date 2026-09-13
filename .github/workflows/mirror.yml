@@ -1,0 +1,33 @@
+name: Mirror Repository
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-repository
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    name: Mirror to CNB
+    if: github.repository == 'janex-dev/janex'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Mirror GitHub to CNB
+        shell: bash
+        env:
+          CNB_SYNC_TOKEN: ${{ secrets.CNB_SYNC_TOKEN }}
+          GIT_TERMINAL_PROMPT: '0'
+        run: |
+          : "${CNB_SYNC_TOKEN:?CNB_SYNC_TOKEN is required}"
+          git clone --mirror "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" -- repo
+          cd repo
+          git push --force --prune \
+            "https://cnb:${CNB_SYNC_TOKEN}@cnb.cool/Glavo/janex.git" \
+            'refs/heads/*:refs/heads/*' \
+            'refs/tags/*:refs/tags/*'
