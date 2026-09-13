@@ -6,6 +6,11 @@ from the workflow run page. Artifacts expire after 14 days and contain a single
 archive. Windows uses ZIP; Unix uses tar.xz to preserve executable
 permissions.
 
+Archives and GitHub artifacts use short platform names, such as
+`janex-windows-x86.zip`, `janex-windows-x86_64.zip`, and `janex-linux-arm64.tar.xz`.
+System names are `linux`, `freebsd`, `windows`, and `macos`; architecture names are
+`x86`, `x86_64`, and `arm64`. The `janexTarget` build property still uses Rust targets.
+
 CI and artifact builds use BellSoft Liberica JDK. Builds use JDK 25; compatibility
 tests additionally use Liberica JDK 8.
 

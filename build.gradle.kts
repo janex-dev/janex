@@ -70,6 +70,17 @@ tasks.register("assembleRelease") {
 }
 
 val artifactTarget = providers.gradleProperty("janexTarget").getOrElse("")
+val artifactPlatform = mapOf(
+    "x86_64-unknown-linux-musl" to "linux-x86_64",
+    "aarch64-unknown-linux-musl" to "linux-arm64",
+    "x86_64-unknown-freebsd" to "freebsd-x86_64",
+    "aarch64-unknown-freebsd" to "freebsd-arm64",
+    "i686-pc-windows-msvc" to "windows-x86",
+    "x86_64-pc-windows-msvc" to "windows-x86_64",
+    "aarch64-pc-windows-msvc" to "windows-arm64",
+    "x86_64-apple-darwin" to "macos-x86_64",
+    "aarch64-apple-darwin" to "macos-arm64"
+)[artifactTarget].orEmpty()
 val artifactDirectory = providers.environmentVariable("CARGO_TARGET_DIR")
     .map { file(it).resolve("$artifactTarget/release") }
     .getOrElse(layout.projectDirectory.dir("target/$artifactTarget/release").asFile)
@@ -143,7 +154,7 @@ artifactArchive.configure {
     group = "distribution"
     description = "Verifies and packages distribution binaries."
     dependsOn(checkArtifacts)
-    archiveBaseName = "janex-$artifactTarget"
+    archiveBaseName = "janex-$artifactPlatform"
     archiveVersion = ""
     destinationDirectory = layout.buildDirectory.dir("distributions")
     from(artifactDirectory) {
@@ -161,7 +172,7 @@ if (!artifactTarget.endsWith("-windows-msvc")) {
         dependsOn(artifactArchive)
         val archive = artifactArchive.flatMap { it.archiveFile }
         inputs.file(archive)
-        outputs.file(layout.buildDirectory.file("distributions/janex-$artifactTarget.tar.xz"))
+        outputs.file(layout.buildDirectory.file("distributions/janex-$artifactPlatform.tar.xz"))
         environment("XZ_DEFAULTS", "")
         environment("XZ_OPT", "")
         doFirst {

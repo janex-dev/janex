@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build (${{ matrix.target }})
+    name: Build (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -23,22 +23,31 @@ jobs:
       matrix:
         include:
           - target: x86_64-unknown-linux-musl
+            platform: linux-x86_64
             os: ubuntu-26.04
           - target: aarch64-unknown-linux-musl
+            platform: linux-arm64
             os: ubuntu-26.04-arm
           - target: x86_64-unknown-freebsd
+            platform: freebsd-x86_64
             os: ubuntu-26.04
           - target: aarch64-unknown-freebsd
+            platform: freebsd-arm64
             os: ubuntu-26.04-arm
           - target: i686-pc-windows-msvc
+            platform: windows-x86
             os: windows-2025
           - target: x86_64-pc-windows-msvc
+            platform: windows-x86_64
             os: windows-2025
           - target: aarch64-pc-windows-msvc
+            platform: windows-arm64
             os: windows-11-arm
           - target: x86_64-apple-darwin
+            platform: macos-x86_64
             os: macos-15-intel
           - target: aarch64-apple-darwin
+            platform: macos-arm64
             os: macos-15
     steps:
       - uses: actions/checkout@v7
@@ -79,8 +88,8 @@ jobs:
         run: .\gradlew.bat --no-daemon packageArtifacts "-PjanexTarget=$env:JANEX_TARGET"
       - uses: actions/upload-artifact@v7
         with:
-          name: janex-${{ matrix.target }}
-          path: build/distributions/janex-${{ matrix.target }}.${{ runner.os == 'Windows' && 'zip' || 'tar.xz' }}
+          name: janex-${{ matrix.platform }}
+          path: build/distributions/janex-${{ matrix.platform }}.${{ runner.os == 'Windows' && 'zip' || 'tar.xz' }}
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
