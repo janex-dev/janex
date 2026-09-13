@@ -523,23 +523,16 @@ public final class Dependencies implements JanexReader.DependencyResolver {
             require(!explicit.isEmpty(), "Empty dependency cache directory");
             return Paths.get(explicit);
         }
-        String os = System.getProperty("os.name");
-        String home = System.getenv("HOME");
-        if (os.startsWith("Windows")) {
-            String local = System.getenv("LOCALAPPDATA");
-            require(local != null, "Cannot locate dependency cache; set janex.dependencyCache");
-            return Paths.get(local, "Janex", "Cache", "dependencies");
+        String root = System.getenv("JANEX_HOME");
+        boolean overridden = root != null;
+        if (!overridden) {
+            root = System.getenv(System.getProperty("os.name").startsWith("Windows") ? "USERPROFILE" : "HOME");
         }
-        if (os.startsWith("Mac")) {
-            require(home != null, "Cannot locate dependency cache; set janex.dependencyCache");
-            return Paths.get(home, "Library", "Caches", "janex", "dependencies");
-        }
-        String xdg = System.getenv("XDG_CACHE_HOME");
-        if (xdg != null && Paths.get(xdg).isAbsolute()) {
-            return Paths.get(xdg, "janex", "dependencies");
-        }
-        require(home != null, "Cannot locate dependency cache; set janex.dependencyCache");
-        return Paths.get(home, ".cache", "janex", "dependencies");
+        require(root != null, "Cannot locate user home; set JANEX_HOME");
+        require(!root.isEmpty() && Paths.get(root).isAbsolute(),
+                "JANEX_HOME or the selected user home must be a nonempty absolute path");
+        Path home = Paths.get(root);
+        return (overridden ? home : home.resolve(".janex")).resolve("cache").resolve("dependencies");
     }
 
     /// Reads a strict boolean launch-policy property.

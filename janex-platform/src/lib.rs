@@ -1,9 +1,46 @@
 // Copyright (c) 2026 Glavo
 // SPDX-License-Identifier: MPL-2.0
 
-//! Native architecture discovery independent of the launcher's instruction set.
+//! User directories and native architecture discovery for Janex launchers.
 
 use std::io;
+
+/// Returns the Janex user directory without creating it.
+///
+/// `JANEX_HOME` overrides the default `.janex` directory under `USERPROFILE` on Windows
+/// or `HOME` elsewhere. The selected environment value must be a nonempty absolute path.
+/// Missing home information or an invalid path returns an error.
+pub fn janex_home() -> io::Result<std::path::PathBuf> {
+    resolve_home(std::env::var_os("JANEX_HOME"), || {
+        std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+    })
+}
+
+/// Resolves an explicit root or the platform home supplied by the caller.
+fn resolve_home(
+    explicit: Option<std::ffi::OsString>,
+    user_home: impl FnOnce() -> Option<std::ffi::OsString>,
+) -> io::Result<std::path::PathBuf> {
+    let overridden = explicit.is_some();
+    let value = explicit.or_else(user_home).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "cannot locate user home; set JANEX_HOME",
+        )
+    })?;
+    let path = std::path::PathBuf::from(value);
+    if !path.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "JANEX_HOME or the selected user home must be a nonempty absolute path",
+        ));
+    }
+    Ok(if overridden {
+        path
+    } else {
+        path.join(".janex")
+    })
+}
 
 /// Normalizes common operating-system and Java CPU architecture names.
 /// Unknown names are retained unchanged.
@@ -117,6 +154,24 @@ fn machine_architecture(machine: u16) -> io::Result<&'static str> {
 mod tests {
     //! Native architecture mappings and discovery.
     use super::*;
+
+    #[test]
+    fn home_overrides_are_absolute_and_do_not_fall_back_when_invalid() {
+        let root = std::env::current_dir().unwrap().join("Janex Home");
+        assert_eq!(
+            resolve_home(Some(root.clone().into()), || panic!("unexpected fallback")).unwrap(),
+            root
+        );
+        assert_eq!(
+            resolve_home(None, || Some(root.clone().into())).unwrap(),
+            root.join(".janex")
+        );
+        for invalid in ["", "relative/path", "~/.janex"] {
+            assert!(resolve_home(Some(invalid.into()), || Some(root.clone().into())).is_err());
+            assert!(resolve_home(None, || Some(invalid.into())).is_err());
+        }
+        assert!(resolve_home(None, || None).is_err());
+    }
 
     #[test]
     fn machine_types_do_not_depend_on_the_build_target() {

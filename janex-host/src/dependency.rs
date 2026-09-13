@@ -401,19 +401,5 @@ fn validate_url(url: &Url) -> Result<()> {
 
 /// Locates the user's dependency cache without creating it for local-only launches.
 fn cache_directory() -> Result<PathBuf> {
-    #[cfg(windows)]
-    let directory =
-        std::env::var_os("LOCALAPPDATA").map(|value| PathBuf::from(value).join("Janex/Cache"));
-    #[cfg(target_os = "macos")]
-    let directory =
-        std::env::var_os("HOME").map(|value| PathBuf::from(value).join("Library/Caches/janex"));
-    #[cfg(all(not(windows), not(target_os = "macos")))]
-    let directory = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .or_else(|| std::env::var_os("HOME").map(|value| PathBuf::from(value).join(".cache")))
-        .map(|path| path.join("janex"));
-    directory
-        .map(|path| path.join("dependencies"))
-        .ok_or_else(|| invalid("cannot locate dependency cache; specify a cache directory"))
+    Ok(janex_platform::janex_home()?.join("cache/dependencies"))
 }

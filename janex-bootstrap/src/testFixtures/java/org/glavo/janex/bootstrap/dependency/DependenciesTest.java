@@ -7,15 +7,63 @@ import java.io.IOException;
 
 /// Checks external address mapping independently of transport and cache availability.
 public final class DependenciesTest {
+    /// Verifies directory precedence and invalid overrides in isolated JVM environments.
+    private static void cacheDirectories() throws Exception {
+        java.nio.file.Path root = java.nio.file.Paths.get(System.getProperty("java.io.tmpdir"))
+                .toAbsolutePath().resolve("Janex Home");
+        String homeVariable = System.getProperty("os.name").startsWith("Windows") ? "USERPROFILE" : "HOME";
+        String[] overrides = {null, root.toString(), "", "relative/path", "~/.janex", "relative", null};
+        for (int index = 0; index < overrides.length; index++) {
+            String expected = index == 0 ? root.resolve(".janex/cache/dependencies").toString()
+                    : index == 1 ? root.resolve("cache/dependencies").toString()
+                    : index == 5 ? root.resolve("explicit").toString() : "error";
+            java.util.List<String> command = new java.util.ArrayList<String>();
+            command.add(java.nio.file.Paths.get(System.getProperty("java.home"), "bin", "java").toString());
+            if (index == 5) {
+                command.add("-Djanex.dependencyCache=" + expected);
+            }
+            java.util.Collections.addAll(command, "-cp", System.getProperty("java.class.path"),
+                    DependenciesTest.class.getName(), expected);
+            ProcessBuilder builder = new ProcessBuilder(command).inheritIO();
+            builder.environment().remove("JANEX_HOME");
+            builder.environment().put(homeVariable, root.toString());
+            if (overrides[index] != null) {
+                builder.environment().put("JANEX_HOME", overrides[index]);
+            }
+            if (index == 6) {
+                builder.environment().remove(homeVariable);
+            }
+            if (builder.start().waitFor() != 0) {
+                throw new AssertionError("Cache directory case failed: " + index);
+            }
+        }
+    }
+
     /// Prevents instantiation.
     private DependenciesTest() {
     }
 
     /// Verifies exact Maven layouts, canonical names, and transport-policy boundaries.
     ///
-    /// @param arguments unused
+    /// @param arguments optional child-process cache-directory expectation
     /// @throws Exception if mapping differs from the Host or invalid input is accepted
     public static void main(String[] arguments) throws Exception {
+        if (arguments.length != 0) {
+            java.lang.reflect.Method method = Dependencies.class.getDeclaredMethod("cacheDirectory");
+            method.setAccessible(true);
+            try {
+                Object actual = method.invoke(null);
+                if (!actual.toString().equals(arguments[0])) {
+                    throw new AssertionError("Unexpected cache directory: " + actual);
+                }
+            } catch (java.lang.reflect.InvocationTargetException failure) {
+                if (!arguments[0].equals("error") || !(failure.getCause() instanceof IOException)) {
+                    throw failure;
+                }
+            }
+            return;
+        }
+        cacheDirectories();
         address("HTTP://Example.COM:80/a/%2e%2e/library.jar?q=x", "http://example.com/library.jar?q=x", "library.jar");
         address("https://example.com/a+b.jar", "https://example.com/a+b.jar", "a+b.jar");
         address("https://example.com/e\u0301.jar", "https://example.com/e%CC%81.jar", "e\u0301.jar");

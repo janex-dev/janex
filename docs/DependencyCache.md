@@ -3,9 +3,12 @@
 The Rust Host and standalone Java launcher share this internal cache representation. It is separate
 from the Janex file format. Both return owned archive bytes and recheck cache integrity on every hit.
 
-The default directory is `%LOCALAPPDATA%/Janex/Cache/dependencies` on Windows,
-`$HOME/Library/Caches/janex/dependencies` on macOS, and `$XDG_CACHE_HOME/janex/dependencies` on other
-systems. An absent or relative `XDG_CACHE_HOME` falls back to `$HOME/.cache`.
+The default directory is `<JANEX_HOME>/cache/dependencies`. `JANEX_HOME` defaults to
+`%USERPROFILE%/.janex` on Windows and `$HOME/.janex` elsewhere. An explicit `JANEX_HOME`
+must be a nonempty absolute path; an invalid value is an error rather than a fallback.
+The selected user home must also be absolute. Directory lookup does not create directories.
+`--dependency-cache` (Rust CLI) and `janex.dependencyCache` (Java) override the dependency
+cache directly and take precedence over `JANEX_HOME`. Local-only launches need no cache.
 
 The lowercase hexadecimal SHA-256 of the following bytes identifies an entry:
 

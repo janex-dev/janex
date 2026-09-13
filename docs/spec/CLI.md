@@ -113,7 +113,7 @@ original JAR filenames are retained. Supply these properties before `-jar`:
 
 | Property | Default | Meaning |
 | --- | --- | --- |
-| `janex.dependencyCache` | Platform user cache | Override the shared dependency cache directory. |
+| `janex.dependencyCache` | `<JANEX_HOME>/cache/dependencies` | Override the shared dependency cache directory. |
 | `janex.offline` | `false` | Use verified cache entries without network access. |
 | `janex.refreshDependencies` | `false` | Replace cached entries after a successful download; incompatible with offline mode. |
 | `janex.mavenRepository` | `https://repo.maven.apache.org/maven2/` | Default Maven repository. |
@@ -358,9 +358,11 @@ The cache key binds the resolved URL and declared checksum. Cache hits are copie
 and checked against both their stored SHA-256 digest and the declared checksum. A corrupt entry is
 refetched online and rejected offline. Cache entries remain reusable until refreshed or removed;
 their stored digest does not establish publisher identity. Java reads launch-owned data, so later
-changes to the cache cannot change a prepared invocation. Cache defaults are
-`%LOCALAPPDATA%/Janex/Cache/dependencies` on Windows, `~/Library/Caches/janex/dependencies` on macOS,
-and `$XDG_CACHE_HOME/janex/dependencies` (or `~/.cache/janex/dependencies`) elsewhere.
+changes to the cache cannot change a prepared invocation. The cache defaults to
+`<JANEX_HOME>/cache/dependencies`. `JANEX_HOME` defaults to `%USERPROFILE%/.janex` on Windows
+and `$HOME/.janex` elsewhere. An explicit `JANEX_HOME` must be a nonempty absolute path;
+the selected user home must also be absolute. Invalid values are errors when locating the cache.
+Explicit dependency cache options take precedence. Local-only launches do not require this directory.
 
 Runtime resources omit manifest `Class-Path`, JAR signature files, and signature-only manifest attributes.
 Other manifest attributes, including sealing information, are retained. The original resources in
