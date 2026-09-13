@@ -212,7 +212,7 @@ fn java_authentication_is_explicit_and_precedes_integrity_and_dependencies() {
     vectors[..4].copy_from_slice(&count.to_be_bytes());
     let fixture = temp.path().join("authentication.bin");
     fs::write(&fixture, vectors).unwrap();
-    let bootstrap = project.join("janex-bootstrap/bootstrap.jar");
+    let bootstrap = project.join("janex-bootstrap/build/libs/janex-bootstrap.jar");
     let output = Command::new("javac")
         .args(["--release", "8", "-cp"])
         .arg(&bootstrap)

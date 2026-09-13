@@ -68,7 +68,7 @@ pub(crate) fn write(
     let mut jar = ZipWriter::new(File::create(&path)?);
     let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
     let mut embedded = zip::ZipArchive::new(Cursor::new(include_bytes!(
-        "../../janex-bootstrap/bootstrap.jar"
+        "../../janex-bootstrap/build/libs/janex-bootstrap.jar"
     )))
     .map_err(std::io::Error::other)?;
     for index in 0..embedded.len() {

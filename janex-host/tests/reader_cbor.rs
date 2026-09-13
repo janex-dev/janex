@@ -51,7 +51,7 @@ fn vector(output: &mut Vec<u8>, mode: u8, bytes: &[u8]) {
 fn java_matches_native_cbor_float_widths_unknown_values_and_binary_framing() {
     let temp = tempfile::tempdir().unwrap();
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let bootstrap = project.join("janex-bootstrap/bootstrap.jar");
+    let bootstrap = project.join("janex-bootstrap/build/libs/janex-bootstrap.jar");
     let compiled = Command::new("javac")
         .args(["--release", "8", "-cp"])
         .arg(&bootstrap)

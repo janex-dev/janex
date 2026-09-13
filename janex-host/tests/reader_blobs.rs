@@ -229,7 +229,7 @@ fn vector(output: &mut Vec<u8>, encoded: &[u8], root_index: u64, select: bool, l
 fn java_blob_pages_match_native_lazy_validation_and_logical_index_limits() {
     let temp = tempfile::tempdir().unwrap();
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let bootstrap = project.join("janex-bootstrap/bootstrap.jar");
+    let bootstrap = project.join("janex-bootstrap/build/libs/janex-bootstrap.jar");
     let compiled = Command::new("javac")
         .args(["--release", "8", "-cp"])
         .arg(&bootstrap)

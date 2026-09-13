@@ -33,9 +33,9 @@ jobs:
           java-version: '25'
       - name: Check formatting
         run: cargo fmt --all --check
-      - name: Verify embedded Java bootstrap
+      - name: Build and test Java
         shell: bash
-        run: bash ./gradlew --no-daemon check
+        run: bash ./gradlew --no-daemon assemble check
       - name: Check warnings
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Run tests and documentation examples

@@ -109,7 +109,7 @@ fn minimal(extra: &[u8], wide: bool) -> Vec<u8> {
 fn java_class_validation_and_restoration_match_native_structural_boundaries() {
     let temp = tempfile::tempdir().unwrap();
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let bootstrap = project.join("janex-bootstrap/bootstrap.jar");
+    let bootstrap = project.join("janex-bootstrap/build/libs/janex-bootstrap.jar");
     let harness = project.join(
         "janex-reader/src/testFixtures/java/org/janex/reader/internal/codec/ClassFileTest.java",
     );

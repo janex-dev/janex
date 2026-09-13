@@ -78,7 +78,7 @@ fn recode(source: &Path, algorithm: Option<Algorithm>, corrupt_page: bool) -> Ve
         sections.push(value);
         body.extend(content);
     }
-    let tail = include_bytes!("../../janex-bootstrap/bootstrap.jar");
+    let tail = include_bytes!("../../janex-bootstrap/build/libs/janex-bootstrap.jar");
     let mut metadata = Value::map([
         (Value::uint(0), Value::array(sections)),
         (
@@ -203,7 +203,7 @@ fn java_and_rust_accept_recorded_algorithms_and_reject_bad_page_checksums() {
 fn java_checksums_match_rust_across_streaming_and_algorithm_boundaries() {
     let temp = tempfile::tempdir().unwrap();
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let bootstrap = project.join("janex-bootstrap/bootstrap.jar");
+    let bootstrap = project.join("janex-bootstrap/build/libs/janex-bootstrap.jar");
     let harness =
         project.join("janex-reader/src/testFixtures/java/org/janex/reader/ChecksumTest.java");
     let result = Command::new("javac")

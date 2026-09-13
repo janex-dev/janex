@@ -372,7 +372,7 @@ fn write_package(
     )?;
     let empty_region = Value::map([(Value::uint(0), Value::uint(0))])?;
     let tail: &[u8] = if options.with_launcher {
-        include_bytes!("../../janex-bootstrap/bootstrap.jar")
+        include_bytes!("../../janex-bootstrap/build/libs/janex-bootstrap.jar")
     } else {
         &[]
     };

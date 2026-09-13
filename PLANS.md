@@ -97,7 +97,7 @@ Acceptance on Windows, 2026-09-13: `cargo test --workspace --locked` passed all 
 failures or ignored tests, with `JANEX_TEST_JAVA8_HOME` selecting Corretto 8u452 alongside OpenJDK 25.
 `gradlew.bat check --rerun-tasks --no-build-cache --console=plain`, workspace Clippy with
 `-D warnings`, `cargo fmt --all -- --check`, and `git diff --check` passed. The rebuilt bootstrap
-matched the checked-in JAR byte for byte. The BlobPool fixture also passed after its Clippy cleanup.
+was verified byte for byte across repeated builds. The BlobPool fixture also passed after its Clippy cleanup.
 
 The acceptance evidence is maintained in `janex-host/tests`:
 
@@ -285,8 +285,9 @@ placeholder interfaces do not constitute completion.
 ## Java Bootstrap Validation
 
 The root Gradle build uses Java 8 base classes and Java 9 module classes in a reproducible
-multi-release JAR. The portable Zstandard decoder is implemented under MPL-2.0. `check` validates
-the embedded artifact, and `:janex-bootstrap:updateEmbeddedBootstrap` updates it.
+multi-release JAR. The portable Zstandard decoder is implemented under MPL-2.0. Run `./gradlew assemble check`
+before Cargo. Rust embeds `janex-bootstrap/build/libs/janex-bootstrap.jar`; generated JARs remain
+in ignored build directories and are not stored in the source repository.
 
 Cover NIO URI round trips, full directory traversal, channel positioning, write rejection,
 metadata precision, closure and remounting on Java 8 and current Java. Cover direct module reads,

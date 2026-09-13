@@ -99,7 +99,7 @@ fn application(value: &Value) -> Vec<u8> {
 fn java_limits_match_native_decoding_and_are_inherited_by_nested_readers() {
     let temp = tempfile::tempdir().unwrap();
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let bootstrap = project.join("janex-bootstrap/bootstrap.jar");
+    let bootstrap = project.join("janex-bootstrap/build/libs/janex-bootstrap.jar");
     let compiled = Command::new("javac")
         .args(["--release", "8", "-cp"])
         .arg(&bootstrap)

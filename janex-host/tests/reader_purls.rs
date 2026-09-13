@@ -99,7 +99,7 @@ fn vector(output: &mut Vec<u8>, uri: &str) {
 fn java_package_urls_match_native_components_type_rules_and_inactive_validation() {
     let temp = tempfile::tempdir().unwrap();
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let bootstrap = project.join("janex-bootstrap/bootstrap.jar");
+    let bootstrap = project.join("janex-bootstrap/build/libs/janex-bootstrap.jar");
     let compiled = Command::new("javac")
         .args(["--release", "8", "-cp"])
         .arg(&bootstrap)

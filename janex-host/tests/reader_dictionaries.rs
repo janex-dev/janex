@@ -97,7 +97,7 @@ fn vector(output: &mut Vec<u8>, dictionary: &[u8], encoded: &[u8]) {
 fn java_dictionary_decoder_matches_native_raw_trained_and_malformed_vectors() {
     let temp = tempfile::tempdir().unwrap();
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let jar = project.join("janex-bootstrap/bootstrap.jar");
+    let jar = project.join("janex-bootstrap/build/libs/janex-bootstrap.jar");
     tool(
         Command::new("javac")
             .args(["--release", "8", "-cp"])
@@ -358,7 +358,7 @@ fn package(source: &Path, dictionary: &[u8], mode: u8) -> Vec<u8> {
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .parent()
                 .unwrap()
-                .join("janex-bootstrap/bootstrap.jar"),
+                .join("janex-bootstrap/build/libs/janex-bootstrap.jar"),
         )
         .unwrap(),
     );

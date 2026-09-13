@@ -179,7 +179,7 @@ fn sample(
 fn java_container_preserves_raw_metadata_and_separates_parsing_from_integrity() {
     let temp = tempfile::tempdir().unwrap();
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let bootstrap = project.join("janex-bootstrap/bootstrap.jar");
+    let bootstrap = project.join("janex-bootstrap/build/libs/janex-bootstrap.jar");
     let output = Command::new("javac")
         .args(["--release", "8", "-cp"])
         .arg(&bootstrap)

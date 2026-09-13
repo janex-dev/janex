@@ -69,7 +69,7 @@ fn bytes_count(output: &mut Vec<u8>, count: usize) {
 fn java_applications_validate_metadata_inactive_descriptors_and_locale_lookup() {
     let temp = tempfile::tempdir().unwrap();
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let bootstrap = project.join("janex-bootstrap/bootstrap.jar");
+    let bootstrap = project.join("janex-bootstrap/build/libs/janex-bootstrap.jar");
     let compile = Command::new("javac")
         .args(["--release", "8", "-cp"])
         .arg(&bootstrap)

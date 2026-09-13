@@ -375,7 +375,7 @@ fn vector(output: &mut Vec<u8>, layers: &[Layer], limits: Limits) {
 fn java_resource_layers_and_aliases_match_native_resolution() {
     let temp = tempfile::tempdir().unwrap();
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let bootstrap = project.join("janex-bootstrap/bootstrap.jar");
+    let bootstrap = project.join("janex-bootstrap/build/libs/janex-bootstrap.jar");
     let compiled = Command::new("javac")
         .args(["--release", "8", "-cp"])
         .arg(&bootstrap)

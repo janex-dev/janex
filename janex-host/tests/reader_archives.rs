@@ -166,7 +166,7 @@ fn increment(output: &mut [u8]) {
 fn java_matches_zip64_import_and_native_tail_boundary_validation() {
     let temp = tempfile::tempdir().unwrap();
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let jar = project.join("janex-bootstrap/bootstrap.jar");
+    let jar = project.join("janex-bootstrap/build/libs/janex-bootstrap.jar");
     let compile = Command::new("javac")
         .args(["--release", "8", "-cp"])
         .arg(&jar)
@@ -267,7 +267,7 @@ fn java_matches_zip64_import_and_native_tail_boundary_validation() {
 fn standalone_api_launches_an_executable_zip64_tail() {
     let temp = tempfile::tempdir().unwrap();
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let bootstrap = project.join("janex-bootstrap/bootstrap.jar");
+    let bootstrap = project.join("janex-bootstrap/build/libs/janex-bootstrap.jar");
     let harness = temp.path().join("harness");
     let compile =
         Command::new("javac")
@@ -301,7 +301,7 @@ fn standalone_api_launches_an_executable_zip64_tail() {
     let mut options = PackOptions::new(temp.path().join("classes"), &source);
     options.main_class = Some("Main".into());
     pack(&options).unwrap();
-    let mut jar = fs::read(project.join("janex-bootstrap/bootstrap.jar")).unwrap();
+    let mut jar = fs::read(project.join("janex-bootstrap/build/libs/janex-bootstrap.jar")).unwrap();
     let end = jar.len() - 22;
     assert_eq!(&jar[end..end + 4], b"PK\x05\x06");
     let count = u16::from_le_bytes(jar[end + 10..end + 12].try_into().unwrap()) as u64;

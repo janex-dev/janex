@@ -60,39 +60,8 @@ tasks.jar {
     }
 }
 
-// Cargo embeds this recorded artifact without requiring a JDK during Rust builds.
-val embeddedBootstrap = layout.projectDirectory.file("bootstrap.jar")
-val generatedBootstrap = tasks.jar.flatMap { it.archiveFile }
-
-val verifyEmbeddedBootstrap = tasks.register("verifyEmbeddedBootstrap") {
-    group = "verification"
-    description = "Checks that the embedded bootstrap JAR matches the Java sources."
-    inputs.file(generatedBootstrap)
-    inputs.file(embeddedBootstrap)
-    mustRunAfter("updateEmbeddedBootstrap")
-    val generated = generatedBootstrap
-    val embedded = embeddedBootstrap
-    doLast {
-        check(generated.get().asFile.readBytes().contentEquals(embedded.asFile.readBytes())) {
-            "Embedded bootstrap.jar differs; run :janex-bootstrap:updateEmbeddedBootstrap."
-        }
-    }
-}
-
-tasks.register("updateEmbeddedBootstrap") {
-    group = "build"
-    description = "Updates the bootstrap JAR embedded by the Rust launcher."
-    inputs.file(generatedBootstrap)
-    outputs.file(embeddedBootstrap)
-    val generated = generatedBootstrap
-    val embedded = embeddedBootstrap
-    doLast {
-        generated.get().asFile.copyTo(embedded.asFile, overwrite = true)
-    }
-}
-
 tasks.check {
-    dependsOn(verifyEmbeddedBootstrap, tasks.testFixturesClasses, "checkDependencies")
+    dependsOn(tasks.testFixturesClasses, "checkDependencies")
 }
 
 tasks.register<JavaExec>("checkDependencies") {

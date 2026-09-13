@@ -528,7 +528,7 @@ public class Main {
         limits,
     )
     .unwrap();
-    let tail = include_bytes!("../../janex-bootstrap/bootstrap.jar");
+    let tail = include_bytes!("../../janex-bootstrap/build/libs/janex-bootstrap.jar");
     let mut writer = Writer::new(Vec::new()).unwrap();
     writer
         .write_section(7, BLOB_POOL, &pool.bytes, Some(pool.type_info))

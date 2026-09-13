@@ -391,7 +391,7 @@ public class Agent {
 fn java_module_purls_match_native_decoding_and_placement() {
     let temp = tempfile::tempdir().unwrap();
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let bootstrap = project.join("janex-bootstrap/bootstrap.jar");
+    let bootstrap = project.join("janex-bootstrap/build/libs/janex-bootstrap.jar");
     let fixture_class = project
         .join("janex-reader/src/testFixtures/java/org/janex/reader/ModuleRequirementTest.java");
     tool(

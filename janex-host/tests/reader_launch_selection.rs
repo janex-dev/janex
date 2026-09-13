@@ -118,7 +118,7 @@ fn node(active: bool, label: &str, children: Vec<Value>) -> Value {
 fn java_launch_selection_matches_native_overlay_order_clearing_and_limits() {
     let temp = tempfile::tempdir().unwrap();
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let bootstrap = project.join("janex-bootstrap/bootstrap.jar");
+    let bootstrap = project.join("janex-bootstrap/build/libs/janex-bootstrap.jar");
     let compiled =
         Command::new("javac")
             .args(["--release", "8", "-cp"])
