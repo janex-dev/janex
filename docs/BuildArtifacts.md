@@ -2,8 +2,8 @@
 
 The **Build artifacts** GitHub Actions workflow builds all supported distributions
 on pushes to `main`, pull requests, and manual runs. Download each target's artifact
-from the workflow run page. Artifacts expire after 14 days and include an archive
-and its SHA-256 checksum. Windows uses ZIP; Unix uses tar.gz to preserve executable
+from the workflow run page. Artifacts expire after 14 days and contain a single
+archive. Windows uses ZIP; Unix uses tar.gz to preserve executable
 permissions.
 
 CI and artifact builds use BellSoft Liberica JDK. Builds use JDK 25; compatibility
@@ -49,7 +49,7 @@ line tools. Supported `janexTarget` values are:
 - `x86_64-apple-darwin`, `aarch64-apple-darwin`
 
 `packageArtifacts` builds the bootstrap JAR and Rust binaries, runs the Java
-artifact checks, and creates a ZIP or TAR archive plus its checksum using Gradle.
+artifact checks, and creates a ZIP or TAR archive using Gradle.
 The archives are written to `build/distributions/`. To build only the binaries,
 use `assembleArtifacts`; they are written to `target/<target>/release/` unless
 `CARGO_TARGET_DIR` is set. No Python installation is required for this workflow.

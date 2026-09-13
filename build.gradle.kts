@@ -140,7 +140,7 @@ val packageArtifacts = if (artifactTarget.endsWith("-windows-msvc")) {
 }
 packageArtifacts.configure {
     group = "distribution"
-    description = "Verifies and packages distribution binaries with a SHA-256 checksum."
+    description = "Verifies and packages distribution binaries."
     dependsOn(checkArtifacts)
     archiveBaseName = "janex-$artifactTarget"
     archiveVersion = ""
@@ -151,23 +151,6 @@ packageArtifacts.configure {
     }
     isPreserveFileTimestamps = false
     isReproducibleFileOrder = true
-    val extension = if (artifactTarget.endsWith("-windows-msvc")) "zip" else "tar.gz"
-    val checksum = layout.buildDirectory.file("distributions/janex-$artifactTarget.$extension.sha256")
-    outputs.file(checksum)
-    doLast {
-        val archive = archiveFile.get().asFile
-        val digest = java.security.MessageDigest.getInstance("SHA-256")
-        archive.inputStream().use { input ->
-            val buffer = ByteArray(8192)
-            while (true) {
-                val count = input.read(buffer)
-                if (count < 0) break
-                digest.update(buffer, 0, count)
-            }
-        }
-        val hex = digest.digest().joinToString("") { "%02x".format(it) }
-        checksum.get().asFile.writeText("$hex  ${archive.name}\n", Charsets.US_ASCII)
-    }
 }
 
 tasks.register<Exec>("assembleWindowsX86Launcher") {
