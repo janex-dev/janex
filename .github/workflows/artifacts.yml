@@ -24,19 +24,14 @@ jobs:
         include:
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
-            strip: strip
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
-            strip: aarch64-linux-gnu-strip
           - target: i686-pc-windows-msvc
             os: windows-latest
-            msvc-arch: amd64_x86
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-            msvc-arch: amd64
           - target: aarch64-pc-windows-msvc
-            os: windows-latest
-            msvc-arch: amd64_arm64
+            os: windows-11-arm
           - target: x86_64-apple-darwin
             os: macos-15
           - target: aarch64-apple-darwin
@@ -45,56 +40,36 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: ${{ matrix.os == 'windows-11-arm' && 'stable-aarch64-pc-windows-msvc' || 'stable' }}
           targets: ${{ matrix.target }}
       - uses: actions/setup-java@v6
         with:
-          distribution: temurin
+          distribution: ${{ matrix.os == 'windows-11-arm' && 'microsoft' || 'temurin' }}
           java-version: '25'
-      - uses: actions/setup-python@v6
+      - uses: mlugg/setup-zig@v2
+        if: runner.os == 'Linux'
         with:
-          python-version: '3.12'
-      - uses: ilammy/msvc-dev-cmd@v1
-        if: runner.os == 'Windows'
-        with:
-          arch: ${{ matrix.msvc-arch }}
+          version: '0.15.2'
+          cache-key: ${{ matrix.target }}
       - name: Install cross-compilation tools
         if: runner.os == 'Linux'
         run: |
-          python -m pip install cargo-zigbuild==0.23.4 ziglang==0.15.2
+          cargo install cargo-zigbuild --version 0.23.4 --locked
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y binutils binutils-aarch64-linux-gnu qemu-user
       - name: Enable x64 execution on macOS ARM64
         if: runner.os == 'macOS' && startsWith(matrix.target, 'x86_64-')
         run: sudo softwareupdate --install-rosetta --agree-to-license
-      - name: Build Unix binaries
+      - name: Build, verify, and package Unix binaries
         if: runner.os != 'Windows'
         env:
           JANEX_TARGET: ${{ matrix.target }}
-        run: bash ./gradlew --no-daemon assembleArtifacts -PjanexTarget="$JANEX_TARGET"
-      - name: Build Windows binaries
+        run: bash ./gradlew --no-daemon packageArtifacts -PjanexTarget="$JANEX_TARGET"
+      - name: Build, verify, and package Windows binaries
         if: runner.os == 'Windows'
         env:
           JANEX_TARGET: ${{ matrix.target }}
-        run: .\gradlew.bat --no-daemon assembleArtifacts "-PjanexTarget=$env:JANEX_TARGET"
-      - name: Remove debug information
-        if: runner.os == 'Linux'
-        env:
-          JANEX_TARGET: ${{ matrix.target }}
-          STRIP: ${{ matrix.strip }}
-        run: |
-          for binary in janex janex-launcher; do
-            "$STRIP" --strip-debug "target/$JANEX_TARGET/release/$binary"
-          done
-      - name: Verify binary format, dependencies, and launch modes
-        shell: bash
-        env:
-          JANEX_TARGET: ${{ matrix.target }}
-        run: python .github/scripts/check-artifacts.py "$JANEX_TARGET"
-      - name: Package binaries
-        shell: bash
-        env:
-          JANEX_TARGET: ${{ matrix.target }}
-        run: python .github/scripts/package-artifacts.py "$JANEX_TARGET"
+        run: .\gradlew.bat --no-daemon packageArtifacts "-PjanexTarget=$env:JANEX_TARGET"
       - uses: actions/upload-artifact@v7
         with:
           name: janex-${{ matrix.target }}

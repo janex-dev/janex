@@ -9,13 +9,13 @@ permissions.
 | System | Architectures | Build tools | Contents |
 | --- | --- | --- | --- |
 | Linux | x86-64, ARM64 | cargo-zigbuild on Linux x64 | CLI and native launcher |
-| Windows | x86, x64, ARM64 | MSVC on Windows x64 | CLI and native launcher |
+| Windows | x86, x64, ARM64 | MSVC; ARM64 builds on Windows ARM64 | CLI and native launcher |
 | macOS | x64, ARM64 | Xcode on macOS ARM64 | CLI |
 
 Linux binaries statically link musl and use mimalloc for Rust allocations and C
-allocation functions. Windows binaries statically link the MSVC CRT and use its
-default allocator. macOS uses the system libraries and allocator. The Java process
-retains its own allocator on every platform.
+allocation functions. Windows binaries statically link the MSVC CRT; macOS links
+the system libraries. Both retain Rust's default system allocator and the native
+libraries' default allocation functions. The Java process retains its own allocator.
 
 Mach-O native launcher prefixes are not implemented, so macOS artifacts contain
 only the CLI. The CLI supports bootstrap, direct, and standalone `java -jar` packages.
@@ -27,24 +27,24 @@ Gradle task for every target:
 
 ```shell
 rustup target add aarch64-unknown-linux-musl
-python -m pip install cargo-zigbuild==0.23.4 ziglang==0.15.2
-./gradlew assembleArtifacts -PjanexTarget=aarch64-unknown-linux-musl
+cargo install cargo-zigbuild --version 0.23.4 --locked
+./gradlew packageArtifacts -PjanexTarget=aarch64-unknown-linux-musl
 ```
 
-Linux requires cargo-zigbuild and Zig. For Windows, use a Visual Studio developer
-environment configured for the target architecture. For macOS, use Xcode's command
+Linux requires cargo-zigbuild and Zig 0.15.2 on PATH; the workflow installs Zig with
+`mlugg/setup-zig` and cargo-zigbuild with Cargo. On Windows, Rust discovers the
+installed Visual Studio C++ tools automatically. For macOS, install Xcode's command
 line tools. Supported `janexTarget` values are:
 
 - `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`
 - `i686-pc-windows-msvc`, `x86_64-pc-windows-msvc`, `aarch64-pc-windows-msvc`
 - `x86_64-apple-darwin`, `aarch64-apple-darwin`
 
-Gradle builds the bootstrap JAR before invoking Cargo. Binaries are written to
-`target/<target>/release/` unless `CARGO_TARGET_DIR` is set. Package them with:
-
-```shell
-python .github/scripts/package-artifacts.py aarch64-unknown-linux-musl
-```
+`packageArtifacts` builds the bootstrap JAR and Rust binaries, runs the Java
+artifact checks, and creates a ZIP or TAR archive plus its checksum using Gradle.
+The archives are written to `build/distributions/`. To build only the binaries,
+use `assembleArtifacts`; they are written to `target/<target>/release/` unless
+`CARGO_TARGET_DIR` is set. No Python installation is required for this workflow.
 
 ## Verification
 
@@ -57,14 +57,14 @@ Launch checks cover packaged resources, bootstrap and direct modes, and `java -j
 They exercise Unicode arguments except in Windows direct and `java -jar` modes,
 where the Java launcher's code-page limitation still applies. Linux ARM64 runs through QEMU;
 macOS x64 runs through Rosetta. These emulated binaries launch the host's Java.
-Windows ARM64 binaries receive structural checks on the x64 build runner; execution
-still needs a Windows ARM64 host.
+Windows ARM64 builds and runs the complete launch checks on `windows-11-arm`, using
+an ARM64 JDK. Windows x86 launches the x64 runner's Java through WOW64.
 
-With `JAVA_HOME` and the inspection tools on PATH, run:
+To build and check the binaries without creating archives, run:
 
 ```shell
-python .github/scripts/check-artifacts.py aarch64-unknown-linux-musl
+./gradlew checkArtifacts -PjanexTarget=aarch64-unknown-linux-musl
 ```
 
-Linux checks require binutils and qemu-user for ARM64. Windows requires `dumpbin`;
-macOS requires `lipo` and `otool`.
+Linux checks require binutils and qemu-user for ARM64. Windows checks locate
+`dumpbin` through Visual Studio's `vswhere`; macOS requires `lipo` and `otool`.

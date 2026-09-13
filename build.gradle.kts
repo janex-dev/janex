@@ -69,11 +69,19 @@ tasks.register("assembleRelease") {
     dependsOn(":janex-bootstrap:assemble", cargoBuildRelease)
 }
 
-tasks.register<Exec>("assembleArtifacts") {
+val artifactTarget = providers.gradleProperty("janexTarget").getOrElse("")
+val artifactDirectory = providers.environmentVariable("CARGO_TARGET_DIR")
+    .map { file(it).resolve("$artifactTarget/release") }
+    .getOrElse(layout.projectDirectory.dir("target/$artifactTarget/release").asFile)
+val artifactNames = if (artifactTarget.endsWith("-apple-darwin")) listOf("janex")
+    else if (artifactTarget.endsWith("-windows-msvc")) listOf("janex.exe", "janex-launcher.exe")
+    else listOf("janex", "janex-launcher")
+
+val assembleArtifacts = tasks.register<Exec>("assembleArtifacts") {
     group = "build"
     description = "Builds distribution binaries for the selected Linux, Windows, or macOS target."
     dependsOn(":janex-bootstrap:jar")
-    val target = providers.gradleProperty("janexTarget").getOrElse("")
+    val target = artifactTarget
     doFirst {
         require(target in setOf(
             "x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl",
@@ -100,6 +108,66 @@ tasks.register<Exec>("assembleArtifacts") {
     }
     commandLine(command)
     mustRunAfter(cargoBuild, cargoBuildRelease, cargoClippy, cargoTest)
+}
+
+val stripArtifacts = tasks.register<Exec>("stripArtifacts") {
+    description = "Removes Linux debug information while retaining allocation symbols for verification."
+    dependsOn(assembleArtifacts)
+    onlyIf { artifactTarget.endsWith("-musl") }
+    val strip = if (artifactTarget.startsWith("aarch64-")) "aarch64-linux-gnu-strip" else "strip"
+    commandLine(listOf(strip, "--strip-debug") + artifactNames.map { artifactDirectory.resolve(it).path })
+}
+
+val checkArtifacts = tasks.register<JavaExec>("checkArtifacts") {
+    group = "verification"
+    description = "Checks distribution binaries and supported Java launch modes on the current host."
+    dependsOn(stripArtifacts, ":janex-bootstrap:testFixturesClasses")
+    classpath(provider {
+        project(":janex-bootstrap").extensions.getByType<SourceSetContainer>()
+            .named("testFixtures").get().runtimeClasspath
+    })
+    mainClass = "org.glavo.janex.testing.ArtifactCheck"
+    args(artifactTarget, artifactDirectory.absolutePath)
+}
+
+val packageArtifacts = if (artifactTarget.endsWith("-windows-msvc")) {
+    tasks.register<Zip>("packageArtifacts")
+} else {
+    tasks.register<Tar>("packageArtifacts") {
+        compression = Compression.GZIP
+        archiveExtension = "tar.gz"
+    }
+}
+packageArtifacts.configure {
+    group = "distribution"
+    description = "Verifies and packages distribution binaries with a SHA-256 checksum."
+    dependsOn(checkArtifacts)
+    archiveBaseName = "janex-$artifactTarget"
+    archiveVersion = ""
+    destinationDirectory = layout.buildDirectory.dir("distributions")
+    from(artifactDirectory) {
+        include(artifactNames)
+        filePermissions { unix("rwxr-xr-x") }
+    }
+    isPreserveFileTimestamps = false
+    isReproducibleFileOrder = true
+    val extension = if (artifactTarget.endsWith("-windows-msvc")) "zip" else "tar.gz"
+    val checksum = layout.buildDirectory.file("distributions/janex-$artifactTarget.$extension.sha256")
+    outputs.file(checksum)
+    doLast {
+        val archive = archiveFile.get().asFile
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        archive.inputStream().use { input ->
+            val buffer = ByteArray(8192)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
+            }
+        }
+        val hex = digest.digest().joinToString("") { "%02x".format(it) }
+        checksum.get().asFile.writeText("$hex  ${archive.name}\n", Charsets.US_ASCII)
+    }
 }
 
 tasks.register<Exec>("assembleWindowsX86Launcher") {
