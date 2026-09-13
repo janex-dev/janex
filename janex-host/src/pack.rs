@@ -68,6 +68,10 @@ pub struct PackOptions {
     pub transform_classfiles: bool,
     /// Append the portable Java launcher as a JAR tail for `java -jar` execution.
     pub with_launcher: bool,
+    /// Native PE or ELF launcher to prepend with an application and trust policy.
+    pub native_launcher: Option<PathBuf>,
+    /// Invocation strategy recorded in the native launcher; defaults to bootstrap.
+    pub native_launch_mode: crate::run::LaunchMode,
     /// Optional publisher signer; absent uses Checksum verification.
     pub signer: Option<PackSigner>,
 }
@@ -101,6 +105,8 @@ impl PackOptions {
             compression_level: 3,
             transform_classfiles: true,
             with_launcher: false,
+            native_launcher: None,
+            native_launch_mode: crate::run::LaunchMode::Bootstrap,
             signer: None,
         }
     }
@@ -179,6 +185,19 @@ pub fn pack(options: &PackOptions) -> Result<PackReport> {
         inputs.push(input);
     }
     let entry_point = infer_entry_point(&inputs[0], options)?;
+    let header = options
+        .native_launcher
+        .as_deref()
+        .map(|path| {
+            crate::native_launcher::header(
+                path,
+                &options.application,
+                options.native_launch_mode,
+                options.signer.as_ref(),
+            )
+        })
+        .transpose()?
+        .unwrap_or_default();
     let parent = options
         .output
         .parent()
@@ -190,6 +209,7 @@ pub fn pack(options: &PackOptions) -> Result<PackReport> {
         &inputs,
         options,
         &entry_point,
+        &header,
         false,
     )?;
     let mut size = selected.as_file().metadata()?.len();
@@ -200,6 +220,7 @@ pub fn pack(options: &PackOptions) -> Result<PackReport> {
             &inputs,
             options,
             &entry_point,
+            &header,
             true,
         )?;
         let candidate_size = candidate.as_file().metadata()?.len();
@@ -208,6 +229,13 @@ pub fn pack(options: &PackOptions) -> Result<PackReport> {
             transformed = count;
             size = candidate_size;
         }
+    }
+    #[cfg(unix)]
+    if options.native_launcher.is_some() {
+        use std::os::unix::fs::PermissionsExt;
+        selected
+            .as_file()
+            .set_permissions(fs::Permissions::from_mode(0o755))?;
     }
     selected.as_file().sync_all()?;
     selected
@@ -273,12 +301,14 @@ fn infer_entry_point(input: &ImportedRoot, options: &PackOptions) -> Result<Entr
 
 /// Writes one complete candidate and returns its transformed file-entry count.
 fn write_package(
-    output: impl Write,
+    mut output: impl Write,
     inputs: &[ImportedRoot],
     options: &PackOptions,
     entry: &EntryPoint,
+    header: &[u8],
     transform: bool,
 ) -> Result<usize> {
+    output.write_all(header)?;
     let mut writer = Writer::new(output)?;
     let mut roots = Vec::new();
     let mut transformed = 0;
@@ -388,7 +418,20 @@ fn write_package(
         ])?
     };
     let metadata = Value::map([
-        (Value::uint(1), empty_region.clone()),
+        (
+            Value::uint(1),
+            if header.is_empty() {
+                empty_region.clone()
+            } else {
+                Value::map([
+                    (Value::uint(0), Value::uint(header.len() as u64)),
+                    (
+                        Value::uint(1),
+                        Value::bytes(&Checksum::compute(Algorithm::Sha256, header)?.encode()),
+                    ),
+                ])?
+            },
+        ),
         (Value::uint(2), tail_region),
     ])?;
     match &options.signer {

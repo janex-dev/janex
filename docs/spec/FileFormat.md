@@ -1065,8 +1065,9 @@ ConditionObject = {
 Keys `0` and `3` are reserved and must not occur. All present constraints must match; omitted keys
 impose no constraint. An empty map is unconditional.
 
-The consumer supplies the host OS and CPU architecture, an optional invocation channel, and an
-optional runtime with its type and properties. Conditions do not select a runtime.
+The consumer supplies the execution OS and CPU architecture, an optional invocation channel, and an
+optional runtime with its type and properties. With a selected runtime, `arch` describes that runtime,
+not the launcher process or the system's native architecture. Conditions do not select a runtime.
 
 `os` uses `linux`, `windows`, or `macos`; `arch` uses `x86`, `x86-64`, or `aarch64`.
 Other names match by exact equality.

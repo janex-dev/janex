@@ -1,0 +1,17 @@
+# Copyright (c) 2026 Glavo
+# SPDX-License-Identifier: MPL-2.0
+
+[package]
+name = "janex-platform"
+version.workspace = true
+edition.workspace = true
+license = "MPL-2.0"
+description = "Native system facts for Janex launchers"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Threading", "Win32_System_SystemInformation", "Win32_System_LibraryLoader"] }
+
+# Native calls are confined to individually audited functions.
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "deny"

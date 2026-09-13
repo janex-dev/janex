@@ -68,6 +68,24 @@ tasks.register("assembleRelease") {
     dependsOn(":janex-bootstrap:assemble", cargoBuildRelease)
 }
 
+tasks.register<Exec>("assembleWindowsX86Launcher") {
+    group = "build"
+    description = "Builds the release Windows x86 launcher for native or emulated execution."
+    dependsOn(":janex-bootstrap:jar")
+    workingDir(layout.projectDirectory)
+    commandLine("cargo", "build", "--package", "janex-launcher", "--target", "i686-pc-windows-msvc", "--release", "--locked")
+    mustRunAfter(cargoBuild, cargoBuildRelease, cargoClippy, cargoTest)
+}
+
+tasks.register<Exec>("checkWindowsX86Launcher") {
+    group = "verification"
+    description = "Tests the 32-bit Windows launcher with the available Java runtimes."
+    dependsOn(":janex-bootstrap:jar")
+    workingDir(layout.projectDirectory)
+    commandLine("cargo", "test", "--package", "janex-launcher", "--package", "janex-platform", "--target", "i686-pc-windows-msvc", "--locked", "--", "--test-threads=1")
+    mustRunAfter(cargoBuild, cargoBuildRelease, cargoClippy, cargoTest)
+}
+
 tasks.check {
     dependsOn(":janex-bootstrap:check")
     dependsOn(":janex-reader:check")

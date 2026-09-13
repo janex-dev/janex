@@ -24,6 +24,8 @@ use std::{
 /// primary key directly; user IDs and third-party certifications do not authorize other keys.
 #[derive(Clone, Debug)]
 pub struct KeyCertificate {
+    /// Original binary public certificate, including certification and revocation packets.
+    encoded: Vec<u8>,
     /// The caller-pinned primary public key.
     primary: PublicKey,
     /// Canonical key body preceded by its OpenPGP certification hash prefix.
@@ -133,6 +135,7 @@ impl KeyCertificate {
                     .map_err(|_| invalid("invalid OpenPGP primary key"))?;
                 check_key(&primary, body)?;
                 certificate = Some(Self {
+                    encoded: bytes.to_vec(),
                     primary_input: key_input(body)?,
                     primary,
                     direct: Vec::new(),
@@ -218,6 +221,11 @@ impl KeyCertificate {
     /// Returns the identity pinned when this certificate is used for authentication.
     pub fn fingerprint(&self) -> Fingerprint {
         self.primary.fingerprint()
+    }
+
+    /// Returns the binary public certificate without re-encoding signed packet bodies.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.encoded
     }
 
     /// Authenticates a document using this explicitly trusted primary key or a valid signing subkey.

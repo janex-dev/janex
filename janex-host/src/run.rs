@@ -42,7 +42,9 @@ pub struct RunOptions {
     pub target: PathBuf,
     /// Explicit application ID; absent selects the sole application.
     pub application: Option<String>,
-    /// Java executable or home override, otherwise JAVA_HOME followed by PATH.
+    /// Condition channel, normally `run`, `open`, or `command`.
+    pub invocation: String,
+    /// Java executable or home override, otherwise native-preferred JAVA_HOME and PATH candidates.
     pub java: JavaOptions,
     /// Entry-point invocation strategy; defaults to lossless bootstrap argument transport.
     pub launch_mode: LaunchMode,
@@ -76,6 +78,7 @@ impl RunOptions {
         Self {
             target: target.into(),
             application: None,
+            invocation: "run".into(),
             java: JavaOptions::default(),
             launch_mode: LaunchMode::default(),
             dependencies: crate::dependency::DependencyOptions::default(),
@@ -184,12 +187,23 @@ impl ExecutionPlan {
 /// No application main method or descriptor-supplied agent runs during preparation.
 /// Dependency acquisition follows `options.dependencies` after authentication and condition evaluation.
 pub fn prepare(options: &RunOptions) -> Result<ExecutionPlan> {
+    prepare_snapshot(
+        options,
+        snapshot(&target_path(&options.target)?, options.max_snapshot_bytes)?,
+    )
+}
+
+/// Prepares a launch from an owned snapshot, retaining the same authentication policy as [`prepare`].
+/// The target path is descriptive; it is not reopened. The snapshot size limit is still enforced.
+pub fn prepare_snapshot(options: &RunOptions, bytes: Vec<u8>) -> Result<ExecutionPlan> {
     if options.openpgp_trust.is_some() && !options.cms_trust.signers.is_empty() {
         return Err(invalid(
             "OpenPGP and CMS signer pins are mutually exclusive",
         ));
     }
-    let bytes = snapshot(&target_path(&options.target)?, options.max_snapshot_bytes)?;
+    if bytes.len() as u64 > options.max_snapshot_bytes {
+        return Err(invalid("input snapshot exceeds the byte limit"));
+    }
     let mut reader = Reader::open_auto(Cursor::new(bytes), options.limits)?;
     let authentication = match reader.verification() {
         Verification::None | Verification::Checksum(_)
@@ -252,20 +266,17 @@ pub fn prepare(options: &RunOptions) -> Result<ExecutionPlan> {
     let mut blobs = BlobStore::new(reader);
     let mut roots = Roots::default();
     let mut failures = Vec::new();
-    for executable in java::candidates(&options.java)? {
-        let result = JavaRuntime::probe(&executable)
-            .map_err(Error::from)
-            .and_then(|runtime| {
-                prepare_runtime(
-                    options,
-                    application,
-                    runtime,
-                    &mut blobs,
-                    &mut roots,
-                    integrity,
-                    authentication.clone(),
-                )
-            });
+    for runtime in java::runtimes(&options.java)? {
+        let executable = runtime.executable.clone();
+        let result = prepare_runtime(
+            options,
+            application,
+            runtime,
+            &mut blobs,
+            &mut roots,
+            integrity,
+            authentication.clone(),
+        );
         match result {
             Ok(plan) => return Ok(plan),
             Err(error) if options.java.is_explicit() => return Err(error),
@@ -289,7 +300,7 @@ fn prepare_runtime(
     integrity: IntegrityReport,
     authentication: Authentication,
 ) -> Result<ExecutionPlan> {
-    let context = runtime_context(&runtime, Some("run"))?;
+    let context = runtime_context(&runtime, Some(&options.invocation))?;
     let launch = application
         .evaluate_java(&context)?
         .ok_or_else(|| invalid("application conditions do not match this runtime"))?;

@@ -1,0 +1,29 @@
+# Copyright (c) 2026 Glavo
+# SPDX-License-Identifier: MPL-2.0
+
+[package]
+name = "janex-launcher"
+version.workspace = true
+edition.workspace = true
+license = "MPL-2.0"
+description = "Self-contained native entry point for Janex applications"
+
+[dependencies]
+janex-host.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+ctrlc = "3.5"
+
+[target.'cfg(unix)'.dependencies]
+signal-hook = "0.3"
+nix = { version = "0.31", features = ["signal", "process"] }
+
+[dev-dependencies]
+janex-format.workspace = true
+janex-java.workspace = true
+janex-platform.workspace = true
+janex-signature.workspace = true
+tempfile = "3"
+
+[lints]
+workspace = true

@@ -3,7 +3,7 @@
 
 [workspace]
 resolver = "3"
-members = ["janex-format", "janex-signature", "janex-java", "janex-host", "janex-cli"]
+members = ["janex-format", "janex-signature", "janex-platform", "janex-java", "janex-host", "janex-cli", "janex-launcher"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,6 +11,7 @@ authors = ["Glavo"]
 edition = "2024"
 
 [workspace.dependencies]
+janex-platform = { path = "janex-platform" }
 janex-signature = { path = "janex-signature" }
 janex-java = { path = "janex-java" }
 janex-format = { path = "janex-format" }

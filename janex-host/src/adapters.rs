@@ -32,11 +32,7 @@ pub(crate) fn signature_limits(limits: Limits) -> janex_signature::Limits {
 pub(crate) fn runtime_context(runtime: &JavaRuntime, invocation: Option<&str>) -> Result<Context> {
     Ok(Context {
         os: std::env::consts::OS.into(),
-        arch: match std::env::consts::ARCH {
-            "x86_64" => "x86-64",
-            other => other,
-        }
-        .into(),
+        arch: runtime.architecture.clone(),
         invocation: invocation.map(str::to_owned),
         runtime: Some(RuntimeContext {
             runtime_type: "janex.java".into(),
@@ -56,6 +52,7 @@ mod tests {
     #[test]
     fn runtime_facts_are_validated_before_format_condition_evaluation() {
         let mut runtime = JavaRuntime {
+            architecture: "aarch64".into(),
             vm_name: None,
             executable: "java".into(),
             home: "jdk".into(),
@@ -66,6 +63,7 @@ mod tests {
         };
         let context = runtime_context(&runtime, Some("run")).unwrap();
         assert_eq!(context.invocation.as_deref(), Some("run"));
+        assert_eq!(context.arch, "aarch64");
         let facts = context.runtime.unwrap();
         assert_eq!(facts.runtime_type, "janex.java");
         assert_eq!(facts.vendor, runtime.vendor);

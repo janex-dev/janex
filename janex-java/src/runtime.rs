@@ -40,6 +40,8 @@ pub struct JavaRuntime {
     pub version_text: String,
     /// Exact `java.vendor` property for condition matching.
     pub vendor: String,
+    /// Normalized `os.arch` of this JVM, independent of the launcher and native system.
+    pub architecture: String,
     /// Runtime-reported VM name, when included in the property probe.
     pub vm_name: Option<String>,
     /// System module names and optional descriptor versions; empty for Java 8.
@@ -112,6 +114,14 @@ impl JavaRuntime {
             true,
         )?;
         let (home, version_text, vendor) = settings(&properties)?;
+        let architectures: Vec<_> = properties
+            .lines()
+            .filter_map(|line| line.trim_start().strip_prefix("os.arch = "))
+            .collect();
+        if architectures.len() != 1 || architectures[0].is_empty() {
+            return Err(invalid("missing or duplicate Java os.arch property"));
+        }
+        let architecture = janex_platform::normalize_architecture(architectures[0]).to_owned();
         let vm_name = properties.lines().find_map(|line| {
             line.trim_start()
                 .strip_prefix("java.vm.name = ")
@@ -129,6 +139,7 @@ impl JavaRuntime {
             feature,
             version_text,
             vendor,
+            architecture,
             vm_name,
             modules,
         })
@@ -235,6 +246,42 @@ pub fn candidates(options: &JavaOptions) -> Result<Vec<PathBuf>> {
         std::env::var_os("JAVA_HOME").as_deref(),
         std::env::var_os("PATH").as_deref(),
     )
+}
+
+/// Probes discovered runtimes, preferring the native system architecture for automatic selection.
+///
+/// Explicit executable or home overrides are never replaced. Within each architecture group,
+/// JAVA_HOME and PATH order is retained. Other runnable architectures remain fallback candidates.
+/// Discovery failure leaves the original order intact. Failed probes are skipped unless no
+/// runtime succeeds, in which case their diagnostics are returned together.
+pub fn runtimes(options: &JavaOptions) -> Result<Vec<JavaRuntime>> {
+    let mut runtimes = Vec::new();
+    let mut failures = Vec::new();
+    for path in candidates(options)? {
+        match JavaRuntime::probe(&path) {
+            Ok(runtime) => runtimes.push(runtime),
+            Err(error) if options.is_explicit() => return Err(error),
+            Err(error) => failures.push(format!("{}: {error}", path.display())),
+        }
+    }
+    if runtimes.is_empty() {
+        return Err(invalid(if failures.is_empty() {
+            "no Java runtime found; specify --java or --java-home".into()
+        } else {
+            format!("no usable Java runtime:\n{}", failures.join("\n"))
+        }));
+    }
+    if !options.is_explicit()
+        && let Ok(native) = janex_platform::native_architecture()
+    {
+        prefer_native(&mut runtimes, &native);
+    }
+    Ok(runtimes)
+}
+
+/// Stably ranks runtimes without rejecting working emulated architectures.
+fn prefer_native(runtimes: &mut [JavaRuntime], native: &str) {
+    runtimes.sort_by_key(|runtime| runtime.architecture != native);
 }
 
 /// Resolves candidates using supplied environment values, without mutating process globals.
@@ -417,6 +464,36 @@ mod tests {
     //! Pure settings and candidate-order tests without global environment mutation.
     use super::*;
     use std::fs;
+
+    #[test]
+    fn native_preference_keeps_foreign_runtimes_as_stable_fallbacks() {
+        let runtime = |name: &str, architecture: &str| JavaRuntime {
+            executable: name.into(),
+            home: name.into(),
+            feature: 25,
+            version_text: "25".into(),
+            vendor: "Test".into(),
+            architecture: architecture.into(),
+            vm_name: None,
+            modules: BTreeMap::new(),
+        };
+        let mut values = vec![
+            runtime("x86", "x86"),
+            runtime("x64", "x86-64"),
+            runtime("arm", "aarch64"),
+            runtime("arm2", "aarch64"),
+        ];
+        prefer_native(&mut values, "aarch64");
+        assert_eq!(
+            values
+                .iter()
+                .map(|value| value.executable.to_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["arm", "arm2", "x86", "x64"]
+        );
+        prefer_native(&mut values, "x86-64");
+        assert_eq!(values[0].executable, Path::new("x64"));
+    }
 
     #[cfg(windows)]
     #[test]

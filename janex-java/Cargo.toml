@@ -9,6 +9,7 @@ license = "MPL-2.0"
 description = "Java runtime discovery, manifests, and launch preparation"
 
 [dependencies]
+janex-platform.workspace = true
 flate2 = "1"
 thiserror = "2"
 zip = { version = "8.6", default-features = false, features = ["deflate-flate2"] }

@@ -36,9 +36,9 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Package a directory or JAR as a Janex application.
-    Pack(PackArgs),
+    Pack(Box<PackArgs>),
     /// Run an application from a local Janex file.
-    Run(RunArgs),
+    Run(Box<RunArgs>),
 }
 
 /// Runtime selection and local execution policy, followed by uninterpreted application arguments.
@@ -104,6 +104,12 @@ struct PackArgs {
     /// Include a launcher for java -jar execution.
     #[arg(long)]
     with_launcher: bool,
+    /// Prepend a native Janex launcher executable for direct execution.
+    #[arg(long, value_name = "FILE")]
+    native_launcher: Option<PathBuf>,
+    /// Select how the native launcher invokes Java.
+    #[arg(long, value_enum, requires = "native_launcher")]
+    native_launch_mode: Option<LaunchModeArg>,
     /// Primary directory or JAR.
     source: PathBuf,
     /// Destination file; existing files are never replaced.
@@ -239,8 +245,16 @@ fn main() {
 fn run(cli: Cli) -> janex_host::Result<i32> {
     match cli.command {
         Command::Pack(args) => {
+            let args = *args;
             let mut options = PackOptions::new(args.source, args.output);
             options.with_launcher = args.with_launcher;
+            options.native_launcher = args.native_launcher;
+            if let Some(mode) = args.native_launch_mode {
+                options.native_launch_mode = match mode {
+                    LaunchModeArg::Bootstrap => LaunchMode::Bootstrap,
+                    LaunchModeArg::Direct => LaunchMode::Direct,
+                };
+            }
             options.class_path = args.class_path;
             options.module_path = args.module_path;
             options.external_class_path = external_entries(&args.external_class_path, false)?;
@@ -279,6 +293,7 @@ fn run(cli: Cli) -> janex_host::Result<i32> {
             );
         }
         Command::Run(args) => {
+            let args = *args;
             let mut target = args.target.into_iter();
             let mut options =
                 RunOptions::new(PathBuf::from(target.next().expect("required target")));

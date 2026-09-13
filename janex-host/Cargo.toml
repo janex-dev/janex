@@ -7,6 +7,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+janex-platform.workspace = true
 janex-format.workspace = true
 janex-java.workspace = true
 janex-signature.workspace = true

@@ -20,6 +20,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - name: Install Windows x86 target
+        if: runner.os == 'Windows'
+        run: rustup target add i686-pc-windows-msvc
       - uses: actions/setup-java@v6
         with:
           distribution: zulu
@@ -34,6 +37,12 @@ jobs:
       - name: Build and test
         shell: bash
         run: bash ./gradlew --no-daemon build
+      - name: Test Windows x86 launcher with x64 Java
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          JANEX_TEST_NATIVE_ARCH: x86-64
+        run: bash ./gradlew --no-daemon checkWindowsX86Launcher
       - name: Verify generated CMS signatures with OpenSSL
         run: python janex-signature/tests/fixtures/cms/check_generated.py
       - name: Verify generated OpenPGP signatures with GnuPG

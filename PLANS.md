@@ -232,7 +232,8 @@ janex run [OPTIONS] <TARGET> [ARGS...]
 
 - Support `--application`, `--java-home`, `--java`, and trust-material options. Janex options must
   precede the target; forward arguments after the target unchanged.
-- Select runtimes in this order: explicit selection, `JAVA_HOME`, then `PATH`. Report an error when
+- Honor explicit runtime selection; otherwise prefer native-architecture candidates from
+  `JAVA_HOME` and `PATH`, retaining other runnable architectures as fallbacks. Report an error when
   an explicitly selected runtime does not meet requirements; otherwise try the next candidate.
   Support classpath launching on Java 8; module launching requires Java 9 or later.
 - Obtain a stable input snapshot and verify it completely once. Reuse the result during parsing
@@ -281,6 +282,18 @@ janex run [OPTIONS] <TARGET> [ARGS...]
 
 Acceptance requires working packaging, signing, verification, and launching. Type skeletons and
 placeholder interfaces do not constitute completion.
+
+## Native Launcher
+
+- Build `janex-launcher` as a separate Rust executable reusing Host preparation and execution.
+- Package PE or ELF prefixes with bounded private launch configuration and authenticated header
+  coverage. Preserve optional JAR tails and both Java invocation modes.
+- Keep launcher, native system, and JVM architectures distinct. Prefer native JVM candidates while
+  evaluating application and resource architecture conditions against the selected JVM.
+- Validate x86 Windows wrappers launching x64 Java under WOW64; retain Windows ARM64 emulation
+  testing as a hardware acceptance requirement. Keep generated binaries out of the repository.
+- Cover application arguments, signatures and tampering, resource lifetime, Java 8, direct mode,
+  JAR tails, and Unix process termination with executable integration tests.
 
 ## Java Bootstrap Validation
 

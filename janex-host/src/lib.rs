@@ -10,6 +10,7 @@ pub mod dependency;
 mod error;
 pub mod import;
 pub mod materialize;
+pub mod native_launcher;
 pub mod pack;
 mod roots;
 pub mod run;
