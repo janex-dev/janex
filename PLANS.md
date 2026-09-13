@@ -298,12 +298,24 @@ placeholder interfaces do not constitute completion.
 ## Gradle Plugin
 
 - Provide `org.glavo.janex` as a Java Gradle plugin that can also be included as a standalone build.
-- Package the project JAR and ordered runtime dependencies through the native CLI, with lazy
+- Package the project JAR and ordered runtime dependencies through `janex-writer`, with lazy
   application conventions, explicit classpath/module-path overrides, and both launcher forms.
-- Require an explicitly configured local CLI until native tool distribution is available.
+- Keep ordinary packaging independent of native executables; native launcher prefixes remain explicit inputs.
 - Generate Maven publications and plugin markers for local or configured CNB repositories.
 - Verify real packaged applications with TestKit, configuration-cache reuse, dependency changes,
-  and preservation of the previous output when the CLI fails. Keep a runnable composite-build demo.
+  and preservation of the previous output when the writer fails. Keep a runnable composite-build demo.
+
+## Java Writer
+
+- Provide `janex-writer` alongside `janex-reader`, targeting Java 17 without native libraries.
+- Import bounded JARs and directory trees with deterministic UTF-8 ordering, Multi-Release layers,
+  symbolic links, permissions, shared file blobs, and external dependency declarations.
+- Write Janex 0.1 with XXH3-64 file checksums and SHA-256 section, page, metadata, and wrapper coverage.
+- Bundle the generated bootstrap JAR as a build resource; never commit generated binaries.
+- Preserve JAR-tail and native-prefix packaging, with both bootstrap and direct invocation modes.
+- Validate Java output with the Rust Host and Rust output with the Java reader and launcher.
+- Start with uncompressed stored blobs. Add compression, CLASSFILE encoding, and publisher signing
+  as separate follow-up work, using the file-format specification as the shared contract.
 
 ## Java Bootstrap Validation
 

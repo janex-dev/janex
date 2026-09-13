@@ -4,10 +4,27 @@
 plugins {
     `java-library`
     `java-test-fixtures`
+    `maven-publish`
 }
 
-group = rootProject.group
-version = rootProject.version
+group = "org.glavo.janex"
+version = "0.1.0"
+
+publishing {
+    publications.create<MavenPublication>("library") { from(components["java"]) }
+    repositories.maven {
+        name = "local"
+        url = (rootProject.findProject(":janex-gradle-plugin") ?: rootProject)
+            .layout.buildDirectory.dir("repository").get().asFile.toURI()
+    }
+    providers.gradleProperty("janexPublishUrl").orNull?.let { repositoryUrl ->
+        repositories.maven {
+            name = "cnb"
+            url = uri(repositoryUrl)
+            credentials(PasswordCredentials::class)
+        }
+    }
+}
 
 java {
     toolchain.languageVersion = JavaLanguageVersion.of(25)

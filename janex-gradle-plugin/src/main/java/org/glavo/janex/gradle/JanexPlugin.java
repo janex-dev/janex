@@ -7,7 +7,6 @@ import java.util.Collections;
 
 import org.gradle.api.Plugin;
 import org.gradle.api.Project;
-import org.gradle.api.file.Directory;
 import org.gradle.api.plugins.JavaApplication;
 import org.gradle.api.plugins.JavaPlugin;
 import org.gradle.api.provider.Provider;
@@ -29,11 +28,6 @@ public final class JanexPlugin implements Plugin<Project> {
     public void apply(Project project) {
         project.getPluginManager().apply(JavaPlugin.class);
         JanexExtension extension = project.getExtensions().create("janex", JanexExtension.class);
-        Directory directory = project.getLayout().getProjectDirectory();
-        extension.getExecutable().convention(project.getLayout().file(
-                project.getProviders().gradleProperty("janexExecutable")
-                        .orElse(project.getProviders().environmentVariable("JANEX_EXECUTABLE"))
-                        .map(path -> directory.file(path).getAsFile())));
         extension.getSource().convention(project.getTasks().named("jar", Jar.class).flatMap(Jar::getArchiveFile));
         extension.getApplicationId().convention("main");
         extension.getJvmOptions().convention(Collections.emptyList());
@@ -60,7 +54,6 @@ public final class JanexPlugin implements Plugin<Project> {
         TaskProvider<JanexPack> pack = project.getTasks().register("janexPack", JanexPack.class, task -> {
             task.setGroup("distribution");
             task.setDescription("Packages the application and its runtime dependencies as a Janex file.");
-            task.getExecutable().convention(extension.getExecutable());
             task.getSource().convention(extension.getSource());
             task.getClassPath().from(extension.getClassPath());
             task.getModulePath().from(extension.getModulePath());

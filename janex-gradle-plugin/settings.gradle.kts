@@ -2,3 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 rootProject.name = "janex-gradle-plugin"
+include("janex-reader", "janex-bootstrap", "janex-writer")
+for (name in listOf("janex-reader", "janex-bootstrap", "janex-writer")) {
+    project(":$name").projectDir = file("../$name")
+}

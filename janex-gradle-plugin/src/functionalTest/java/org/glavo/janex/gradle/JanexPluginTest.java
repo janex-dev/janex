@@ -33,7 +33,7 @@ public final class JanexPluginTest {
         classpathPackaging(Files.createTempDirectory(directory, "classpath-"), executable);
         modularPackaging(Files.createTempDirectory(directory, "modules-"), executable);
         publishedPlugin(Files.createTempDirectory(directory, "published-"), executable);
-        missingExecutable(Files.createTempDirectory(directory, "missing-"));
+        javaOnlyPackaging(Files.createTempDirectory(directory, "java-only-"));
         System.out.println("Janex Gradle plugin functional checks passed.");
     }
 
@@ -43,11 +43,24 @@ public final class JanexPluginTest {
         BuildResult first = build(project, executable, false, "assemble");
         require(first.task(":janexPack").getOutcome() == TaskOutcome.SUCCESS, first.getOutput());
         Path output = project.resolve("build/distributions/fixture.janex");
+        require(run(List.of(executable.toString(), "run", "--allow-unsigned", "--java", javaExecutable(), output.toString()))
+                .contains("hello|resource|configured|4"), "Rust could not launch the Java-written package");
         String launch = runJar(output);
         require(launch.contains("hello|resource|configured|4"), launch);
         require(launch.contains("0:\n"), launch);
         require(launch.contains("2:1f680"), launch);
         require(launch.contains("6:2d,2d,68,65,6c,70"), launch);
+        Path nativeWritten = project.resolve("rust-written.janex");
+        run(List.of(executable.toString(), "pack", project.resolve("build/libs/fixture.jar").toString(),
+                "--output", nativeWritten.toString(), "--main-class", "demo.Main", "--with-launcher",
+                "--class-path", project.resolve("dependency/build/libs/dependency.jar").toString(),
+                "--jvm-option=-Ddemo.flag=configured"));
+        require(runJar(nativeWritten).contains("hello|resource|configured|0"), "Java could not launch the Rust-written package");
+        String java8 = System.getenv("JANEX_TEST_JAVA8_HOME");
+        if (java8 != null) {
+            require(run(List.of(Path.of(java8, "bin", "java").toString(), "-jar", output.toString()))
+                    .contains("hello|resource|configured|4"), "Java 8 could not launch the Java-written package");
+        }
 
         BuildResult second = build(project, executable, false, "assemble");
         require(second.getOutput().contains("Reusing configuration cache"), second.getOutput());
@@ -119,21 +132,26 @@ public final class JanexPluginTest {
         Files.writeString(script, Files.readString(script)
                 .replace("id(\"org.glavo.janex\")", "id(\"org.glavo.janex\") version \"0.1.0\""));
         GradleRunner.create().withProjectDir(project.toFile())
-                .withArguments("janexPack", "--configuration-cache", "--stacktrace", "-PjanexExecutable=" + executable)
+                .withArguments("janexPack", "--configuration-cache", "--stacktrace")
                 .build();
         require(runJar(project.resolve("build/distributions/fixture.janex"))
                 .contains("hello|resource|configured|4"), "Published plugin produced an invalid package");
     }
 
-    /// Verifies that configuration-only tasks do not require a CLI and packaging reports its absence.
-    private static void missingExecutable(Path project) throws IOException {
-        write(project, "settings.gradle.kts", "rootProject.name = \"missing\"\n");
-        write(project, "build.gradle.kts", "plugins { id(\"org.glavo.janex\") }\n");
-        GradleRunner.create().withProjectDir(project.toFile()).withPluginClasspath()
-                .withArguments("help", "--configuration-cache", "--stacktrace").build();
-        BuildResult failure = GradleRunner.create().withProjectDir(project.toFile()).withPluginClasspath()
-                .withArguments("janexPack", "--configuration-cache", "--stacktrace").buildAndFail();
-        require(failure.getOutput().contains("executable"), failure.getOutput());
+    /// Verifies that packaging needs no CLI and can restore a package from Gradle's build cache.
+    private static void javaOnlyPackaging(Path project) throws Exception {
+        fixture(project, false);
+        List<String> arguments = List.of("janexPack", "--build-cache", "--configuration-cache", "--stacktrace",
+                "-PjanexExecutable=/does/not/exist");
+        GradleRunner.create().withProjectDir(project.toFile()).withPluginClasspath().withArguments(arguments).build();
+        Path output = project.resolve("build/distributions/fixture.janex");
+        byte[] original = Files.readAllBytes(output);
+        Files.delete(output);
+        BuildResult restored = GradleRunner.create().withProjectDir(project.toFile()).withPluginClasspath()
+                .withArguments(arguments).build();
+        require(restored.task(":janexPack").getOutcome() == TaskOutcome.FROM_CACHE, restored.getOutput());
+        require(Arrays.equals(original, Files.readAllBytes(output)), "Build cache changed the package");
+        require(runJar(output).contains("hello|resource|configured|4"), "Java-only packaging failed");
     }
 
     /// Writes a Kotlin DSL application with a project dependency and duplicate dependency resources.
@@ -147,6 +165,9 @@ public final class JanexPluginTest {
                     id("org.glavo.janex")
                     application
                 }
+                allprojects {
+                    tasks.withType<JavaCompile>().configureEach { options.release.set(%d) }
+                }
                 application {
                     mainClass.set("demo.Main")
                     applicationDefaultJvmArgs = listOf("-Ddemo.flag=configured")
@@ -159,7 +180,7 @@ public final class JanexPluginTest {
                 janex {
                     arguments.addAll("", "two words", "\\uD83D\\uDE80", "--help")
                 }
-                """.formatted(modular ? "mainModule.set(\"demo.app\")" : ""));
+                """.formatted(modular ? 9 : 8, modular ? "mainModule.set(\"demo.app\")" : ""));
         write(project, "dependency/build.gradle.kts", "plugins { `java-library` }\n");
         write(project, "other/build.gradle.kts", "plugins { `java-library` }\n");
         write(project, "dependency/src/main/java/dependency/Greeting.java", """
@@ -172,8 +193,10 @@ public final class JanexPluginTest {
                     public static String message() { return "hello"; }
                     /// Reads the dependency resource through the owning class loader or module.
                     public static String resource() throws Exception {
-                        try (var input = Greeting.class.getResourceAsStream("/dependency.txt")) {
-                            return new String(input.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+                        try (java.io.InputStream input = Greeting.class.getResourceAsStream("/dependency.txt")) {
+                            java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+                            for (int ch; (ch = input.read()) >= 0;) bytes.write(ch);
+                            return new String(bytes.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
                         }
                     }
                 }
@@ -204,11 +227,10 @@ public final class JanexPluginTest {
         }
     }
 
-    /// Runs a fixture build with strict configuration-cache validation and the supplied CLI.
+    /// Runs a fixture build with strict configuration-cache validation; the CLI is used only by interoperability checks.
     private static BuildResult build(Path project, Path executable, boolean failure, String task) {
         GradleRunner runner = GradleRunner.create().withProjectDir(project.toFile()).withPluginClasspath()
-                .withArguments(task, "--configuration-cache", "--configuration-cache-problems=fail", "--stacktrace",
-                        "-PjanexExecutable=" + executable);
+                .withArguments(task, "--configuration-cache", "--configuration-cache-problems=fail", "--stacktrace");
         return failure ? runner.buildAndFail() : runner.build();
     }
 

@@ -12,8 +12,8 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 
-import javax.inject.Inject;
-
+import org.glavo.janex.writer.JanexWriter;
+import org.glavo.janex.writer.PackOptions;
 import org.gradle.api.DefaultTask;
 import org.gradle.api.GradleException;
 import org.gradle.api.file.ConfigurableFileCollection;
@@ -28,14 +28,12 @@ import org.gradle.api.tasks.OutputFile;
 import org.gradle.api.tasks.PathSensitive;
 import org.gradle.api.tasks.PathSensitivity;
 import org.gradle.api.tasks.TaskAction;
-import org.gradle.process.ExecOperations;
-import org.gradle.work.DisableCachingByDefault;
+import org.gradle.api.tasks.CacheableTask;
 
-/// Packages a primary JAR and ordered dependency paths by invoking the native CLI without a shell.
-/// The CLI writes a temporary sibling of the output, which replaces the output only after success.
-/// Execution failures propagate as Gradle failures. Gradle tracks inputs for up-to-date checks;
-/// shared build caching is disabled because packaging uses a platform-specific external tool.
-@DisableCachingByDefault(because = "Packaging uses a platform-specific native executable")
+/// Packages a primary JAR and ordered dependency paths using the Java writer.
+/// A temporary sibling replaces the previous output only after successful packaging.
+/// Gradle tracks input contents, path order, and launch settings for incremental and cached builds.
+@CacheableTask
 public abstract class JanexPack extends DefaultTask {
     /// Creates a packaging task. [JanexPlugin] supplies conventions for `janexPack`.
     public JanexPack() {
@@ -44,14 +42,10 @@ public abstract class JanexPack extends DefaultTask {
         getArguments().convention(List.of());
         getWithLauncher().convention(true);
         getNativeLaunchMode().convention("bootstrap");
+        getOutputs().upToDateWhen(task -> !((JanexPack) task).hasDirectoryInputs());
+        getOutputs().doNotCacheIf("Directory permissions and native executable modes require filesystem metadata",
+                task -> ((JanexPack) task).hasDirectoryInputs() || ((JanexPack) task).getNativeLauncher().isPresent());
     }
-
-    /// Returns the required native CLI executable; its bytes are tracked as an input.
-    ///
-    /// @return the native CLI file property
-    @InputFile
-    @PathSensitive(PathSensitivity.NONE)
-    public abstract RegularFileProperty getExecutable();
 
     /// Returns the required primary JAR, preserving its filename during packaging.
     ///
@@ -90,7 +84,7 @@ public abstract class JanexPack extends DefaultTask {
         return getModulePath().getFiles().stream().map(File::getAbsolutePath).toList();
     }
 
-    /// Returns the optional binary main-class name; absence enables CLI entry-point inference.
+    /// Returns the optional binary main-class name; absence enables entry-point inference.
     ///
     /// @return the optional main-class property
     @Input
@@ -144,34 +138,33 @@ public abstract class JanexPack extends DefaultTask {
     public abstract RegularFileProperty getNativeLauncher();
 
     /// Returns the native launch mode, `bootstrap` or `direct`, defaulting to `bootstrap`.
-    /// It is passed to the CLI only when a native launcher is present.
+    /// It is used only when a native launcher is present.
     ///
     /// @return the native launch-mode property
     @Input
     public abstract Property<String> getNativeLaunchMode();
 
-    /// Returns the destination, replaced only after the CLI successfully creates the package.
+    /// Returns the destination, replaced only after the writer successfully creates the package.
     ///
     /// @return the destination file property
     @OutputFile
     public abstract RegularFileProperty getOutputFile();
 
-    /// Returns Gradle's process execution service.
-    ///
-    /// @return the injected process execution service
-    @Inject
-    protected abstract ExecOperations getExecOperations();
+    /// Detects directory inputs whose permission changes are not tracked by Gradle file snapshots.
+    private boolean hasDirectoryInputs() {
+        return getClassPath().getFiles().stream().anyMatch(File::isDirectory)
+                || getModulePath().getFiles().stream().anyMatch(File::isDirectory);
+    }
 
-    /// Runs the CLI and installs its output, preserving a previous package if the CLI fails.
+    /// Writes the package and installs its output, preserving a previous package on writer failure.
     /// Temporary files are removed after execution. The destination must not name an input.
     ///
     /// @throws IOException if creating, moving, or removing output files fails
-    /// @throws GradleException if the CLI fails or the destination aliases an input
+    /// @throws GradleException if the destination aliases an input
     @TaskAction
     public void pack() throws IOException {
         Path output = getOutputFile().get().getAsFile().toPath().toAbsolutePath().normalize();
         List<File> inputs = new ArrayList<>();
-        inputs.add(getExecutable().get().getAsFile());
         inputs.add(getSource().get().getAsFile());
         inputs.addAll(getClassPath().getFiles());
         inputs.addAll(getModulePath().getFiles());
@@ -189,35 +182,21 @@ public abstract class JanexPack extends DefaultTask {
         Path temporaryDirectory = Files.createTempDirectory(output.getParent(), ".janex-");
         Path temporaryOutput = temporaryDirectory.resolve(output.getFileName());
         try {
-            List<String> command = new ArrayList<>();
-            command.add(getExecutable().get().getAsFile().getAbsolutePath());
-            command.add("pack");
-            command.add(getSource().get().getAsFile().getAbsolutePath());
-            add(command, "--output", temporaryOutput.toString());
-            add(command, "--application", getApplicationId().get());
-            addOptional(command, "--main-class", getMainClass());
-            addOptional(command, "--main-module", getMainModule());
-            addOptional(command, "--java-version", getJavaVersion());
-            for (File file : getClassPath()) {
-                add(command, "--class-path", file.getAbsolutePath());
-            }
-            for (File file : getModulePath()) {
-                add(command, "--module-path", file.getAbsolutePath());
-            }
-            for (String option : getJvmOptions().get()) {
-                command.add("--jvm-option=" + option);
-            }
-            for (String argument : getArguments().get()) {
-                command.add("--argument=" + argument);
-            }
-            if (getWithLauncher().get()) {
-                command.add("--with-launcher");
-            }
+            PackOptions options = new PackOptions(getSource().get().getAsFile().toPath(), temporaryOutput);
+            options.applicationId = getApplicationId().get();
+            options.mainClass = getMainClass().getOrNull();
+            options.mainModule = getMainModule().getOrNull();
+            options.javaVersion = getJavaVersion().getOrNull();
+            for (File file : getClassPath()) options.classPath.add(file.toPath());
+            for (File file : getModulePath()) options.modulePath.add(file.toPath());
+            options.jvmOptions.addAll(getJvmOptions().get());
+            options.arguments.addAll(getArguments().get());
+            options.withLauncher = getWithLauncher().get();
             if (getNativeLauncher().isPresent()) {
-                add(command, "--native-launcher", getNativeLauncher().get().getAsFile().getAbsolutePath());
-                add(command, "--native-launch-mode", getNativeLaunchMode().get());
+                options.nativeLauncher = getNativeLauncher().get().getAsFile().toPath();
+                options.nativeLaunchMode = getNativeLaunchMode().get();
             }
-            getExecOperations().exec(spec -> spec.commandLine(command)).assertNormalExitValue();
+            JanexWriter.write(options);
             try {
                 Files.move(temporaryOutput, output, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
             } catch (AtomicMoveNotSupportedException ignored) {
@@ -226,19 +205,6 @@ public abstract class JanexPack extends DefaultTask {
         } finally {
             Files.deleteIfExists(temporaryOutput);
             Files.deleteIfExists(temporaryDirectory);
-        }
-    }
-
-    /// Appends one option and its value as separate process arguments.
-    private static void add(List<String> command, String option, String value) {
-        command.add(option);
-        command.add(value);
-    }
-
-    /// Appends an option only when its property has a value.
-    private static void addOptional(List<String> command, String option, Property<String> value) {
-        if (value.isPresent()) {
-            add(command, option, value.get());
         }
     }
 }

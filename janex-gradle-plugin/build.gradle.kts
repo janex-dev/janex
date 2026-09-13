@@ -11,6 +11,10 @@ version = "0.1.0"
 
 val functionalTest = sourceSets.create("functionalTest")
 
+dependencies {
+    implementation(project(":janex-writer"))
+}
+
 java {
     toolchain.languageVersion = JavaLanguageVersion.of(25)
     withSourcesJar()
@@ -38,7 +42,7 @@ gradlePlugin {
             id = "org.glavo.janex"
             implementationClass = "org.glavo.janex.gradle.JanexPlugin"
             displayName = "Janex packaging"
-            description = "Packages Java applications and runtime dependencies as Janex files."
+            description = "Packages Java applications directly using the portable Java writer."
         }
     }
 }
@@ -59,6 +63,13 @@ publishing {
     }
 }
 
+tasks.matching { it.name.startsWith("publish") && it.name.endsWith("ToLocalRepository") }.configureEach {
+    dependsOn(":janex-writer:publishAllPublicationsToLocalRepository", ":janex-reader:publishAllPublicationsToLocalRepository")
+}
+tasks.matching { it.name.startsWith("publish") && it.name.endsWith("ToCnbRepository") }.configureEach {
+    dependsOn(":janex-writer:publishAllPublicationsToCnbRepository", ":janex-reader:publishAllPublicationsToCnbRepository")
+}
+
 val windows = System.getProperty("os.name").startsWith("Windows")
 val janexExecutable = providers.gradleProperty("janexTestExecutable").orElse(
     layout.projectDirectory.file("../target/debug/janex${if (windows) ".exe" else ""}").asFile.absolutePath
@@ -69,6 +80,7 @@ tasks.register<JavaExec>("checkPlugin") {
     description = "Tests the Gradle plugin with TestKit and the native Janex CLI."
     dependsOn(tasks.named(functionalTest.classesTaskName), tasks.pluginUnderTestMetadata)
     dependsOn("publishAllPublicationsToLocalRepository")
+    dependsOn(":janex-writer:publishAllPublicationsToLocalRepository", ":janex-reader:publishAllPublicationsToLocalRepository")
     if (project != rootProject) {
         dependsOn(":cargoBuild")
     }

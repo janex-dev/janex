@@ -1,7 +1,7 @@
 # Janex Gradle Plugin
 
-The `org.glavo.janex` plugin packages a Java application and its runtime dependencies by invoking the
-native Janex CLI. It applies the Java plugin, adds a `janex` extension and a `janexPack` task,
+The `org.glavo.janex` plugin packages a Java application and its runtime dependencies directly through
+`janex-writer`, without a native CLI. It applies the Java plugin, adds a `janex` extension and a `janexPack` task,
 and makes `assemble` depend on the package. Packages are unsigned and include a `java -jar`
 launcher by default.
 
@@ -9,12 +9,6 @@ The plugin is built with JDK 25, targets Java 17, and is tested with the reposit
 wrapper. Application bytecode can target an older Java version independently.
 
 ## Local development
-
-Build the CLI from the Janex repository root:
-
-```shell
-./gradlew cargoBuild
-```
 
 In the consuming project's `settings.gradle.kts`, include the plugin build from your checkout:
 
@@ -37,14 +31,12 @@ application {
 }
 
 janex {
-    executable = file("../janex/target/debug/janex")
     arguments.add("--demo")
 }
 ```
 
-Use `janex.exe` on Windows. Alternatively, supply an absolute executable path through
-`-PjanexExecutable=...` or `JANEX_EXECUTABLE`. An explicit `janex.executable` overrides both;
-the Gradle property takes precedence over the environment variable. The CLI is not downloaded.
+The composite build compiles the Java reader, writer, and bootstrap automatically. No native tool
+installation or architecture selection is required for ordinary packaging.
 
 Run `janexPack` or `assemble`; the default output is `build/distributions/<project-name>.janex`.
 The primary input defaults to the project's `jar` output. Runtime dependencies, including project
@@ -55,7 +47,7 @@ When the application plugin is present, its `mainClass`, `mainModule`, and
 `applicationDefaultJvmArgs` supply conventions. Explicit Janex values take precedence.
 With `mainModule` set, runtime dependencies default to the module path. Otherwise they default to
 the classpath. Both path collections can be replaced using `setFrom(...)`, or extended using
-`from(...)`. Without an explicit main class, the CLI attempts to infer the entry point from the JAR.
+`from(...)`. Without an explicit main class, the writer attempts to infer the entry point from the JAR.
 
 ## Packaging options
 
@@ -74,7 +66,8 @@ janex {
 
 `withLauncher = false` omits the appended JAR launcher; the result can still be launched with
 `janex run --allow-unsigned`. Arguments are passed as complete strings without shell splitting.
-The existing CLI remains responsible for format validation and encoding.
+The Java writer currently stores uncompressed blobs without CLASSFILE transforms or publisher
+signatures. Packages remain readable by both the Rust Host and Java launcher.
 
 For a native executable, supply a launcher built for the target platform:
 
@@ -86,25 +79,27 @@ janex {
 }
 ```
 
-The CLI executable must run on the build host. The native launcher prefix can target a different
+The native launcher prefix can target a different
 architecture or supported operating system; the plugin does not infer its target from the build
-JVM. PE and ELF prefixes are supported by the CLI. `withLauncher` independently controls whether
+JVM. PE and ELF prefixes are supported. `withLauncher` independently controls whether
 the native package also supports `java -jar`.
 
-`JanexPack` can also be registered directly for additional packages; supply its `executable`,
-`source`, and `outputFile` properties and the desired entry-point and dependency settings.
+`JanexPack` can also be registered directly for additional packages; supply its `source` and
+`outputFile` properties and the desired entry-point and dependency settings.
 
 The task supports configuration-cache reuse and up-to-date checks. It tracks dependency order,
-filenames, file contents, and the native tool. Shared build caching is disabled. Successful repacks
-replace the destination; CLI failures preserve the previous package. Do not place the output inside
+filenames, file contents, and writer implementation. Shared build caching is supported. Successful repacks
+replace the destination; writer failures preserve the previous package. Do not place the output inside
 an input directory or use an input file as the destination.
+Directory dependencies are always repacked to retain permission changes. Shared build caching is
+disabled for directory dependencies and native prefixes; ordinary JAR-only packages are cacheable.
 
 ## Demo
 
-From the repository root, after `cargoBuild`:
+From the repository root:
 
 ```shell
-./gradlew -p examples/hello janexPack -PjanexExecutable=/absolute/path/to/janex
+./gradlew -p examples/hello janexPack
 java -jar examples/hello/build/distributions/janex-hello.janex "User argument"
 ```
 
@@ -112,7 +107,7 @@ The demo uses `includeBuild`, so it requires no published plugin or repository c
 
 ## Publishing
 
-Publish the implementation, sources, Javadoc, and plugin marker to a local Maven repository:
+Publish the implementation, Java libraries, sources, Javadoc, and plugin marker to a local Maven repository:
 
 ```shell
 ./gradlew :janex-gradle-plugin:publishAllPublicationsToLocalRepository
@@ -131,8 +126,8 @@ only when its URL is supplied. Public consumers need only its URL, without crede
 ## Verification
 
 The root `check` includes `:janex-gradle-plugin:check`, which builds the CLI and runs TestKit
-fixtures against it. The checks cover classpath and module applications, project dependencies,
-resources, preset arguments, both launcher forms, configuration-cache reuse, dependency changes,
+fixtures using the Java writer, with the CLI used for interoperability checks. The checks cover classpath and module applications, project dependencies,
+resources, preset arguments, both launcher forms, configuration-cache and build-cache reuse, dependency changes,
 and preservation of previous output on a failed repack.
 
 For a standalone plugin checkout, use the repository wrapper with

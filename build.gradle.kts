@@ -203,10 +203,11 @@ tasks.check {
     dependsOn(":janex-gradle-plugin:check")
     dependsOn(":janex-bootstrap:check")
     dependsOn(":janex-reader:check")
+    dependsOn(":janex-writer:check")
     dependsOn(cargoFmtCheck, cargoClippy, cargoTest)
 }
 
 tasks.clean {
     dependsOn(":janex-gradle-plugin:clean")
-    dependsOn(":janex-bootstrap:clean", ":janex-reader:clean", cargoClean)
+    dependsOn(":janex-bootstrap:clean", ":janex-reader:clean", ":janex-writer:clean", cargoClean)
 }

@@ -1,0 +1,63 @@
+// Copyright (c) 2026 Glavo
+// SPDX-License-Identifier: MPL-2.0
+
+plugins {
+    `java-library`
+    `java-test-fixtures`
+    `maven-publish`
+}
+
+group = "org.glavo.janex"
+version = "0.1.0"
+
+dependencies {
+    api(project(":janex-reader"))
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(25)
+    withSourcesJar()
+    withJavadocJar()
+}
+
+tasks.withType<JavaCompile>().configureEach {
+    options.release = 17
+    options.encoding = "UTF-8"
+}
+
+tasks.withType<Jar>().configureEach {
+    isPreserveFileTimestamps = false
+    isReproducibleFileOrder = true
+}
+
+tasks.processResources {
+    from(project(":janex-bootstrap").tasks.named("jar")) {
+        into("org/glavo/janex/writer")
+    }
+}
+
+publishing {
+    publications.create<MavenPublication>("library") { from(components["java"]) }
+    repositories.maven {
+        name = "local"
+        url = (rootProject.findProject(":janex-gradle-plugin") ?: rootProject)
+            .layout.buildDirectory.dir("repository").get().asFile.toURI()
+    }
+    providers.gradleProperty("janexPublishUrl").orNull?.let { repositoryUrl ->
+        repositories.maven {
+            name = "cnb"
+            url = uri(repositoryUrl)
+            credentials(PasswordCredentials::class)
+        }
+    }
+}
+
+tasks.register<JavaExec>("checkWriter") {
+    group = "verification"
+    description = "Checks Java packaging, integrity, resource layers, and failure boundaries."
+    classpath = sourceSets.testFixtures.get().runtimeClasspath
+    mainClass = "org.glavo.janex.writer.WriterTest"
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+}
+
+tasks.check { dependsOn("checkWriter") }

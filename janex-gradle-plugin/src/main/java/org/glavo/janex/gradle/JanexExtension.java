@@ -18,12 +18,6 @@ public abstract class JanexExtension {
     public JanexExtension() {
     }
 
-    /// Returns the required native CLI executable, defaulting to the `janexExecutable` Gradle
-    /// property or the `JANEX_EXECUTABLE` environment variable. No tool is downloaded.
-    ///
-    /// @return the native CLI file property
-    public abstract RegularFileProperty getExecutable();
-
     /// Returns the primary JAR, defaulting to the Java plugin's `jar` output.
     ///
     /// @return the primary JAR file property
@@ -40,7 +34,7 @@ public abstract class JanexExtension {
     public abstract ConfigurableFileCollection getModulePath();
 
     /// Returns the optional binary main-class name, defaulting to `application.mainClass`.
-    /// When absent, the CLI attempts to infer the entry point from the primary JAR.
+    /// When absent, the writer attempts to infer the entry point from the primary JAR.
     ///
     /// @return the optional main-class property
     public abstract Property<String> getMainClass();
@@ -63,7 +57,7 @@ public abstract class JanexExtension {
     public abstract ListProperty<String> getJvmOptions();
 
     /// Returns preset application arguments in order, defaulting to an empty list.
-    /// Empty strings and Unicode characters are passed to the CLI unchanged.
+    /// Empty strings and Unicode characters are preserved unchanged.
     ///
     /// @return the ordered preset-argument property
     public abstract ListProperty<String> getArguments();
@@ -78,7 +72,7 @@ public abstract class JanexExtension {
     /// @return the JAR-launcher inclusion property
     public abstract Property<Boolean> getWithLauncher();
 
-    /// Returns the optional native launcher prefix. The CLI validates its executable format.
+    /// Returns the optional native launcher prefix. The writer validates its executable format.
     ///
     /// @return the optional native launcher file property
     public abstract RegularFileProperty getNativeLauncher();

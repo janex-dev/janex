@@ -52,7 +52,7 @@ tasks.jar {
     from(configurations.runtimeClasspath.map { files -> files.map { zipTree(it) } }) {
         exclude("META-INF/MANIFEST.MF")
     }
-    from(rootProject.file("LICENSE")) {
+    from(layout.projectDirectory.file("../LICENSE")) {
         into("META-INF")
         rename { "LICENSE-MPL-2.0" }
         filteringCharset = "UTF-8"
