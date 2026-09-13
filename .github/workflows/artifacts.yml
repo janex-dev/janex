@@ -23,21 +23,21 @@ jobs:
       matrix:
         include:
           - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
+            os: ubuntu-26.04
           - target: aarch64-unknown-linux-musl
-            os: ubuntu-latest
+            os: ubuntu-26.04-arm
           - target: i686-pc-windows-msvc
-            os: windows-latest
+            os: windows-2025
           - target: x86_64-pc-windows-msvc
-            os: windows-latest
+            os: windows-2025
           - target: aarch64-pc-windows-msvc
             os: windows-11-arm
           - target: x86_64-apple-darwin
-            os: macos-15
+            os: macos-15-intel
           - target: aarch64-apple-darwin
             os: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ matrix.os == 'windows-11-arm' && 'stable-aarch64-pc-windows-msvc' || 'stable' }}
@@ -60,9 +60,6 @@ jobs:
           cargo install cargo-zigbuild --version 0.23.4 --locked
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y binutils binutils-aarch64-linux-gnu qemu-user
-      - name: Enable x64 execution on macOS ARM64
-        if: runner.os == 'macOS' && startsWith(matrix.target, 'x86_64-')
-        run: sudo softwareupdate --install-rosetta --agree-to-license
       - name: Build, verify, and package Unix binaries
         if: runner.os != 'Windows'
         env:
