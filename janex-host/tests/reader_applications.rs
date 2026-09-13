@@ -77,7 +77,7 @@ fn java_applications_validate_metadata_inactive_descriptors_and_locale_lookup() 
         .arg(temp.path())
         .arg(
             project
-                .join("janex-reader/src/testFixtures/java/org/janex/format/ApplicationTest.java"),
+                .join("janex-reader/src/testFixtures/java/org/janex/reader/ApplicationTest.java"),
         )
         .output()
         .unwrap();
@@ -304,7 +304,7 @@ fn java_applications_validate_metadata_inactive_descriptors_and_locale_lookup() 
         let output = Command::new(java)
             .arg("-cp")
             .arg(&classpath)
-            .arg("org.janex.format.ApplicationTest")
+            .arg("org.janex.reader.ApplicationTest")
             .arg(&fixture)
             .output()
             .unwrap();

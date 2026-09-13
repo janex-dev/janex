@@ -30,8 +30,10 @@ Use five Rust crates and two Java projects:
   or bootstrap launch argument preparation. Its inputs do not contain Janex format types.
 - Use `janex-bootstrap` for portable Java resource loading and entry invocation. The Host supplies
   an evaluated resource index over its verified snapshot on the default launch path.
-- Use `janex-reader` for independent Java parsing, integrity checks, and launch/resource selection.
-  The optional executable JAR tail uses it to produce the same private resource index. A child JVM
+- Use `janex-reader` for independent Java parsing, integrity checks, portable codecs, and launch/resource
+  selection in `org.janex.reader`. Internal helpers and codecs occupy its `internal` subpackages.
+  Return immutable resource descriptions; bootstrap `.loader` code owns private-index serialization.
+  Keep NIO views in bootstrap `.fs` and acquisition policy in `.dependency`. A child JVM
   from the current Java installation receives the selected startup options and existing loader.
 - Use `janex-host` to orchestrate local packaging, load trust material, apply execution policy,
   prepare resources, select compatible runtimes, and own temporary files and process lifetimes.

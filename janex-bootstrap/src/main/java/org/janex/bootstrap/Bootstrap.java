@@ -57,10 +57,10 @@ public final class Bootstrap {
         Class<?> application;
         if (moduleName.isEmpty()) {
             application = Class.forName(className, false, ClassLoader.getSystemClassLoader());
-        } else if (ClassLoader.getSystemClassLoader().getClass().getName().equals("org.janex.bootstrap.ResourceLoader")) {
+        } else if (ClassLoader.getSystemClassLoader().getClass().getName().equals("org.janex.bootstrap.loader.ResourceLoader")) {
             try {
-                application = (Class<?>) Class.forName("org.janex.bootstrap.ModuleSupport")
-                        .getMethod("mainClass", Class.forName("org.janex.bootstrap.ResourceLoader"), String.class, String.class)
+                application = (Class<?>) Class.forName("org.janex.bootstrap.loader.ModuleSupport")
+                        .getMethod("mainClass", Class.forName("org.janex.bootstrap.loader.ResourceLoader"), String.class, String.class)
                         .invoke(null, ClassLoader.getSystemClassLoader(), moduleName, className);
             } catch (InvocationTargetException failure) {
                 throw failure.getCause();

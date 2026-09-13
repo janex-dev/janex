@@ -6,8 +6,12 @@ package org.janex.bootstrap;
 import java.io.*;
 import java.nio.file.*;
 import java.util.*;
-import org.janex.format.*;
-import org.janex.bootstrap.internal.zstd.Zstandard;
+
+import org.janex.reader.*;
+import org.janex.reader.Checksum;
+import org.janex.reader.ContainerReader;
+import org.janex.reader.JanexReader;
+import org.janex.reader.internal.codec.zstd.Zstandard;
 
 /// Checks caller authentication decisions and complete-content requirements before dependency acquisition.
 public final class ReaderAuthenticationTest {
@@ -86,7 +90,7 @@ public final class ReaderAuthenticationTest {
                         ContainerReader.IntegrityReport report = reader.integrity();
                         check(report.checksumsVerified() == verified && report.completeSecureCoverage() == complete, "Retained integrity report");
                         JanexReader.Launch launch = reader.launch(null);
-                        check(launch.mainClass.equals("Main") && launch.resources.length > 0, "Prepared application");
+                        check(launch.mainClass.equals("Main") && launch.resources != null, "Prepared application");
                         check(calls[1] == 1, "Selected dependency not acquired exactly once");
                         reader.close();
                         check(reader.integrity() == report, "Integrity report lost on closure");

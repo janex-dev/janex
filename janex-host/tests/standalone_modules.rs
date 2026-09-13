@@ -393,7 +393,7 @@ fn java_module_purls_match_native_decoding_and_placement() {
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let bootstrap = project.join("janex-bootstrap/bootstrap.jar");
     let fixture_class = project
-        .join("janex-reader/src/testFixtures/java/org/janex/format/ModuleRequirementTest.java");
+        .join("janex-reader/src/testFixtures/java/org/janex/reader/ModuleRequirementTest.java");
     tool(
         temp.path(),
         "javac",
@@ -475,7 +475,7 @@ fn java_module_purls_match_native_decoding_and_placement() {
         let output = Command::new(java)
             .arg("-cp")
             .arg(&classpath)
-            .arg("org.janex.format.ModuleRequirementTest")
+            .arg("org.janex.reader.ModuleRequirementTest")
             .arg(&fixture)
             .output()
             .unwrap();

@@ -126,7 +126,7 @@ fn java_launch_selection_matches_native_overlay_order_clearing_and_limits() {
             .arg("-d")
             .arg(temp.path())
             .arg(project.join(
-                "janex-reader/src/testFixtures/java/org/janex/format/LaunchSelectionTest.java",
+                "janex-reader/src/testFixtures/java/org/janex/reader/LaunchSelectionTest.java",
             ))
             .output()
             .unwrap();
@@ -242,7 +242,7 @@ fn java_launch_selection_matches_native_overlay_order_clearing_and_limits() {
         let output = Command::new(&java)
             .arg("-cp")
             .arg(&classpath)
-            .arg("org.janex.format.LaunchSelectionTest")
+            .arg("org.janex.reader.LaunchSelectionTest")
             .arg(&fixture)
             .output()
             .unwrap();

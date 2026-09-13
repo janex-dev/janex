@@ -52,7 +52,7 @@ fn java_versions_and_conditions_match_native_validation_and_selection() {
         .arg("-d")
         .arg(temp.path())
         .arg(
-            project.join("janex-reader/src/testFixtures/java/org/janex/format/ConditionsTest.java"),
+            project.join("janex-reader/src/testFixtures/java/org/janex/reader/ConditionsTest.java"),
         )
         .output()
         .unwrap();
@@ -251,7 +251,7 @@ fn java_versions_and_conditions_match_native_validation_and_selection() {
         let output = Command::new(&java)
             .arg("-cp")
             .arg(&classpath)
-            .arg("org.janex.format.ConditionsTest")
+            .arg("org.janex.reader.ConditionsTest")
             .arg(&fixture)
             .output()
             .unwrap();

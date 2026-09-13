@@ -29,18 +29,26 @@ tasks.register<JavaExec>("checkReader") {
     group = "verification"
     description = "Checks binary, CBOR, and Java version boundaries."
     classpath = sourceSets.testFixtures.get().runtimeClasspath
-    mainClass = "org.janex.format.ReaderTest"
+    mainClass = "org.janex.reader.ReaderTest"
     javaLauncher = javaToolchains.launcherFor(java.toolchain)
 }
 
 tasks.check {
-    dependsOn("checkReader", "checkChecksums")
+    dependsOn("checkReader", "checkChecksums", "checkZstandard")
 }
 
 tasks.register<JavaExec>("checkChecksums") {
     group = "verification"
     description = "Checks checksum encodings, known answers, and streaming contracts."
     classpath = sourceSets.testFixtures.get().runtimeClasspath
-    mainClass = "org.janex.format.ChecksumTest"
+    mainClass = "org.janex.reader.ChecksumTest"
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+}
+
+tasks.register<JavaExec>("checkZstandard") {
+    group = "verification"
+    description = "Checks Zstandard format boundaries and array contracts."
+    classpath = sourceSets.testFixtures.get().runtimeClasspath
+    mainClass = "org.janex.reader.internal.codec.ZstandardTest"
     javaLauncher = javaToolchains.launcherFor(java.toolchain)
 }

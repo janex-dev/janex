@@ -172,7 +172,7 @@ fn java_matches_zip64_import_and_native_tail_boundary_validation() {
         .arg(&jar)
         .arg("-d")
         .arg(temp.path())
-        .arg(project.join("janex-reader/src/testFixtures/java/org/janex/format/ArchiveTest.java"))
+        .arg(project.join("janex-reader/src/testFixtures/java/org/janex/reader/ArchiveTest.java"))
         .output()
         .unwrap();
     assert!(
@@ -250,7 +250,7 @@ fn java_matches_zip64_import_and_native_tail_boundary_validation() {
         let result = Command::new(java)
             .arg("-cp")
             .arg(&classpath)
-            .arg("org.janex.format.ArchiveTest")
+            .arg("org.janex.reader.ArchiveTest")
             .arg(&fixture)
             .arg(temp.path().join("snapshot.janex"))
             .output()

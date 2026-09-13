@@ -8,7 +8,7 @@ import java.net.URL;
 import java.net.URLConnection;
 import java.net.URLStreamHandler;
 
-import org.janex.bootstrap.ResourceLoader;
+import org.janex.bootstrap.loader.ResourceLoader;
 
 /// Resolves serialized Janex resource URLs through the active system loader.
 public final class Handler extends URLStreamHandler {

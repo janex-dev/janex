@@ -110,8 +110,9 @@ fn java_class_validation_and_restoration_match_native_structural_boundaries() {
     let temp = tempfile::tempdir().unwrap();
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let bootstrap = project.join("janex-bootstrap/bootstrap.jar");
-    let harness = project
-        .join("janex-bootstrap/src/testFixtures/java/org/janex/bootstrap/ClassFileTest.java");
+    let harness = project.join(
+        "janex-reader/src/testFixtures/java/org/janex/reader/internal/codec/ClassFileTest.java",
+    );
     javac(
         temp.path(),
         &[
@@ -276,7 +277,7 @@ public class Fixture implements Runnable {
         let output = Command::new(&java)
             .arg("-cp")
             .arg(&classpath)
-            .arg("org.janex.bootstrap.ClassFileTest")
+            .arg("org.janex.reader.internal.codec.ClassFileTest")
             .arg(&fixture)
             .output()
             .unwrap();

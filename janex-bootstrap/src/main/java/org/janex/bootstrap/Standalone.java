@@ -11,9 +11,12 @@ import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
 import java.util.jar.*;
-import org.janex.format.JanexReader;
-import org.janex.format.Checksum;
-import org.janex.bootstrap.internal.zstd.Zstandard;
+
+import org.janex.bootstrap.dependency.Dependencies;
+import org.janex.bootstrap.loader.ResourceIndex;
+import org.janex.bootstrap.loader.ResourceIndexes;
+import org.janex.reader.Checksum;
+import org.janex.reader.JanexReader;
 
 /// Launches a Janex file carrying this executable JAR as its tail.
 ///
@@ -55,16 +58,13 @@ public final class Standalone {
             }
             JanexReader.Launch launch;
             long tailOffset;
-            try (JanexReader reader = new JanexReader(snapshot, (input, length, dictionary) -> {
-                byte[] decoded = new byte[length];
-                if (Zstandard.decompress(input, 0, input.length, decoded, 0, length, dictionary) != length) {
-                    throw new IOException("Zstd decoded length mismatch");
-                }
-                return decoded;
-            }, new Dependencies())) {
+            try (JanexReader reader = new JanexReader(snapshot, new Dependencies())) {
                 launch = reader.launch(System.getProperty("janex.application"));
                 tailOffset = reader.externalTailOffset();
             }
+            byte[] resourceIndex = ResourceIndexes.encode(launch.resources);
+            byte[] agentIndex = launch.agentResources == null ? null : ResourceIndexes.encode(launch.agentResources);
+            launch.resources.limits().bytes((long) resourceIndex.length + (agentIndex == null ? 0 : agentIndex.length));
             launch.arguments.addAll(Arrays.asList(arguments));
             int feature = JanexReader.feature();
             if (feature < 9 && !launch.mainModule.isEmpty()) {
@@ -82,13 +82,13 @@ public final class Standalone {
                 transfer(Channels.newInputStream(input), output, 512L * 1024 * 1024);
             }
             Path bridge = session.directory.resolve("bootstrap.jar");
-            writeBridge(launcher, bridge, launch, options, feature);
+            writeBridge(launcher, bridge, launch, resourceIndex, options, feature);
             List<String> nativeOptions = nativeOptions(options, feature);
             String java = Paths.get(System.getProperty("java.home"), "bin", isWindows() ? "java.exe" : "java").toString();
             if (feature >= 9) {
                 validateModules(session, java, bridge, nativeOptions);
             }
-            List<String> agents = prepareAgents(session.directory, launch);
+            List<String> agents = prepareAgents(session.directory, launch, agentIndex);
             List<String> command = new ArrayList<String>();
             command.add(java);
             command.addAll(nativeOptions);
@@ -96,7 +96,7 @@ public final class Standalone {
             if (feature >= 9) {
                 command.add("--add-modules=ALL-SYSTEM");
             }
-            command.add("-Djava.system.class.loader=org.janex.bootstrap.ResourceLoader");
+            command.add("-Djava.system.class.loader=org.janex.bootstrap.loader.ResourceLoader");
             command.add("-cp");
             command.add(bridge.toString());
             command.add("org.janex.bootstrap.Bootstrap");
@@ -130,7 +130,7 @@ public final class Standalone {
         }
         command.add("-cp");
         command.add(bridge.toString());
-        command.add("org.janex.bootstrap.ModuleSupport");
+        command.add("org.janex.bootstrap.loader.ModuleSupport");
         Path diagnostics = session.directory.resolve("module-check.txt");
         session.process = process(command).redirectErrorStream(true).redirectOutput(diagnostics.toFile()).start();
         session.process.getOutputStream().close();
@@ -150,31 +150,31 @@ public final class Standalone {
     }
 
     /// Materializes selected agent roots before any descriptor-supplied agent runs.
-    private static List<String> prepareAgents(Path directory, JanexReader.Launch launch) throws IOException {
+    private static List<String> prepareAgents(Path directory, JanexReader.Launch launch, byte[] agentIndex) throws IOException {
         List<String> result = new ArrayList<String>();
         if (launch.agentResources == null) {
             return result;
         }
-        try (ResourceIndex index = new ResourceIndex(new ByteArrayInputStream(launch.agentResources))) {
-            if (index.roots.size() != launch.agentOptions.size() || index.roots.size() != launch.agentChecksums.size()) {
+        try (ResourceIndex index = new ResourceIndex(new ByteArrayInputStream(agentIndex))) {
+            if (index.roots().size() != launch.agentOptions.size() || index.roots().size() != launch.agentChecksums.size()) {
                 throw new IOException("Java agent roots and options disagree");
             }
-            for (int i = 0; i < index.roots.size(); i++) {
+            for (int i = 0; i < index.roots().size(); i++) {
                 Path path = directory.resolve("agent-" + i + ".jar");
                 if (path.toString().indexOf('=') >= 0) {
                     throw new IOException("Java agent path contains an unrepresentable equals sign");
                 }
                 try (JarOutputStream output = new JarOutputStream(Files.newOutputStream(path))) {
-                    for (Map.Entry<String, ResourceIndex.Resource> entry : index.roots.get(i).files.entrySet()) {
+                    for (Map.Entry<String, ResourceIndex.Resource> entry : index.roots().get(i).files().entrySet()) {
                         if (entry.getKey().isEmpty()) {
                             continue;
                         }
                         ResourceIndex.Resource resource = entry.getValue();
-                        JarEntry member = new JarEntry(entry.getKey() + (resource.id < 0 ? "/" : ""));
+                        JarEntry member = new JarEntry(entry.getKey() + (resource.isDirectory() ? "/" : ""));
                         member.setTime(0);
                         output.putNextEntry(member);
-                        if (resource.id >= 0) {
-                            byte[] bytes = resource.read();
+                        if (!resource.isDirectory()) {
+                            byte[] bytes = resource.readBytes();
                             byte[] checksum = launch.agentChecksums.get(i).get(entry.getKey());
                             if (checksum != null) {
                                 Checksum.decode(checksum).verify(bytes);
@@ -256,7 +256,7 @@ public final class Standalone {
 
     /// Copies the extracted launcher JAR and embeds the selected resource index and launch data.
     private static void writeBridge(Path launcher, Path output, JanexReader.Launch launch,
-                                    List<String> options, int feature) throws IOException {
+                                    byte[] resourceIndex, List<String> options, int feature) throws IOException {
         try (JarFile source = new JarFile(launcher.toFile());
              JarOutputStream jar = new JarOutputStream(Files.newOutputStream(output))) {
             Enumeration<JarEntry> entries = source.entries();
@@ -277,24 +277,24 @@ public final class Standalone {
                 jar.closeEntry();
             }
             jar.putNextEntry(new JarEntry("org/janex/bootstrap/resources.bin"));
-            jar.write(launch.resources);
+            jar.write(resourceIndex);
             jar.closeEntry();
             DataOutputStream data = new DataOutputStream(jar);
             jar.putNextEntry(new JarEntry("org/janex/bootstrap/launch.bin"));
-            JanexReader.string(data, launch.mainModule);
-            JanexReader.string(data, launch.mainClass);
+            ResourceIndexes.string(data, launch.mainModule);
+            ResourceIndexes.string(data, launch.mainClass);
             data.writeBoolean(feature >= 25 || (feature >= 21 && options.contains("--enable-preview")));
             data.writeInt(launch.arguments.size());
             for (String argument : launch.arguments) {
-                JanexReader.string(data, argument);
+                ResourceIndexes.string(data, argument);
             }
             jar.closeEntry();
             jar.putNextEntry(new JarEntry("org/janex/bootstrap/options.bin"));
-            JanexReader.string(data, launch.mainModule);
-            JanexReader.string(data, launch.mainClass);
+            ResourceIndexes.string(data, launch.mainModule);
+            ResourceIndexes.string(data, launch.mainClass);
             data.writeInt(options.size());
             for (String option : options) {
-                JanexReader.string(data, option);
+                ResourceIndexes.string(data, option);
             }
             jar.closeEntry();
         }

@@ -92,21 +92,13 @@ tasks.register("updateEmbeddedBootstrap") {
 }
 
 tasks.check {
-    dependsOn(verifyEmbeddedBootstrap, tasks.testFixturesClasses, "checkZstandard", "checkDependencies")
+    dependsOn(verifyEmbeddedBootstrap, tasks.testFixturesClasses, "checkDependencies")
 }
 
 tasks.register<JavaExec>("checkDependencies") {
     group = "verification"
     description = "Checks canonical dependency addresses and Maven repository mapping."
     classpath = sourceSets.testFixtures.get().runtimeClasspath
-    mainClass = "org.janex.bootstrap.DependenciesTest"
-    javaLauncher = javaToolchains.launcherFor(java.toolchain)
-}
-
-tasks.register<JavaExec>("checkZstandard") {
-    group = "verification"
-    description = "Checks Zstandard format boundaries and array contracts."
-    classpath = sourceSets.testFixtures.get().runtimeClasspath
-    mainClass = "org.janex.bootstrap.ZstandardTest"
+    mainClass = "org.janex.bootstrap.dependency.DependenciesTest"
     javaLauncher = javaToolchains.launcherFor(java.toolchain)
 }

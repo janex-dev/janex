@@ -105,7 +105,7 @@ fn java_dictionary_decoder_matches_native_raw_trained_and_malformed_vectors() {
             .arg("-d")
             .arg(temp.path())
             .arg(project.join(
-                "janex-bootstrap/src/testFixtures/java/org/janex/bootstrap/DictionaryTest.java",
+                "janex-reader/src/testFixtures/java/org/janex/reader/internal/codec/DictionaryTest.java",
             )),
     );
     let samples = samples();
@@ -159,7 +159,7 @@ fn java_dictionary_decoder_matches_native_raw_trained_and_malformed_vectors() {
             Command::new(java)
                 .arg("-cp")
                 .arg(&classpath)
-                .arg("org.janex.bootstrap.DictionaryTest")
+                .arg("org.janex.reader.internal.codec.DictionaryTest")
                 .arg(&path),
         );
     }

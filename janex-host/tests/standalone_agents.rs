@@ -222,7 +222,7 @@ import java.security.ProtectionDomain;
 public class LocalAgent {
     /// Checks the selected agent capabilities and records one invocation.
     public static void premain(String option, Instrumentation instrumentation) throws Exception {
-        if (!ClassLoader.getSystemClassLoader().getClass().getName().equals("org.janex.bootstrap.ResourceLoader")) throw new AssertionError("agent ran in parent");
+        if (!ClassLoader.getSystemClassLoader().getClass().getName().equals("org.janex.bootstrap.loader.ResourceLoader")) throw new AssertionError("agent ran in parent");
         if (!instrumentation.isRetransformClassesSupported() || !instrumentation.isRedefineClassesSupported()) throw new AssertionError("capabilities lost");
         try (java.io.InputStream input = LocalAgent.class.getResourceAsStream("/LocalAgent.txt")) {
             if (input == null || input.read() != 'a') throw new AssertionError("resource missing");

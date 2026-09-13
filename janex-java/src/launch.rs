@@ -144,7 +144,9 @@ impl LaunchRequest {
             arguments.extend(self.jvm_options.iter().map(OsString::from));
         }
         if resources.is_some() {
-            arguments.push("-Djava.system.class.loader=org.janex.bootstrap.ResourceLoader".into());
+            arguments.push(
+                "-Djava.system.class.loader=org.janex.bootstrap.loader.ResourceLoader".into(),
+            );
         }
         if (self.entry_point.main_module.is_none() || resources.is_some())
             && let Some(bridge) = &bridge

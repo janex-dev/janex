@@ -106,7 +106,7 @@ fn java_package_urls_match_native_components_type_rules_and_inactive_validation(
         .arg("-d")
         .arg(temp.path())
         .arg(
-            project.join("janex-reader/src/testFixtures/java/org/janex/format/PackageUrlTest.java"),
+            project.join("janex-reader/src/testFixtures/java/org/janex/reader/PackageUrlTest.java"),
         )
         .output()
         .unwrap();
@@ -254,7 +254,7 @@ fn java_package_urls_match_native_components_type_rules_and_inactive_validation(
         let output = Command::new(&java)
             .arg("-cp")
             .arg(&classpath)
-            .arg("org.janex.format.PackageUrlTest")
+            .arg("org.janex.reader.PackageUrlTest")
             .arg(&fixture)
             .output()
             .unwrap();

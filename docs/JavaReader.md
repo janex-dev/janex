@@ -3,6 +3,21 @@
 `janex-reader` provides Java 8 APIs for reading Janex 0.1 independently of the native Host.
 The file format is defined only by [FileFormat.md](spec/FileFormat.md).
 
+Public reading APIs live in `org.janex.reader`. Binary and archive helpers live in
+`org.janex.reader.internal`; portable codecs live in `org.janex.reader.internal.codec`.
+The reader has no dependency on the bootstrap module. `new JanexReader(path)` uses its portable
+Zstandard decoder; constructor overloads accept custom decoding and acquisition policies.
+`ClassFile.restore` restores CLASSFILE content independently of a running launcher.
+
+`JanexReader.launch()` returns selected metadata and immutable `ResourcePlan` descriptions.
+The bootstrap's `org.janex.bootstrap.loader.ResourceIndexes` serializes these descriptions into
+the private resource index and enforces its encoded-size limit. The reader does not encode that
+protocol. Snapshot ranges remain lazy; returned arrays are copies and collection views are immutable.
+
+The bootstrap keeps entry coordination in `org.janex.bootstrap`, resource and module loading in
+`.loader`, NIO views in `.fs`, and acquisition policy in `.dependency`. NIO accesses decoded data
+through read-only buffers. Gradle still combines both modules into one distributable bootstrap JAR.
+
 `ReadLimits` configures buffered byte lengths, collection sizes, and nesting depth. The defaults
 match Rust: 256 MiB per encoded or decoded value, 1,000,000 elements, and depth 64. These are
 reader policy; the format version remains 0.1. Java buffered lengths are limited to nonnegative

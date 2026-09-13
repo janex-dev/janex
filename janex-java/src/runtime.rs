@@ -78,7 +78,7 @@ impl JavaRuntime {
         args.push("--add-modules=ALL-SYSTEM".into());
         args.push("-cp".into());
         args.push(bridge.as_os_str().into());
-        args.push("org.janex.bootstrap.ModuleSupport".into());
+        args.push("org.janex.bootstrap.loader.ModuleSupport".into());
         let output = Command::new(&self.executable)
             .args(&args)
             .stdin(Stdio::null())

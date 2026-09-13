@@ -105,7 +105,7 @@ fn java_limits_match_native_decoding_and_are_inherited_by_nested_readers() {
         .arg(&bootstrap)
         .arg("-d")
         .arg(temp.path())
-        .arg(project.join("janex-bootstrap/src/testFixtures/java/org/janex/format/LimitsTest.java"))
+        .arg(project.join("janex-bootstrap/src/testFixtures/java/org/janex/reader/LimitsTest.java"))
         .output()
         .unwrap();
     assert!(
@@ -395,7 +395,7 @@ fn java_limits_match_native_decoding_and_are_inherited_by_nested_readers() {
         let output = Command::new(java)
             .arg("-cp")
             .arg(&classpath)
-            .arg("org.janex.format.LimitsTest")
+            .arg("org.janex.reader.LimitsTest")
             .arg(&fixture)
             .output()
             .unwrap();
