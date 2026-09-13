@@ -304,6 +304,8 @@ public class Main {
         pack(&options).unwrap();
         let mut run = RunOptions::new(&options.output);
         run.allow_unsigned = true;
+        // Compare both paths on the same JVM without falling back to an installed Java 8.
+        run.java.java = Some("java".into());
         assert!(prepare(&run).is_err(), "native accepted {args:?}");
         let result = Command::new("java")
             .arg("-jar")

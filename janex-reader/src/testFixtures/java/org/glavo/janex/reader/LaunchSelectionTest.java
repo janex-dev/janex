@@ -16,11 +16,12 @@ public final class LaunchSelectionTest {
 
     /// Checks overlay pruning, replacement, list clearing, and pending-work limits.
     public static void main(String[] arguments) throws Exception {
+        // Initialize the host file system before overriding platform facts for selection.
+        Path snapshot = Paths.get(arguments[0]).resolveSibling("selection.janex");
         System.setProperty("os.name", "Windows 11");
         System.setProperty("os.arch", "amd64");
         System.setProperty("java.version", "25");
         System.setProperty("java.vendor", "Vendor");
-        Path snapshot = Paths.get(arguments[0]).resolveSibling("selection.janex");
         try (DataInputStream input = new DataInputStream(new BufferedInputStream(new FileInputStream(arguments[0])))) {
             int count = input.readInt();
             for (int index = 0; index < count; index++) {
