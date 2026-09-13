@@ -11,6 +11,9 @@ description = "Self-contained native entry point for Janex applications"
 [dependencies]
 janex-host.workspace = true
 
+[target.'cfg(all(target_os = "linux", target_env = "musl"))'.dependencies]
+mimalloc.workspace = true
+
 [target.'cfg(windows)'.dependencies]
 ctrlc = "3.5"
 

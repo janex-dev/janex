@@ -1,0 +1,79 @@
+name: Linux artifacts
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-artifacts-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            strip: strip
+          - target: aarch64-unknown-linux-musl
+            strip: aarch64-linux-gnu-strip
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '25'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install cross-compilation tools
+        run: |
+          python -m pip install cargo-zigbuild==0.23.4 ziglang==0.15.2
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y binutils binutils-aarch64-linux-gnu qemu-user
+      - name: Build static binaries
+        env:
+          JANEX_TARGET: ${{ matrix.target }}
+        run: bash ./gradlew --no-daemon assembleLinuxMusl -PjanexTarget="$JANEX_TARGET"
+      - name: Remove debug information
+        env:
+          JANEX_TARGET: ${{ matrix.target }}
+          STRIP: ${{ matrix.strip }}
+        run: |
+          for binary in janex janex-launcher; do
+            "$STRIP" --strip-debug "target/$JANEX_TARGET/release/$binary"
+          done
+      - name: Verify static linking, allocator, and launch modes
+        env:
+          JANEX_TARGET: ${{ matrix.target }}
+        run: python .github/scripts/check-linux-artifacts.py "$JANEX_TARGET"
+      - name: Package binaries
+        env:
+          JANEX_TARGET: ${{ matrix.target }}
+        run: |
+          mkdir -p build/distributions
+          tar -czf "build/distributions/janex-$JANEX_TARGET.tar.gz" \
+            -C "target/$JANEX_TARGET/release" janex janex-launcher
+          cd build/distributions
+          sha256sum "janex-$JANEX_TARGET.tar.gz" > "janex-$JANEX_TARGET.tar.gz.sha256"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: janex-${{ matrix.target }}
+          path: |
+            build/distributions/janex-${{ matrix.target }}.tar.gz
+            build/distributions/janex-${{ matrix.target }}.tar.gz.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

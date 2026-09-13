@@ -11,6 +11,9 @@ Build the CLI and launcher with the root Gradle Wrapper:
 ./gradlew assembleRelease
 ```
 
+For static Linux musl builds and downloadable Actions artifacts, see
+[Linux Build Artifacts](../docs/BuildArtifacts.md).
+
 Package a Windows executable:
 
 ```text

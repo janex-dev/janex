@@ -9,6 +9,11 @@ use janex_host::{
 };
 use std::{fs::File, process::ExitStatus};
 
+/// Allocates Rust and native dependency memory with mimalloc in Linux musl builds.
+#[cfg(all(target_os = "linux", target_env = "musl"))]
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// Reports preparation failures and returns the application's exit status.
 fn main() {
     let code = match run() {

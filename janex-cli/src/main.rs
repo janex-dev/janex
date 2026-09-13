@@ -19,6 +19,11 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+/// Allocates Rust and native dependency memory with mimalloc in Linux musl builds.
+#[cfg(all(target_os = "linux", target_env = "musl"))]
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// Local Janex packaging and execution commands.
 #[derive(Parser)]
 #[command(

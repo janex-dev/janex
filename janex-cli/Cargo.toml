@@ -18,6 +18,9 @@ janex-format.workspace = true
 rpassword = "7"
 zeroize = "1"
 
+[target.'cfg(all(target_os = "linux", target_env = "musl"))'.dependencies]
+mimalloc.workspace = true
+
 [dev-dependencies]
 janex-signature.workspace = true
 pgp = { version = "0.20", default-features = false }

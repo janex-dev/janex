@@ -69,6 +69,24 @@ tasks.register("assembleRelease") {
     dependsOn(":janex-bootstrap:assemble", cargoBuildRelease)
 }
 
+tasks.register<Exec>("assembleLinuxMusl") {
+    group = "build"
+    description = "Cross-compiles static Linux CLI and launcher binaries using cargo-zigbuild."
+    dependsOn(":janex-bootstrap:jar")
+    val target = providers.gradleProperty("janexTarget").getOrElse("x86_64-unknown-linux-musl")
+    require(target in setOf("x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl")) {
+        "Unsupported Linux musl target: $target"
+    }
+    workingDir(layout.projectDirectory)
+    // Keep allocation symbols available for artifact verification.
+    commandLine(
+        "cargo", "zigbuild", "--release", "--locked", "--target", target,
+        "--package", "janex-cli", "--package", "janex-launcher", "--bins",
+        "--config", "profile.release.strip=\"none\""
+    )
+    mustRunAfter(cargoBuild, cargoBuildRelease, cargoClippy, cargoTest)
+}
+
 tasks.register<Exec>("assembleWindowsX86Launcher") {
     group = "build"
     description = "Builds the release Windows x86 launcher for native or emulated execution."
