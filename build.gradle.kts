@@ -69,21 +69,36 @@ tasks.register("assembleRelease") {
     dependsOn(":janex-bootstrap:assemble", cargoBuildRelease)
 }
 
-tasks.register<Exec>("assembleLinuxMusl") {
+tasks.register<Exec>("assembleArtifacts") {
     group = "build"
-    description = "Cross-compiles static Linux CLI and launcher binaries using cargo-zigbuild."
+    description = "Builds distribution binaries for the selected Linux, Windows, or macOS target."
     dependsOn(":janex-bootstrap:jar")
-    val target = providers.gradleProperty("janexTarget").getOrElse("x86_64-unknown-linux-musl")
-    require(target in setOf("x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl")) {
-        "Unsupported Linux musl target: $target"
+    val target = providers.gradleProperty("janexTarget").getOrElse("")
+    doFirst {
+        require(target in setOf(
+            "x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl",
+            "i686-pc-windows-msvc", "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc",
+            "x86_64-apple-darwin", "aarch64-apple-darwin"
+        )) {
+            "Set -PjanexTarget to a supported Linux musl, Windows MSVC, or macOS target: $target"
+        }
     }
     workingDir(layout.projectDirectory)
-    // Keep allocation symbols available for artifact verification.
-    commandLine(
-        "cargo", "zigbuild", "--release", "--locked", "--target", target,
-        "--package", "janex-cli", "--package", "janex-launcher", "--bins",
-        "--config", "profile.release.strip=\"none\""
+    val command = mutableListOf(
+        "cargo", if (target.endsWith("-musl")) "zigbuild" else "build",
+        "--release", "--locked", "--target", target, "--package", "janex-cli", "--bins"
     )
+    if (!target.endsWith("-apple-darwin")) {
+        command.addAll(listOf("--package", "janex-launcher"))
+    }
+    if (target.endsWith("-musl")) {
+        // Keep allocation symbols available for artifact verification.
+        command.addAll(listOf("--config", "profile.release.strip='none'"))
+    }
+    if (target.endsWith("-windows-msvc")) {
+        command.addAll(listOf("--config", "target.$target.rustflags=['-C','target-feature=+crt-static']"))
+    }
+    commandLine(command)
     mustRunAfter(cargoBuild, cargoBuildRelease, cargoClippy, cargoTest)
 }
 
