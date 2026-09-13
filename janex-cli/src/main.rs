@@ -350,7 +350,9 @@ fn external_entries(
         checksum::{Algorithm, Checksum},
     };
     values
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let checksum = if pair[1] == "none" {
                 None
