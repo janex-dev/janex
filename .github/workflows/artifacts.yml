@@ -63,7 +63,10 @@ jobs:
         run: |
           cargo install cargo-zigbuild --version 0.23.4 --locked
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y binutils binutils-aarch64-linux-gnu qemu-user
+          sudo apt-get install --no-install-recommends -y binutils binutils-aarch64-linux-gnu qemu-user xz-utils
+      - name: Install xz
+        if: runner.os == 'macOS'
+        run: command -v xz >/dev/null || brew install xz
       - name: Build, verify, and package Unix binaries
         if: runner.os != 'Windows'
         env:
@@ -77,7 +80,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: janex-${{ matrix.target }}
-          path: build/distributions/janex-${{ matrix.target }}.${{ runner.os == 'Windows' && 'zip' || 'tar.gz' }}
+          path: build/distributions/janex-${{ matrix.target }}.${{ runner.os == 'Windows' && 'zip' || 'tar.xz' }}
           if-no-files-found: error
           compression-level: 0
           retention-days: 14

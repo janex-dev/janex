@@ -131,15 +131,15 @@ val checkArtifacts = tasks.register<JavaExec>("checkArtifacts") {
     args(artifactTarget, artifactDirectory.absolutePath)
 }
 
-val packageArtifacts = if (artifactTarget.endsWith("-windows-msvc")) {
+val artifactArchive = if (artifactTarget.endsWith("-windows-msvc")) {
     tasks.register<Zip>("packageArtifacts")
 } else {
-    tasks.register<Tar>("packageArtifacts") {
-        compression = Compression.GZIP
-        archiveExtension = "tar.gz"
+    tasks.register<Tar>("archiveArtifacts") {
+        compression = Compression.NONE
+        archiveExtension = "tar"
     }
 }
-packageArtifacts.configure {
+artifactArchive.configure {
     group = "distribution"
     description = "Verifies and packages distribution binaries."
     dependsOn(checkArtifacts)
@@ -152,6 +152,22 @@ packageArtifacts.configure {
     }
     isPreserveFileTimestamps = false
     isReproducibleFileOrder = true
+}
+
+if (!artifactTarget.endsWith("-windows-msvc")) {
+    tasks.register<Exec>("packageArtifacts") {
+        group = "distribution"
+        description = "Verifies and packages distribution binaries as a TAR.XZ archive."
+        dependsOn(artifactArchive)
+        val archive = artifactArchive.flatMap { it.archiveFile }
+        inputs.file(archive)
+        outputs.file(layout.buildDirectory.file("distributions/janex-$artifactTarget.tar.xz"))
+        environment("XZ_DEFAULTS", "")
+        environment("XZ_OPT", "")
+        doFirst {
+            commandLine("xz", "--threads=1", "-6", "--keep", "--force", archive.get().asFile.absolutePath)
+        }
+    }
 }
 
 tasks.register<Exec>("assembleWindowsX86Launcher") {
