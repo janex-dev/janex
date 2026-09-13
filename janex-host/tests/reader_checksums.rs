@@ -205,7 +205,7 @@ fn java_checksums_match_rust_across_streaming_and_algorithm_boundaries() {
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let bootstrap = project.join("janex-bootstrap/build/libs/janex-bootstrap.jar");
     let harness =
-        project.join("janex-reader/src/testFixtures/java/org/janex/reader/ChecksumTest.java");
+        project.join("janex-reader/src/testFixtures/java/org/glavo/janex/reader/ChecksumTest.java");
     let result = Command::new("javac")
         .args(["--release", "8", "-cp"])
         .arg(&bootstrap)
@@ -274,7 +274,7 @@ fn java_checksums_match_rust_across_streaming_and_algorithm_boundaries() {
         let result = Command::new(java)
             .arg("-cp")
             .arg(&classpath)
-            .arg("org.janex.reader.ChecksumTest")
+            .arg("org.glavo.janex.reader.ChecksumTest")
             .arg(&path)
             .output()
             .unwrap();

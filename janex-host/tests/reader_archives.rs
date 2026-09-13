@@ -172,7 +172,10 @@ fn java_matches_zip64_import_and_native_tail_boundary_validation() {
         .arg(&jar)
         .arg("-d")
         .arg(temp.path())
-        .arg(project.join("janex-reader/src/testFixtures/java/org/janex/reader/ArchiveTest.java"))
+        .arg(
+            project
+                .join("janex-reader/src/testFixtures/java/org/glavo/janex/reader/ArchiveTest.java"),
+        )
         .output()
         .unwrap();
     assert!(
@@ -250,7 +253,7 @@ fn java_matches_zip64_import_and_native_tail_boundary_validation() {
         let result = Command::new(java)
             .arg("-cp")
             .arg(&classpath)
-            .arg("org.janex.reader.ArchiveTest")
+            .arg("org.glavo.janex.reader.ArchiveTest")
             .arg(&fixture)
             .arg(temp.path().join("snapshot.janex"))
             .output()
@@ -269,17 +272,16 @@ fn standalone_api_launches_an_executable_zip64_tail() {
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let bootstrap = project.join("janex-bootstrap/build/libs/janex-bootstrap.jar");
     let harness = temp.path().join("harness");
-    let compile =
-        Command::new("javac")
-            .args(["--release", "8", "-cp"])
-            .arg(&bootstrap)
-            .arg("-d")
-            .arg(&harness)
-            .arg(project.join(
-                "janex-bootstrap/src/testFixtures/java/org/janex/bootstrap/StandaloneTest.java",
-            ))
-            .output()
-            .unwrap();
+    let compile = Command::new("javac")
+        .args(["--release", "8", "-cp"])
+        .arg(&bootstrap)
+        .arg("-d")
+        .arg(&harness)
+        .arg(project.join(
+            "janex-bootstrap/src/testFixtures/java/org/glavo/janex/bootstrap/StandaloneTest.java",
+        ))
+        .output()
+        .unwrap();
     assert!(
         compile.status.success(),
         "{}",
@@ -358,7 +360,7 @@ fn standalone_api_launches_an_executable_zip64_tail() {
         let output = Command::new(&java)
             .arg("-cp")
             .arg(&classpath)
-            .arg("org.janex.bootstrap.StandaloneTest")
+            .arg("org.glavo.janex.bootstrap.StandaloneTest")
             .arg(&target)
             .output()
             .unwrap();

@@ -57,7 +57,9 @@ fn java_matches_native_cbor_float_widths_unknown_values_and_binary_framing() {
         .arg(&bootstrap)
         .arg("-d")
         .arg(temp.path())
-        .arg(project.join("janex-reader/src/testFixtures/java/org/janex/reader/CborTest.java"))
+        .arg(
+            project.join("janex-reader/src/testFixtures/java/org/glavo/janex/reader/CborTest.java"),
+        )
         .output()
         .unwrap();
     assert!(
@@ -207,7 +209,7 @@ fn java_matches_native_cbor_float_widths_unknown_values_and_binary_framing() {
         let output = Command::new(&java)
             .arg("-cp")
             .arg(&classpath)
-            .arg("org.janex.reader.CborTest")
+            .arg("org.glavo.janex.reader.CborTest")
             .arg(&fixture)
             .output()
             .unwrap();

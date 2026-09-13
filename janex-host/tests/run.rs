@@ -1079,7 +1079,7 @@ public class Main {
             check(first.openConnection().getPermission() == null);
             check("janex".equals(Main.class.getProtectionDomain().getCodeSource().getLocation().getProtocol()));
             check(loader.getResources("").hasMoreElements());
-            org.janex.bootstrap.fs.FileSystemTest.run(escaped);
+            org.glavo.janex.bootstrap.fs.FileSystemTest.run(escaped);
         }
         System.out.println("resources-ok");
     }
@@ -1099,7 +1099,7 @@ public class Main {
                 .parent()
                 .unwrap()
                 .join(
-                    "janex-bootstrap/src/testFixtures/java/org/janex/bootstrap/fs/FileSystemTest.java",
+                    "janex-bootstrap/src/testFixtures/java/org/glavo/janex/bootstrap/fs/FileSystemTest.java",
                 )
                 .to_str()
                 .unwrap(),

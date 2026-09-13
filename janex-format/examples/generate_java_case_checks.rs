@@ -19,7 +19,7 @@ fn main() {
     let version = char::UNICODE_VERSION;
     let mut source = format!(
         "// Copyright (c) 2026 Glavo\n// SPDX-License-Identifier: MPL-2.0\n\n\
-         package org.janex.reader.internal;\n\n\
+         package org.glavo.janex.reader.internal;\n\n\
          import java.util.Arrays;\n\n\
          /// Checks canonical lowercase spelling using Unicode {}.{}.{} independently of the JDK.\n\
          ///\n\
@@ -61,7 +61,9 @@ fn main() {
     );
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     fs::write(
-        root.join("janex-reader/src/main/java/org/janex/reader/internal/UnicodeCaseChecks.java"),
+        root.join(
+            "janex-reader/src/main/java/org/glavo/janex/reader/internal/UnicodeCaseChecks.java",
+        ),
         source,
     )
     .unwrap();

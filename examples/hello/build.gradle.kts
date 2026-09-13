@@ -3,7 +3,7 @@
 
 plugins {
     application
-    id("org.janex")
+    id("org.glavo.janex")
 }
 
 java {
@@ -16,7 +16,7 @@ tasks.withType<JavaCompile>().configureEach {
 }
 
 application {
-    mainClass = "org.janex.example.Hello"
+    mainClass = "org.glavo.janex.example.Hello"
 }
 
 janex {

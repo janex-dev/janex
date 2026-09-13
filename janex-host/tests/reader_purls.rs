@@ -100,16 +100,17 @@ fn java_package_urls_match_native_components_type_rules_and_inactive_validation(
     let temp = tempfile::tempdir().unwrap();
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let bootstrap = project.join("janex-bootstrap/build/libs/janex-bootstrap.jar");
-    let compiled = Command::new("javac")
-        .args(["--release", "8", "-cp"])
-        .arg(&bootstrap)
-        .arg("-d")
-        .arg(temp.path())
-        .arg(
-            project.join("janex-reader/src/testFixtures/java/org/janex/reader/PackageUrlTest.java"),
-        )
-        .output()
-        .unwrap();
+    let compiled =
+        Command::new("javac")
+            .args(["--release", "8", "-cp"])
+            .arg(&bootstrap)
+            .arg("-d")
+            .arg(temp.path())
+            .arg(project.join(
+                "janex-reader/src/testFixtures/java/org/glavo/janex/reader/PackageUrlTest.java",
+            ))
+            .output()
+            .unwrap();
     assert!(
         compiled.status.success(),
         "{}",
@@ -254,7 +255,7 @@ fn java_package_urls_match_native_components_type_rules_and_inactive_validation(
         let output = Command::new(&java)
             .arg("-cp")
             .arg(&classpath)
-            .arg("org.janex.reader.PackageUrlTest")
+            .arg("org.glavo.janex.reader.PackageUrlTest")
             .arg(&fixture)
             .output()
             .unwrap();

@@ -70,17 +70,17 @@ fn java_applications_validate_metadata_inactive_descriptors_and_locale_lookup() 
     let temp = tempfile::tempdir().unwrap();
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let bootstrap = project.join("janex-bootstrap/build/libs/janex-bootstrap.jar");
-    let compile = Command::new("javac")
-        .args(["--release", "8", "-cp"])
-        .arg(&bootstrap)
-        .arg("-d")
-        .arg(temp.path())
-        .arg(
-            project
-                .join("janex-reader/src/testFixtures/java/org/janex/reader/ApplicationTest.java"),
-        )
-        .output()
-        .unwrap();
+    let compile =
+        Command::new("javac")
+            .args(["--release", "8", "-cp"])
+            .arg(&bootstrap)
+            .arg("-d")
+            .arg(temp.path())
+            .arg(project.join(
+                "janex-reader/src/testFixtures/java/org/glavo/janex/reader/ApplicationTest.java",
+            ))
+            .output()
+            .unwrap();
     assert!(
         compile.status.success(),
         "{}",
@@ -304,7 +304,7 @@ fn java_applications_validate_metadata_inactive_descriptors_and_locale_lookup() 
         let output = Command::new(java)
             .arg("-cp")
             .arg(&classpath)
-            .arg("org.janex.reader.ApplicationTest")
+            .arg("org.glavo.janex.reader.ApplicationTest")
             .arg(&fixture)
             .output()
             .unwrap();

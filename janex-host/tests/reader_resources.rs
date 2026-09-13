@@ -382,7 +382,7 @@ fn java_resource_layers_and_aliases_match_native_resolution() {
         .arg("-d")
         .arg(temp.path())
         .arg(project.join(
-            "janex-bootstrap/src/testFixtures/java/org/janex/bootstrap/loader/ResourcesTest.java",
+            "janex-bootstrap/src/testFixtures/java/org/glavo/janex/bootstrap/loader/ResourcesTest.java",
         ))
         .output()
         .unwrap();
@@ -773,7 +773,7 @@ fn java_resource_layers_and_aliases_match_native_resolution() {
         let output = Command::new(java)
             .arg("-cp")
             .arg(&classpath)
-            .arg("org.janex.bootstrap.loader.ResourcesTest")
+            .arg("org.glavo.janex.bootstrap.loader.ResourcesTest")
             .arg(&fixture)
             .output()
             .unwrap();

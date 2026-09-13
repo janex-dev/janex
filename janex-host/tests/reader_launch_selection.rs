@@ -119,17 +119,16 @@ fn java_launch_selection_matches_native_overlay_order_clearing_and_limits() {
     let temp = tempfile::tempdir().unwrap();
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let bootstrap = project.join("janex-bootstrap/build/libs/janex-bootstrap.jar");
-    let compiled =
-        Command::new("javac")
-            .args(["--release", "8", "-cp"])
-            .arg(&bootstrap)
-            .arg("-d")
-            .arg(temp.path())
-            .arg(project.join(
-                "janex-reader/src/testFixtures/java/org/janex/reader/LaunchSelectionTest.java",
-            ))
-            .output()
-            .unwrap();
+    let compiled = Command::new("javac")
+        .args(["--release", "8", "-cp"])
+        .arg(&bootstrap)
+        .arg("-d")
+        .arg(temp.path())
+        .arg(project.join(
+            "janex-reader/src/testFixtures/java/org/glavo/janex/reader/LaunchSelectionTest.java",
+        ))
+        .output()
+        .unwrap();
     assert!(
         compiled.status.success(),
         "{}",
@@ -242,7 +241,7 @@ fn java_launch_selection_matches_native_overlay_order_clearing_and_limits() {
         let output = Command::new(&java)
             .arg("-cp")
             .arg(&classpath)
-            .arg("org.janex.reader.LaunchSelectionTest")
+            .arg("org.glavo.janex.reader.LaunchSelectionTest")
             .arg(&fixture)
             .output()
             .unwrap();

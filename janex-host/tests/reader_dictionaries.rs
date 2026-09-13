@@ -51,7 +51,7 @@ fn samples() -> Vec<Vec<u8>> {
     (0..256)
         .map(|i| {
             let mut bytes = format!(
-                "package org.janex.example; public final class Example{i} {{ public String name() {{ return \"resource-{i}\"; }} }}\n"
+                "package org.glavo.janex.example; public final class Example{i} {{ public String name() {{ return \"resource-{i}\"; }} }}\n"
             ).repeat(8).into_bytes();
             bytes.extend((0..1024).map(|j| ((j * 17 + i * 7 + j / 11) % 251) as u8));
             bytes
@@ -105,7 +105,7 @@ fn java_dictionary_decoder_matches_native_raw_trained_and_malformed_vectors() {
             .arg("-d")
             .arg(temp.path())
             .arg(project.join(
-                "janex-reader/src/testFixtures/java/org/janex/reader/internal/codec/DictionaryTest.java",
+                "janex-reader/src/testFixtures/java/org/glavo/janex/reader/internal/codec/DictionaryTest.java",
             )),
     );
     let samples = samples();
@@ -159,7 +159,7 @@ fn java_dictionary_decoder_matches_native_raw_trained_and_malformed_vectors() {
             Command::new(java)
                 .arg("-cp")
                 .arg(&classpath)
-                .arg("org.janex.reader.internal.codec.DictionaryTest")
+                .arg("org.glavo.janex.reader.internal.codec.DictionaryTest")
                 .arg(&path),
         );
     }

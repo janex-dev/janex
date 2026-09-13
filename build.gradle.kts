@@ -5,7 +5,7 @@ plugins {
     base
 }
 
-group = "org.janex"
+group = "org.glavo.janex"
 version = "0.1.0"
 
 // Cargo owns incremental compilation; these Exec tasks intentionally declare no outputs.

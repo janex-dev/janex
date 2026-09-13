@@ -31,7 +31,7 @@ Use five Rust crates and two Java projects:
 - Use `janex-bootstrap` for portable Java resource loading and entry invocation. The Host supplies
   an evaluated resource index over its verified snapshot on the default launch path.
 - Use `janex-reader` for independent Java parsing, integrity checks, portable codecs, and launch/resource
-  selection in `org.janex.reader`. Internal helpers and codecs occupy its `internal` subpackages.
+  selection in `org.glavo.janex.reader`. Internal helpers and codecs occupy its `internal` subpackages.
   Return immutable resource descriptions; bootstrap `.loader` code owns private-index serialization.
   Keep NIO views in bootstrap `.fs` and acquisition policy in `.dependency`. A child JVM
   from the current Java installation receives the selected startup options and existing loader.
@@ -297,7 +297,7 @@ placeholder interfaces do not constitute completion.
 
 ## Gradle Plugin
 
-- Provide `org.janex` as a Java Gradle plugin that can also be included as a standalone build.
+- Provide `org.glavo.janex` as a Java Gradle plugin that can also be included as a standalone build.
 - Package the project JAR and ordered runtime dependencies through the native CLI, with lazy
   application conventions, explicit classpath/module-path overrides, and both launcher forms.
 - Require an explicitly configured local CLI until native tool distribution is available.

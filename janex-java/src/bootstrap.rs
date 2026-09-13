@@ -14,7 +14,7 @@ use std::{
 use zip::{ZipWriter, write::SimpleFileOptions};
 
 /// Binary name of the Java 8-compatible bootstrap class.
-pub(crate) const MAIN_CLASS: &str = "org.janex.bootstrap.Bootstrap";
+pub(crate) const MAIN_CLASS: &str = "org.glavo.janex.bootstrap.Bootstrap";
 
 /// Writes a private bootstrap JAR containing the entry point and original program arguments.
 ///
@@ -77,7 +77,7 @@ pub(crate) fn write(
             continue;
         }
         if resources.is_none()
-            && entry.name() != "org/janex/bootstrap/Bootstrap.class"
+            && entry.name() != "org/glavo/janex/bootstrap/Bootstrap.class"
             && entry.name() != "META-INF/MANIFEST.MF"
             && !entry.name().starts_with("META-INF/LICENSE")
         {
@@ -89,7 +89,7 @@ pub(crate) fn write(
         entry.read_to_end(&mut bytes)?;
         jar.write_all(&bytes)?;
     }
-    jar.start_file("org/janex/bootstrap/launch.bin", options)
+    jar.start_file("org/glavo/janex/bootstrap/launch.bin", options)
         .map_err(std::io::Error::other)?;
     jar.write_all(&data)?;
     if let Some(resources) = resources {
@@ -110,13 +110,13 @@ pub(crate) fn write(
         }
         limits.bytes(option_data.len() as u64)?;
         jar.start_file(
-            "org/janex/bootstrap/options.bin",
+            "org/glavo/janex/bootstrap/options.bin",
             SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
         )
         .map_err(std::io::Error::other)?;
         jar.write_all(&option_data)?;
         limits.bytes(resources.len() as u64)?;
-        jar.start_file("org/janex/bootstrap/resources.bin", options)
+        jar.start_file("org/glavo/janex/bootstrap/resources.bin", options)
             .map_err(std::io::Error::other)?;
         jar.write_all(resources)?;
     }

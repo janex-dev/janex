@@ -46,7 +46,7 @@ tasks.jar {
     archiveFileName = "janex-bootstrap.jar"
     manifest.attributes(
         "Multi-Release" to "true",
-        "Main-Class" to "org.janex.bootstrap.Standalone"
+        "Main-Class" to "org.glavo.janex.bootstrap.Standalone"
     )
     from(java9.output) { into("META-INF/versions/9") }
     from(configurations.runtimeClasspath.map { files -> files.map { zipTree(it) } }) {
@@ -68,6 +68,6 @@ tasks.register<JavaExec>("checkDependencies") {
     group = "verification"
     description = "Checks canonical dependency addresses and Maven repository mapping."
     classpath = sourceSets.testFixtures.get().runtimeClasspath
-    mainClass = "org.janex.bootstrap.dependency.DependenciesTest"
+    mainClass = "org.glavo.janex.bootstrap.dependency.DependenciesTest"
     javaLauncher = javaToolchains.launcherFor(java.toolchain)
 }

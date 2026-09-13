@@ -1,6 +1,6 @@
 # Janex Gradle Plugin
 
-The `org.janex` plugin packages a Java application and its runtime dependencies by invoking the
+The `org.glavo.janex` plugin packages a Java application and its runtime dependencies by invoking the
 native Janex CLI. It applies the Java plugin, adds a `janex` extension and a `janexPack` task,
 and makes `assemble` depend on the package. Packages are unsigned and include a `java -jar`
 launcher by default.
@@ -29,7 +29,7 @@ Configure the application in `build.gradle.kts`:
 ```kotlin
 plugins {
     application
-    id("org.janex")
+    id("org.glavo.janex")
 }
 
 application {
@@ -120,7 +120,7 @@ Publish the implementation, sources, Javadoc, and plugin marker to a local Maven
 
 The repository is generated under `janex-gradle-plugin/build/repository`. All binary outputs stay
 in ignored build directories. To consume a published plugin, add that repository under
-`pluginManagement.repositories` and use `id("org.janex") version "0.1.0"`.
+`pluginManagement.repositories` and use `id("org.glavo.janex") version "0.1.0"`.
 
 For a CNB Maven repository, pass its actual address using `-PjanexPublishUrl=...` and supply publishing
 credentials through `ORG_GRADLE_PROJECT_cnbUsername=cnb` and

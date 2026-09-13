@@ -73,10 +73,11 @@ fn java_decoders_match_native_frames_and_exact_classfile_bytes() {
     let temp = tempfile::tempdir().unwrap();
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let jar = project.join("janex-bootstrap/build/libs/janex-bootstrap.jar");
-    let harness = project
-        .join("janex-reader/src/testFixtures/java/org/janex/reader/internal/codec/CodecTest.java");
+    let harness = project.join(
+        "janex-reader/src/testFixtures/java/org/glavo/janex/reader/internal/codec/CodecTest.java",
+    );
     let boundary_harness = project.join(
-        "janex-reader/src/testFixtures/java/org/janex/reader/internal/codec/ZstandardTest.java",
+        "janex-reader/src/testFixtures/java/org/glavo/janex/reader/internal/codec/ZstandardTest.java",
     );
     tool(
         temp.path(),
@@ -289,7 +290,7 @@ public class Fixture {
         &[
             "-cp",
             path.to_str().unwrap(),
-            "org.janex.reader.internal.codec.CodecTest",
+            "org.glavo.janex.reader.internal.codec.CodecTest",
             data.to_str().unwrap(),
         ],
     );
@@ -304,7 +305,7 @@ public class Fixture {
             &[
                 "-cp",
                 path.to_str().unwrap(),
-                "org.janex.reader.internal.codec.CodecTest",
+                "org.glavo.janex.reader.internal.codec.CodecTest",
                 data.to_str().unwrap(),
             ],
         );

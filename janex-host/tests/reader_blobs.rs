@@ -236,7 +236,7 @@ fn java_blob_pages_match_native_lazy_validation_and_logical_index_limits() {
         .arg("-d")
         .arg(temp.path())
         .arg(project.join(
-            "janex-bootstrap/src/testFixtures/java/org/janex/bootstrap/loader/ResourcesTest.java",
+            "janex-bootstrap/src/testFixtures/java/org/glavo/janex/bootstrap/loader/ResourcesTest.java",
         ))
         .output()
         .unwrap();
@@ -368,7 +368,7 @@ fn java_blob_pages_match_native_lazy_validation_and_logical_index_limits() {
         let output = Command::new(&java)
             .arg("-cp")
             .arg(&classpath)
-            .arg("org.janex.bootstrap.loader.ResourcesTest")
+            .arg("org.glavo.janex.bootstrap.loader.ResourcesTest")
             .arg(&fixture)
             .output()
             .unwrap();

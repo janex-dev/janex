@@ -6,7 +6,7 @@ plugins {
     `maven-publish`
 }
 
-group = "org.janex"
+group = "org.glavo.janex"
 version = "0.1.0"
 
 val functionalTest = sourceSets.create("functionalTest")
@@ -35,8 +35,8 @@ gradlePlugin {
     testSourceSets(functionalTest)
     plugins {
         create("janex") {
-            id = "org.janex"
-            implementationClass = "org.janex.gradle.JanexPlugin"
+            id = "org.glavo.janex"
+            implementationClass = "org.glavo.janex.gradle.JanexPlugin"
             displayName = "Janex packaging"
             description = "Packages Java applications and runtime dependencies as Janex files."
         }
@@ -73,7 +73,7 @@ tasks.register<JavaExec>("checkPlugin") {
         dependsOn(":cargoBuild")
     }
     classpath = functionalTest.runtimeClasspath
-    mainClass = "org.janex.gradle.JanexPluginTest"
+    mainClass = "org.glavo.janex.gradle.JanexPluginTest"
     javaLauncher = javaToolchains.launcherFor(java.toolchain)
     systemProperty("janex.test.executable", janexExecutable.get())
     systemProperty("janex.test.directory", layout.buildDirectory.dir("functional-tests").get().asFile.absolutePath)

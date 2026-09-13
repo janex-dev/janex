@@ -145,7 +145,7 @@ impl LaunchRequest {
         }
         if resources.is_some() {
             arguments.push(
-                "-Djava.system.class.loader=org.janex.bootstrap.loader.ResourceLoader".into(),
+                "-Djava.system.class.loader=org.glavo.janex.bootstrap.loader.ResourceLoader".into(),
             );
         }
         if (self.entry_point.main_module.is_none() || resources.is_some())

@@ -180,14 +180,17 @@ fn java_container_preserves_raw_metadata_and_separates_parsing_from_integrity() 
     let temp = tempfile::tempdir().unwrap();
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let bootstrap = project.join("janex-bootstrap/build/libs/janex-bootstrap.jar");
-    let output = Command::new("javac")
-        .args(["--release", "8", "-cp"])
-        .arg(&bootstrap)
-        .arg("-d")
-        .arg(temp.path())
-        .arg(project.join("janex-reader/src/testFixtures/java/org/janex/reader/ContainerTest.java"))
-        .output()
-        .unwrap();
+    let output =
+        Command::new("javac")
+            .args(["--release", "8", "-cp"])
+            .arg(&bootstrap)
+            .arg("-d")
+            .arg(temp.path())
+            .arg(project.join(
+                "janex-reader/src/testFixtures/java/org/glavo/janex/reader/ContainerTest.java",
+            ))
+            .output()
+            .unwrap();
     assert!(
         output.status.success(),
         "{}",
@@ -257,7 +260,7 @@ fn java_container_preserves_raw_metadata_and_separates_parsing_from_integrity() 
         let output = Command::new(java)
             .arg("-cp")
             .arg(&classpath)
-            .arg("org.janex.reader.ContainerTest")
+            .arg("org.glavo.janex.reader.ContainerTest")
             .arg(&fixture)
             .arg(temp.path().join("snapshot.janex"))
             .output()

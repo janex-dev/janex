@@ -218,7 +218,7 @@ fn java_authentication_is_explicit_and_precedes_integrity_and_dependencies() {
         .arg(&bootstrap)
         .arg("-d")
         .arg(temp.path())
-        .arg(project.join("janex-bootstrap/src/testFixtures/java/org/janex/bootstrap/ReaderAuthenticationTest.java"))
+        .arg(project.join("janex-bootstrap/src/testFixtures/java/org/glavo/janex/bootstrap/ReaderAuthenticationTest.java"))
         .output()
         .unwrap();
     assert!(
@@ -239,7 +239,7 @@ fn java_authentication_is_explicit_and_precedes_integrity_and_dependencies() {
         let output = Command::new(java)
             .arg("-cp")
             .arg(&classpath)
-            .arg("org.janex.bootstrap.ReaderAuthenticationTest")
+            .arg("org.glavo.janex.bootstrap.ReaderAuthenticationTest")
             .arg(&fixture)
             .arg(temp.path().join("snapshot.janex"))
             .output()

@@ -100,14 +100,17 @@ fn java_limits_match_native_decoding_and_are_inherited_by_nested_readers() {
     let temp = tempfile::tempdir().unwrap();
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let bootstrap = project.join("janex-bootstrap/build/libs/janex-bootstrap.jar");
-    let compiled = Command::new("javac")
-        .args(["--release", "8", "-cp"])
-        .arg(&bootstrap)
-        .arg("-d")
-        .arg(temp.path())
-        .arg(project.join("janex-bootstrap/src/testFixtures/java/org/janex/reader/LimitsTest.java"))
-        .output()
-        .unwrap();
+    let compiled =
+        Command::new("javac")
+            .args(["--release", "8", "-cp"])
+            .arg(&bootstrap)
+            .arg("-d")
+            .arg(temp.path())
+            .arg(project.join(
+                "janex-bootstrap/src/testFixtures/java/org/glavo/janex/reader/LimitsTest.java",
+            ))
+            .output()
+            .unwrap();
     assert!(
         compiled.status.success(),
         "{}",
@@ -395,7 +398,7 @@ fn java_limits_match_native_decoding_and_are_inherited_by_nested_readers() {
         let output = Command::new(java)
             .arg("-cp")
             .arg(&classpath)
-            .arg("org.janex.reader.LimitsTest")
+            .arg("org.glavo.janex.reader.LimitsTest")
             .arg(&fixture)
             .output()
             .unwrap();
