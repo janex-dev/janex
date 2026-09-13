@@ -8,12 +8,12 @@ import java.util.Objects;
 
 import static org.janex.bootstrap.internal.zstd.Input.require;
 
-/// Decodes dictionary-free Zstandard frames into a caller-provided byte array.
+/// Decodes Zstandard frames into a caller-provided byte array.
 ///
 /// Concatenated frames and interspersed skippable frames are supported. Each invocation
 /// requires at least one ordinary frame, consumes the entire input range, and verifies
 /// frame content sizes and checksums when present. Offset codes through 31 are supported.
-/// Dictionaries are supplied by the Host through its separate decoding path.
+/// Raw-content and formatted dictionaries can initialize each frame's history.
 ///
 /// Instances are unnecessary; calls have independent state. Callers must prevent concurrent
 /// modification of input and output ranges. The implementation requires only Java 8 APIs.
@@ -30,6 +30,8 @@ public final class Zstandard {
     private static final int[] MATCH_BASE = bases(32, 35, MATCH_BITS);
     /// Predefined literal-length, offset, and match-length FSE tables.
     private static final Fse[] DEFAULTS = defaults();
+    /// Empty history used by dictionary-free calls.
+    private static final byte[] EMPTY = new byte[0];
 
     /// Prevents instantiation.
     private Zstandard() {
@@ -55,11 +57,39 @@ public final class Zstandard {
     ///         a nonzero dictionary ID is present, or output capacity is insufficient
     public static int decompress(byte[] input, int inputOffset, int inputLength,
                                  byte[] output, int outputOffset, int outputLength) {
+        return decompress(input, inputOffset, inputLength, output, outputOffset, outputLength, EMPTY);
+    }
+
+    /// Decodes all frames using the same external dictionary for each frame.
+    ///
+    /// A formatted dictionary supplies entropy tables, repeat offsets, and initial history.
+    /// Other dictionaries supply raw history; dictionaries shorter than eight bytes are ignored.
+    /// A nonzero frame dictionary ID must match the formatted dictionary's ID. A zero or absent
+    /// frame ID does not disable the supplied dictionary. Each frame starts with fresh history.
+    /// The input and dictionary must not be modified during the call, and neither may be the
+    /// output array. Output bounds and failure behavior are as in the dictionary-free overload.
+    ///
+    /// @param input encoded bytes
+    /// @param inputOffset first encoded byte
+    /// @param inputLength number of encoded bytes
+    /// @param output destination array
+    /// @param outputOffset first writable byte
+    /// @param outputLength maximum number of writable bytes
+    /// @param dictionary raw or formatted dictionary bytes; an empty array selects no dictionary
+    /// @return number of decoded bytes written starting at {@code outputOffset}
+    /// @throws NullPointerException if any array is null
+    /// @throws IndexOutOfBoundsException if either range is outside its array
+    /// @throws IllegalArgumentException if output aliases input or dictionary, data or dictionary
+    ///         is malformed, the dictionary ID does not match, or output capacity is insufficient
+    public static int decompress(byte[] input, int inputOffset, int inputLength,
+                                 byte[] output, int outputOffset, int outputLength, byte[] dictionary) {
         range(input, inputOffset, inputLength);
         range(output, outputOffset, outputLength);
-        if (input == output) {
-            throw new IllegalArgumentException("Input and output arrays must be distinct");
+        Objects.requireNonNull(dictionary);
+        if (input == output || dictionary == output) {
+            throw new IllegalArgumentException("Output must be distinct from input and dictionary");
         }
+        Dictionary history = new Dictionary(dictionary);
         Input cursor = new Input(input, inputOffset, inputOffset + inputLength);
         int position = outputOffset;
         int limit = outputOffset + outputLength;
@@ -73,7 +103,7 @@ public final class Zstandard {
             } else {
                 require(magic == 0xfd2fb528, "unknown frame magic");
                 frameSeen = true;
-                position = new Frame(output, position, limit).decode(cursor);
+                position = new Frame(output, position, limit, history).decode(cursor);
             }
         }
         require(frameSeen, "no Zstandard frame");
@@ -124,12 +154,60 @@ public final class Zstandard {
         return new Fse[]{Fse.distribution(6, literals), Fse.distribution(5, offsets), Fse.distribution(6, matches)};
     }
 
+    /// Holds immutable initial entropy tables and a borrowed dictionary-content slice.
+    private static final class Dictionary {
+        /// Raw dictionary bytes, including a formatted header when present.
+        final byte[] bytes;
+        /// First byte of usable match history.
+        final int start;
+        /// Unsigned dictionary ID, or zero for raw content.
+        final long id;
+        /// Initial Huffman table, or null for raw content.
+        final PrefixTable prefixes;
+        /// Initial literal-length, offset, and match-length tables.
+        final Fse[] tables;
+        /// Initial repeat offsets.
+        final int[] offsets;
+
+        /// Parses optional formatted state without copying the dictionary content.
+        Dictionary(byte[] bytes) {
+            this.bytes = bytes;
+            Input input = new Input(bytes, 0, bytes.length);
+            if (bytes.length < 8 || input.little(4) != 0xec30a437L) {
+                start = bytes.length < 8 ? bytes.length : 0;
+                id = 0;
+                prefixes = null;
+                tables = new Fse[3];
+                offsets = new int[]{1, 4, 8};
+            } else {
+                id = input.little(4);
+                prefixes = PrefixTable.read(input);
+                Fse offset = Fse.read(input, 31, 8);
+                Fse match = Fse.read(input, 52, 9);
+                Fse literal = Fse.read(input, 35, 9);
+                tables = new Fse[]{literal, offset, match};
+                offsets = new int[3];
+                for (int i = 0; i < offsets.length; i++) {
+                    long value = input.little(4);
+                    require(value > 0 && value <= Integer.MAX_VALUE, "invalid dictionary repeat offset");
+                    offsets[i] = (int) value;
+                }
+                start = input.position;
+                for (int value : offsets) {
+                    require(value <= bytes.length - start, "dictionary repeat offset exceeds content");
+                }
+            }
+        }
+    }
+
     /// Holds output and entropy history for exactly one frame.
     private static final class Frame {
         /// Caller-owned output array.
         private final byte[] output;
-        /// First decoded byte of this frame; matches cannot precede it.
+        /// First decoded byte of this frame, immediately following dictionary history.
         private final int start;
+        /// Initial dictionary content and entropy state shared between frames.
+        private final Dictionary dictionary;
         /// Exclusive caller-provided output boundary.
         private final int limit;
         /// Next writable output position.
@@ -138,18 +216,22 @@ public final class Zstandard {
         private long window;
         /// Maximum encoded and regenerated size of each block.
         private int blockLimit;
-        /// Most recently transmitted Huffman table, or null before its first definition.
+        /// Most recently selected Huffman table, or null before its first definition.
         private PrefixTable prefixes;
-        /// Previous literal-length, offset, and match-length tables, initially absent.
-        private final Fse[] tables = new Fse[3];
+        /// Previous literal-length, offset, and match-length tables.
+        private final Fse[] tables;
         /// Most recent three match distances.
-        private final int[] offsets = {1, 4, 8};
+        private final int[] offsets;
 
         /// Creates fresh entropy and match history at an output position.
-        Frame(byte[] output, int position, int limit) {
+        Frame(byte[] output, int position, int limit, Dictionary dictionary) {
             this.output = output;
             this.start = this.position = position;
             this.limit = limit;
+            this.dictionary = dictionary;
+            prefixes = dictionary.prefixes;
+            tables = dictionary.tables.clone();
+            offsets = dictionary.offsets.clone();
         }
 
         /// Decodes the frame after its magic and returns the new output position.
@@ -166,7 +248,8 @@ public final class Zstandard {
             if (dictionaryWidth == 3) {
                 dictionaryWidth = 4;
             }
-            require(input.little(dictionaryWidth) == 0, "external dictionary is required");
+            long dictionaryId = input.little(dictionaryWidth);
+            require(dictionaryId == 0 || dictionaryId == dictionary.id, "dictionary ID mismatch");
             int sizeFlag = descriptor >>> 6;
             int sizeWidth = sizeFlag == 0 ? (single ? 1 : 0) : 1 << sizeFlag;
             long contentSize = -1;
@@ -320,16 +403,29 @@ public final class Zstandard {
                     position += literalLength;
                     used += literalLength;
                     int distance = distance(offsetValue, literalLength);
-                    require(distance > 0 && distance <= window && distance <= position - start, "match exceeds frame history");
+                    int historyLength = position - start;
+                    require(distance <= historyLength ? distance <= window
+                            : historyLength <= window && (long) distance - historyLength <= dictionary.bytes.length - dictionary.start,
+                            "match exceeds frame history");
                     int matchStart = position;
-                    int copied = Math.min(distance, matchLength);
-                    System.arraycopy(output, position - distance, output, position, copied);
-                    position += copied;
-                    while (copied < matchLength) {
-                        int length = Math.min(copied, matchLength - copied);
-                        System.arraycopy(output, matchStart, output, position, length);
-                        position += length;
-                        copied += length;
+                    if (distance > historyLength) {
+                        int dictionaryLength = Math.min(distance - historyLength, matchLength);
+                        System.arraycopy(dictionary.bytes, dictionary.bytes.length - (distance - historyLength),
+                                output, position, dictionaryLength);
+                        position += dictionaryLength;
+                    }
+                    int remaining = matchLength - (position - matchStart);
+                    if (remaining > 0) {
+                        int outputStart = position;
+                        int copied = Math.min(distance, remaining);
+                        System.arraycopy(output, position - distance, output, position, copied);
+                        position += copied;
+                        while (copied < remaining) {
+                            int length = Math.min(copied, remaining - copied);
+                            System.arraycopy(output, outputStart, output, position, length);
+                            position += length;
+                            copied += length;
+                        }
                     }
                     if (sequence + 1 < count) {
                         states[0] = tables[0].next(states[0], bits);

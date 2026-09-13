@@ -166,6 +166,17 @@ public final class ZstandardTest {
         expect(IndexOutOfBoundsException.class, () -> Zstandard.decompress(raw, 1, Integer.MAX_VALUE, target, 0, 4));
         expect(IndexOutOfBoundsException.class, () -> Zstandard.decompress(raw, 0, raw.length, target, 2, 3));
         expect(IllegalArgumentException.class, () -> Zstandard.decompress(raw, 0, 1, raw, 1, 1));
+        expect(NullPointerException.class, () -> Zstandard.decompress(raw, 0, raw.length, target, 0, 4, null));
+        expect(IllegalArgumentException.class, () -> Zstandard.decompress(raw, 0, raw.length, target, 0, 4, target));
+
+        // With no literals, repeat-offset code zero selects the second initial offset, four.
+        byte[] dictionary = bytes(10, 20, 30, 40, 50, 60, 70, 80);
+        byte[] dictionaryFrame = frame(block(2, true, missingHistory.length, missingHistory));
+        byte[] dictionaryOutput = new byte[3];
+        if (Zstandard.decompress(dictionaryFrame, 0, dictionaryFrame.length,
+                dictionaryOutput, 0, 3, dictionary) != 3 || !Arrays.equals(dictionaryOutput, bytes(50, 60, 70))) {
+            throw new AssertionError("Raw dictionary history mismatch");
+        }
         valid(raw, bytes(10, 20, 30));
         System.out.println("Verified Zstandard format boundaries and array contracts");
     }

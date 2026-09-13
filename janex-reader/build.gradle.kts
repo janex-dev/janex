@@ -34,5 +34,13 @@ tasks.register<JavaExec>("checkReader") {
 }
 
 tasks.check {
-    dependsOn("checkReader")
+    dependsOn("checkReader", "checkChecksums")
+}
+
+tasks.register<JavaExec>("checkChecksums") {
+    group = "verification"
+    description = "Checks checksum encodings, known answers, and streaming contracts."
+    classpath = sourceSets.testFixtures.get().runtimeClasspath
+    mainClass = "org.janex.format.ChecksumTest"
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
 }

@@ -12,11 +12,12 @@ import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
 import org.janex.format.JanexReader;
+import org.janex.format.Checksum;
+import org.janex.format.PackageUrl;
 
 /// Acquires exact external JARs using the Host's dependency cache representation.
 ///
@@ -45,22 +46,21 @@ final class Dependencies implements JanexReader.DependencyResolver {
 
     /// Resolves one selected dependency, copying and checking every cache hit.
     ///
-    /// Cache access may block waiting for a lock. Only SHA-256 and SHA-512 pins are supported.
+    /// Cache access may block waiting for a lock. All Janex checksum algorithms are supported.
     /// An offline miss or corrupt entry fails without creating cache directories or lock files.
     @Override
     public JanexReader.Dependency resolve(String uri, byte[] checksum) throws IOException {
         Address address = address(uri, repository);
-        if (checksum != null) {
-            algorithm(checksum);
-        }
-        require(!address.url.getScheme().equals("http") || checksum != null, "HTTP dependencies require a secure checksum");
+        Checksum expected = checksum == null ? null : Checksum.decode(checksum);
+        require(!address.url.getScheme().equals("http") || expected != null && expected.algorithm().isSecure(),
+                "HTTP dependencies require a secure checksum");
         ByteArrayOutputStream identity = new ByteArrayOutputStream();
         identity.write(address.url.toASCIIString().getBytes(StandardCharsets.UTF_8));
         identity.write(0);
         if (checksum != null) {
             identity.write(checksum);
         }
-        String key = hex(digest("SHA-256", identity.toByteArray()));
+        String key = hex(Checksum.compute(Checksum.Algorithm.SHA256, identity.toByteArray()).digest());
         Path directory = cacheDirectory();
         // FileChannel locks overlap within a JVM instead of blocking. Serialize local callers.
         synchronized (Dependencies.class) {
@@ -78,7 +78,7 @@ final class Dependencies implements JanexReader.DependencyResolver {
                 require(lock.isValid(), "Dependency cache lock is unavailable");
                 if (!refresh) {
                     try {
-                        return new JanexReader.Dependency(address.name, cached(path, checksum));
+                        return new JanexReader.Dependency(address.name, cached(path, expected));
                     } catch (NoSuchFileException missing) {
                         // A missing entry is acquired online below.
                     } catch (IOException invalid) {
@@ -89,7 +89,7 @@ final class Dependencies implements JanexReader.DependencyResolver {
                 }
                 require(!offline, "Dependency is unavailable in the offline cache");
                 byte[] bytes = download(address.url);
-                byte[] digest = verify(bytes, checksum);
+                byte[] digest = verify(bytes, expected);
                 Path temporary = Files.createTempFile(directory, key + ".", ".tmp");
                 try {
                     try (FileChannel output = FileChannel.open(temporary, StandardOpenOption.WRITE)) {
@@ -110,7 +110,7 @@ final class Dependencies implements JanexReader.DependencyResolver {
     }
 
     /// Reads one cache record and verifies both its stored digest and optional declared checksum.
-    private static byte[] cached(Path path, byte[] checksum) throws IOException {
+    private static byte[] cached(Path path, Checksum checksum) throws IOException {
         try (DataInputStream input = new DataInputStream(Files.newInputStream(path))) {
             byte[] header = new byte[40];
             input.readFully(header);
@@ -130,35 +130,16 @@ final class Dependencies implements JanexReader.DependencyResolver {
     }
 
     /// Returns a SHA-256 cache digest after checking any declared pin.
-    private static byte[] verify(byte[] bytes, byte[] checksum) throws IOException {
-        byte[] sha256 = digest("SHA-256", bytes);
+    private static byte[] verify(byte[] bytes, Checksum checksum) throws IOException {
+        byte[] sha256 = Checksum.compute(Checksum.Algorithm.SHA256, bytes).digest();
         if (checksum != null) {
-            String algorithm = algorithm(checksum);
-            byte[] actual = algorithm.equals("SHA-256") ? sha256 : digest(algorithm, bytes);
-            require(MessageDigest.isEqual(actual, Arrays.copyOfRange(checksum, 1, checksum.length)), "Dependency checksum mismatch");
+            if (checksum.algorithm() == Checksum.Algorithm.SHA256) {
+                require(MessageDigest.isEqual(sha256, checksum.digest()), "Dependency checksum mismatch");
+            } else {
+                checksum.verify(bytes);
+            }
         }
         return sha256;
-    }
-
-    /// Checks an encoded pin before any network or cache access.
-    private static String algorithm(byte[] checksum) throws IOException {
-        require(checksum.length > 0, "Empty dependency checksum");
-        if (checksum[0] == 0x21 && checksum.length == 33) {
-            return "SHA-256";
-        }
-        if (checksum[0] == 0x22 && checksum.length == 65) {
-            return "SHA-512";
-        }
-        throw new IOException("Standalone dependencies require SHA-256 or SHA-512 checksums; use Janex Host for other algorithms");
-    }
-
-    /// Computes a required platform digest.
-    private static byte[] digest(String algorithm, byte[] bytes) throws IOException {
-        try {
-            return MessageDigest.getInstance(algorithm).digest(bytes);
-        } catch (NoSuchAlgorithmException failure) {
-            throw new IOException("Missing digest algorithm: " + algorithm, failure);
-        }
     }
 
     /// Returns lowercase hexadecimal bytes for the shared cache key.
@@ -300,15 +281,12 @@ final class Dependencies implements JanexReader.DependencyResolver {
             require(name.endsWith(".jar"), "HTTP dependency URL must name a .jar file");
             return new Address(uri, name);
         }
-        require(value.startsWith("pkg:maven/") && value.indexOf('#') < 0, "Expected a canonical Maven PURL without a subpath");
-        String[] parts = value.substring(10).split("\\?", -1);
-        require(parts.length <= 2, "Invalid Maven PURL");
-        int slash = parts[0].indexOf('/');
-        int at = parts[0].indexOf('@', slash + 1);
-        require(slash > 0 && at > slash + 1, "Maven dependency requires a group, artifact, and exact version");
-        String group = decode(parts[0].substring(0, slash));
-        String artifact = decode(parts[0].substring(slash + 1, at));
-        String version = decode(parts[0].substring(at + 1));
+        PackageUrl purl = PackageUrl.parse(value);
+        require(purl.type().equals("maven") && purl.subpath() == null, "Expected a canonical Maven PURL without a subpath");
+        String group = purl.namespace();
+        String artifact = purl.name();
+        String version = purl.version();
+        require(group != null && version != null, "Maven dependency requires a group, artifact, and exact version");
         for (String component : group.split("\\.", -1)) {
             segment(component);
         }
@@ -316,23 +294,10 @@ final class Dependencies implements JanexReader.DependencyResolver {
         segment(version);
         require(!version.endsWith("-SNAPSHOT") && !version.equals("LATEST") && !version.equals("RELEASE")
                 && !version.matches(".*[\\[\\](),].*"), "Maven dependency requires an exact release or timestamped snapshot");
-        SortedMap<String, String> qualifiers = new TreeMap<String, String>();
-        if (parts.length == 2) {
-            for (String part : parts[1].split("&", -1)) {
-                int equals = part.indexOf('=');
-                require(equals > 0, "Invalid Maven qualifier");
-                String key = part.substring(0, equals);
-                String qualifier = decode(part.substring(equals + 1));
-                require(Arrays.asList("classifier", "type", "repository_url").contains(key), "Unsupported Maven qualifier: " + key);
-                require(!qualifier.isEmpty() && qualifiers.put(key, qualifier) == null, "Empty or duplicate Maven qualifier");
-            }
+        Map<String, String> qualifiers = purl.qualifiers();
+        for (String key : qualifiers.keySet()) {
+            require(Arrays.asList("classifier", "type", "repository_url").contains(key), "Unsupported Maven qualifier: " + key);
         }
-        StringBuilder canonical = new StringBuilder("pkg:maven/");
-        canonical.append(encode(group, 1)).append('/').append(encode(artifact, 1)).append('@').append(encode(version, 0));
-        for (Map.Entry<String, String> qualifier : qualifiers.entrySet()) {
-            canonical.append(canonical.indexOf("?") < 0 ? '?' : '&').append(qualifier.getKey()).append('=').append(encode(qualifier.getValue(), 2));
-        }
-        require(value.equals(canonical.toString()), "Maven PURL is not canonical");
         String kind = qualifiers.getOrDefault("type", "jar");
         String classifier;
         switch (kind) {
@@ -370,9 +335,9 @@ final class Dependencies implements JanexReader.DependencyResolver {
             target.append('/');
         }
         for (String component : group.split("\\.")) {
-            target.append(encode(component, 3)).append('/');
+            target.append(encode(component, true)).append('/');
         }
-        target.append(encode(artifact, 3)).append('/').append(encode(baseVersion, 3)).append('/').append(encode(name, 3));
+        target.append(encode(artifact, true)).append('/').append(encode(baseVersion, true)).append('/').append(encode(name, true));
         return new Address(url(target.toString()), name);
     }
 
@@ -417,7 +382,7 @@ final class Dependencies implements JanexReader.DependencyResolver {
             URI normalized = new URI(scheme + "://" + host + (port < 0 ? "" : ":" + port) + "/" + String.join("/", segments)
                     + (query == null ? "" : "?" + query.replace("'", "%27")));
             // URI.toASCIIString normalizes Unicode to NFC, changing the Host's byte identity.
-            return new URI(encode(normalized.toString(), 4));
+            return new URI(encode(normalized.toString(), false));
         } catch (URISyntaxException | IllegalArgumentException failure) {
             throw new IOException("Invalid dependency URL", failure);
         }
@@ -535,13 +500,13 @@ final class Dependencies implements JanexReader.DependencyResolver {
         }
     }
 
-    /// Encodes a PURL version, name, qualifier, transport path segment, or raw URL with Host-compatible sets.
-    private static String encode(String value, int kind) {
-        String escaped = kind == 4 ? "" : kind == 3 ? " \"#<>?`{}/%" : " \"#%<>`?{};=+@\\[]^|";
+    /// Encodes a transport path segment or raw URL with Host-compatible sets.
+    private static String encode(String value, boolean pathSegment) {
+        String escaped = pathSegment ? " \"#<>?`{}/%" : "";
         StringBuilder result = new StringBuilder();
         for (byte valueByte : value.getBytes(StandardCharsets.UTF_8)) {
             int ch = valueByte & 255;
-            if (ch < 32 || ch >= 127 || escaped.indexOf(ch) >= 0 || (kind == 1 || kind == 2) && ch == '/' || kind == 2 && ch == ',') {
+            if (ch < 32 || ch >= 127 || escaped.indexOf(ch) >= 0) {
                 result.append('%').append("0123456789ABCDEF".charAt(ch >>> 4)).append("0123456789ABCDEF".charAt(ch & 15));
             } else {
                 result.append((char) ch);

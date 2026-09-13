@@ -313,6 +313,8 @@ fn external_paths_require_valid_uris_canonical_purls_and_correct_placement() {
         "pkg:maven/org.example/demo@1.0?z=2&a=1",
         "pkg:janex/java-module/java.base?x=y",
         "pkg:janex/java-module/java.base#path",
+        "pkg:janex/java-module/java.base@",
+        "pkg:maven/org.example/demo@",
         "pkg:janex/other/java.base",
         "pkg:janex/too/many/java.base",
     ] {

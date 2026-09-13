@@ -67,7 +67,7 @@ fn standalone(java: &Path, package: &Path, options: &DependencyOptions) -> Comma
 }
 
 /// Creates a deflated multi-release JAR with a filename-derived automatic module and a link.
-fn library(directory: &Path) -> Vec<u8> {
+fn library(directory: &Path, zip64: bool) -> Vec<u8> {
     fs::write(
         directory.join("Library.java"),
         r#"
@@ -83,7 +83,9 @@ public class Library {
         &["--release", "8", "-d", "library", "Library.java"],
     );
     let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
-    let options = SimpleFileOptions::default().unix_permissions(0o640);
+    let options = SimpleFileOptions::default()
+        .unix_permissions(0o640)
+        .large_file(zip64);
     for (name, bytes) in [
         (
             "META-INF/MANIFEST.MF",
@@ -116,7 +118,7 @@ public class Library {
 fn standalone_and_native_share_verified_dependencies_in_both_directions() {
     let temp = tempfile::tempdir().unwrap();
     let server = http::Server::new();
-    let library = library(temp.path());
+    let library = library(temp.path(), true);
     fs::write(temp.path().join("remote-library-1.2.jar"), &library).unwrap();
     fs::write(temp.path().join("Main.java"), r#"
 package app;
@@ -159,7 +161,7 @@ public class Main {
     );
     server.file("/remote-library-1.2.jar", &library);
     server.file(
-        "/maven/example/remote-library/1.2/remote-library-1.2.jar",
+        "/maven&mirror/example/remote-library/1.2/remote-library-1.2.jar",
         &library,
     );
     for module in [false, true] {
@@ -184,7 +186,10 @@ public class Main {
             );
             (
                 "modules",
-                "pkg:maven/example/remote-library@1.2".to_owned(),
+                format!(
+                    "pkg:maven/example/remote-library@1.2?repository_url={}%2Fmaven%26mirror",
+                    server.url.replace('/', "%2F")
+                ),
                 Algorithm::Sha512,
             )
         } else {
@@ -276,7 +281,7 @@ public class Main {
 fn standalone_cache_rejects_bad_responses_and_repairs_corruption() {
     let temp = tempfile::tempdir().unwrap();
     let server = http::Server::new();
-    let library = library(temp.path());
+    let library = library(temp.path(), false);
     fs::write(temp.path().join("Main.java"), "public class Main { public static void main(String[] args) { System.out.println(\"remote-ok\"); } }").unwrap();
     javac(
         temp.path(),
@@ -300,7 +305,7 @@ fn standalone_cache_rejects_bad_responses_and_repairs_corruption() {
     for (name, checksum) in [
         ("unpinned", None),
         (
-            "unsupported-hash",
+            "insecure-http-hash",
             Some(Checksum::compute(Algorithm::Xxh3_64, library.as_slice()).unwrap()),
         ),
     ] {

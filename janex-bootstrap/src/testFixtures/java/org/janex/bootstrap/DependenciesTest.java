@@ -33,6 +33,10 @@ public final class DependenciesTest {
                 "https://example.com/maven/org/example/library/1.2-SNAPSHOT/library-1.2-20260102.030405-6.jar", "library-1.2-20260102.030405-6.jar");
         address("pkg:maven/g/a@1?repository_url=https:%2F%2Fmirror.example%2Frepo", "https://mirror.example/repo/g/a/1/a-1.jar", "a-1.jar");
         address("pkg:maven/g/a%2Bb@1", "https://example.com/maven/g/a+b/1/a+b-1.jar", "a+b-1.jar");
+        address("pkg:maven/g/a%21b@1?classifier=x%26y",
+                "https://example.com/maven/g/a!b/1/a!b-1-x&y.jar", "a!b-1-x&y.jar");
+        address("pkg:maven/g/a@1?repository_url=https:%2F%2Fmirror.example%2Fa%26b",
+                "https://mirror.example/a&b/g/a/1/a-1.jar", "a-1.jar");
         for (String uri : new String[]{
                 "file:///a.jar", "http://user:secret@example.com/a.jar", "https://example.com/a.jar#fragment",
                 "https://example.com/a.zip", "https://example.com/%2F.jar", "https://example.com/%ff.jar",
@@ -41,6 +45,7 @@ public final class DependenciesTest {
                 "pkg:maven/g/a@1?type=pom", "pkg:maven/g/a@1?unknown=x", "pkg:maven/g/a@1#path",
                 "pkg:maven/g/a@1?type=jar&classifier=x", "pkg:maven/g/a@1?classifier=x&classifier=y",
                 "pkg:maven/g/%61@1", "pkg:maven/g/a%2bb@1", "pkg:maven/g/a@1?classifier=",
+                "pkg:maven/g/a!b@1", "pkg:maven/g/a@v%2Fw",
                 "pkg:maven/g/a@1?repository_url=https:%2F%2Fx%2F%3Fquery"}) {
             try {
                 Dependencies.address(uri, "https://example.com/maven");

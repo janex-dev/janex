@@ -41,17 +41,106 @@ Use five Rust crates and two Java projects:
 
 ## Implementation Order and Interfaces
 
+### Java Reader Parity
+
+Align independent Java reading with the implemented Rust format and launch behavior. Keep version
+0.1, Java 8 classpath support, and both native launch modes. Parsing and checksum support must not
+silently imply signature authentication. The format specification remains authoritative.
+
+- [x] Share all five checksum algorithms across container, blob-page, resource, and dependency
+  validation. Use bounded streaming state, canonical digest bytes, and independent Rust/C vectors.
+- [x] Decode raw and trained external Zstandard dictionaries, including page restrictions and
+  reference/recursion constraints, through the existing resource index.
+- [x] Align ordinary and ZIP64 wrapper discovery and external JAR reading, including bounds,
+  ambiguous end records, entry metadata, and malformed archive rejection.
+- [x] Support selected Java agents with preserved arguments, ordering, manifests, and lifecycle.
+- [x] Resolve virtual Java module requirements against the current runtime and physical module
+  path, preserving exact version constraints and selected overlay behavior.
+- [x] Separate container parsing, recorded-integrity verification, and caller authentication policy;
+  support the format's verification variants without bypassing signed-package authentication.
+- [x] Expose validated application metadata and localized presentation, checking every application
+  and inactive configuration branch before launch selection.
+- [x] Provide immutable reader-limit configuration with Rust defaults and propagate it through
+  nested decoding, imported JARs, Blob preparation, evaluated lists, and private-index output.
+- [x] Align resource-name encodings, UTF-8 order and byte limits, implicit directories, layer
+  conflicts, cumulative symbolic-link limits, lazy file references, and expanded index paths.
+  Preserve original bytes through other aliases when rewriting manifests; skip stale JAR signatures.
+  Enforce the native Zstandard advertised-window policy before eager and indexed decoding.
+- [x] Compare deterministic CBOR and binary framing with shared vectors covering every half-float
+  encoding, float-width boundaries, unknown values, map ordering and original bytes, UTF-8,
+  sized empty maps, nesting, and ULEB128 overflow on Java 8 and the current JDK.
+- [x] Match CLASSFILE restoration and structural validation: constant-pool slots and references,
+  Modified UTF-8, class versions, Code and attribute boundaries, module descriptors, exact output
+  sizes, and inherited byte/element limits. Compare valid classes and systematic mutations on
+  Java 8 and the current JDK.
+- [x] Compare resource metadata kinds, all timestamp fields and signed i128 boundaries, permission
+  absence versus zero, unknown fields, and inactive-layer validation. Check original Manifest
+  checksums before rewriting, including aliases and all five algorithms.
+- [x] Compare Java version grammar, VERS boundaries, condition selectors and runtime requirements
+  across Java 8 and current Java. Validate candidates even for wildcard ranges and parse long
+  numeric sequences without recursive regular expressions.
+- [x] Match selected overlay order, subtree pruning, entry-point replacement, argument append/clear
+  behavior, inactive-branch validation, and the aggregate pending-overlay limit.
+- [x] Match lazy BlobPool opening, page-descriptor validation, selected-page entry framing,
+  wide logical indices, and deferred Stored lengths with shared acceptance/rejection fixtures.
+  Compare module access options in standalone, native bootstrap, and direct launches, including
+  separate operands, ALL-UNNAMED, native access, and rejection before application execution.
+- [x] Validate canonical external PURLs independently of selected dependency acquisition, retaining
+  exact decoded components and registered type constraints. Use shared acceptance/rejection vectors
+  and compare every Unicode scalar value on Java 8 and the current JDK.
+- [x] Run the full workspace suite, Java 8/current-JDK integration tests, Gradle checks, Clippy,
+  and reproducible embedded-JAR verification after integration. Record any platform evidence gaps.
+
+Acceptance on Windows, 2026-09-13: `cargo test --workspace --locked` passed all 161 tests with no
+failures or ignored tests, with `JANEX_TEST_JAVA8_HOME` selecting Corretto 8u452 alongside OpenJDK 25.
+`gradlew.bat check --rerun-tasks --no-build-cache --console=plain`, workspace Clippy with
+`-D warnings`, `cargo fmt --all -- --check`, and `git diff --check` passed. The rebuilt bootstrap
+matched the checked-in JAR byte for byte. The BlobPool fixture also passed after its Clippy cleanup.
+
+The acceptance evidence is maintained in `janex-host/tests`:
+
+- `reader_container`, `reader_authentication`, and `reader_checksums`: original wire bytes,
+  verification boundaries, coverage, all algorithms, and bounded streaming.
+- `reader_cbor`, `reader_blobs`, `reader_dictionaries`, `reader_archives`, and `reader_limits`:
+  binary framing, paging, Extents, compression, wrappers, malformed input, and inherited limits.
+- `reader_applications`, `reader_conditions`, `reader_launch_selection`, `reader_purls`,
+  `reader_resources`, and `reader_classfiles`: metadata, selection, names, links, and transforms.
+- `standalone`, `standalone_agents`, `standalone_modules`, and `standalone_dependency`: launch
+  modes, arguments, access options, module requirements, agents, acquisition, and shared caches.
+
+Linux and macOS have not run this uncommitted tree; the existing three-platform CI matrix remains
+the platform acceptance gate after submission. Signature cryptography remains a caller/Host
+responsibility, and direct `java -jar` ZIP64 support remains bounded by the initial JVM, as documented.
+
 ### Standalone Java Launch
 
 `pack --with-launcher` appends the bootstrap JAR using the existing JAR Tail Wrapper. Metadata binds
 the tail's exact size and SHA-256 digest. Keep native bootstrap and direct launching available.
 The initial standalone profile supports embedded classpath/module roots, resource layers, shared
-string pools, Stored/Extents blobs, dictionary-free Zstandard, and CLASSFILE transforms on Java 8+.
-It requires SHA-256/SHA-512 metadata, section, and nonempty external-region checksums. It rejects
-signed packages, agents, virtual module requirements, ZIP64 JARs, external dictionaries, and
-unsupported startup options explicitly. Publisher authentication remains a Host capability.
+string pools, Stored/Extents blobs, Zstandard with raw and trained external dictionaries, and
+CLASSFILE transforms on Java 8+.
+It accepts None or Checksum metadata verification and checks every recorded container digest using
+the five specified algorithms. It rejects signed packages and unsupported startup options
+explicitly. Publisher authentication remains a Host capability.
+The reusable `ContainerReader` parses all four verification declarations without authenticating
+them, retains exact metadata and signature-input bytes, and verifies recorded integrity separately.
+`JanexReader` accepts a caller authentication policy for signed preparation, requires complete
+secure content coverage, and verifies integrity once before interpreting section bodies or acquiring
+dependencies. Default standalone launching does not supply a signature policy.
+Resolve virtual module requirements against system modules and indexed physical module roots,
+checking exact descriptor versions and conflicting constraints after overlay selection. Validate
+module resolution in a preparation JVM before executing agents or application entry points.
+Reject selected module paths on Java 8, including paths containing only virtual requirements.
+Selected local and remote agents are materialized from a separate resource index after all
+dependencies resolve. Preserve their order, unsplit options, manifests, and native premain lifecycle;
+prepare all agent JARs before the child starts and remove them after it exits or preparation fails.
+Verify agent-file checksums over restored original bytes before rewriting manifests.
+The reader supports ordinary and ZIP64 tails and dependency JARs. `Standalone.launch(Path, String[])`
+also supports executable ZIP64 tails by extracting the validated tail before bridge construction.
+Direct `java -jar` depends on the initial JVM's archive support: local OpenJDK 25 rejects the
+prefixed ZIP64 fixture before Janex starts. Keep the generated launcher tail in ordinary ZIP form.
 Resolve selected HTTP(S) JARs and exact Maven PURLs through a reader callback implemented by the
-bootstrap module. Share the Host's cache keys and records, verify SHA-256/SHA-512 pins, and support
+bootstrap module. Share the Host's cache keys and records, verify all five checksum algorithms, and support
 offline, refresh, and repository overrides. Import remote archives through the same resource index,
 retaining multi-release layers, automatic-module filenames, permissions, and symbolic links.
 Verify cache interchange in both directions, corruption repair, failed-download isolation, and
@@ -159,7 +248,7 @@ janex run [OPTIONS] <TARGET> [ARGS...]
   seekable channels, metadata, and explicit view lifetimes. All readers share the verified snapshot.
 - Materialize agents and direct-mode paths as JARs. Preserve the native agent lifecycle and keep
   direct classpath and module-path launching independently usable.
-- Decode external-dictionary blobs in the Host until the portable Java decoder supports dictionaries.
+- Decode external-dictionary blobs during preparation in both the Host and the standalone reader.
   Bound index size, logical expansion, and Java blob-cache retention. Resolve symbolic links before
   launching, rejecting dangling links, cycles, and root escapes.
 - Produce a structured execution plan, then start Java directly without a shell. Preserve JVM and

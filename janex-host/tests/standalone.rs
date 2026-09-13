@@ -155,8 +155,27 @@ public class Main {
     public static void main(String[] args) throws Exception {
         if (!Main.class.getModule().getName().equals("sample.app")) throw new AssertionError();
         java.util.logging.Logger.getLogger("sample");
+        Module application = Main.class.getModule();
+        Module base = Object.class.getModule();
+        Module sql = Class.forName("java.sql.Driver").getModule();
+        Module unnamed = new ClassLoader() {}.getUnnamedModule();
+        if (!application.canRead(sql) || !application.canRead(unnamed)) throw new AssertionError("reads");
+        if (!base.isExported("jdk.internal.misc", application)) throw new AssertionError("exports");
+        if (!base.isOpen("java.lang", application) || !base.isOpen("java.lang", unnamed)) throw new AssertionError("opens");
+        if (!String.class.getDeclaredField("value").trySetAccessible()) throw new AssertionError("reflection");
+        if (Boolean.getBoolean("check.native.access")) {
+            java.lang.reflect.Method enabled = Module.class.getMethod("isNativeAccessEnabled");
+            if (!Boolean.TRUE.equals(enabled.invoke(application)) || !Boolean.TRUE.equals(enabled.invoke(unnamed))) {
+                throw new AssertionError("native access");
+            }
+        }
         java.net.URL resource = Main.class.getResource("data.txt");
-        if (java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(resource.toURI()))[0] != 42) throw new AssertionError();
+        try (java.io.InputStream input = resource.openStream()) {
+            if (input.read() != 42) throw new AssertionError();
+        }
+        if (resource.getProtocol().equals("janex")) {
+            if (java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(resource.toURI()))[0] != 42) throw new AssertionError();
+        }
         System.exit(37);
     }
 }
@@ -181,18 +200,123 @@ public class Main {
     options.main_class = Some("app.Main".into());
     options.main_module = Some("sample.app".into());
     options.with_launcher = true;
-    pack(&options).unwrap();
-    let result = Command::new("java")
-        .arg("-jar")
-        .arg(options.output)
-        .output()
-        .unwrap();
-    assert_eq!(
-        result.status.code(),
-        Some(37),
-        "{}",
-        String::from_utf8_lossy(&result.stderr)
+    let java = janex_java::runtime::candidates(&janex_java::runtime::JavaOptions {
+        java: Some("java".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    let runtime = janex_java::runtime::JavaRuntime::probe(&java[0]).unwrap();
+    for separate in [false, true] {
+        options.output = temp.path().join(format!("module-{separate}.janex"));
+        options.jvm_options.clear();
+        let mut access = vec![
+            ("--add-modules", "java.sql,ALL-MODULE-PATH"),
+            ("--add-reads", "sample.app=java.sql,ALL-UNNAMED"),
+            ("--add-exports", "java.base/jdk.internal.misc=sample.app"),
+            ("--add-opens", "java.base/java.lang=sample.app,ALL-UNNAMED"),
+        ];
+        if runtime.feature >= 22 {
+            access.push(("--enable-native-access", "sample.app,ALL-UNNAMED"));
+            options
+                .jvm_options
+                .push("-Dcheck.native.access=true".into());
+        }
+        for (key, value) in access {
+            if separate {
+                options.jvm_options.extend([key.into(), value.into()]);
+            } else {
+                options.jvm_options.push(format!("{key}={value}"));
+            }
+        }
+        pack(&options).unwrap();
+        let result = Command::new("java")
+            .arg("-jar")
+            .arg(&options.output)
+            .output()
+            .unwrap();
+        assert_eq!(
+            result.status.code(),
+            Some(37),
+            "standalone (separate={separate}): {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        for mode in [LaunchMode::Bootstrap, LaunchMode::Direct] {
+            let mut run = RunOptions::new(&options.output);
+            run.java.java = Some(runtime.executable.clone());
+            run.allow_unsigned = true;
+            run.launch_mode = mode;
+            let plan = prepare(&run).unwrap();
+            let result = plan.command().output().unwrap();
+            assert_eq!(
+                result.status.code(),
+                Some(37),
+                "{mode:?} (separate={separate}): {}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+    }
+}
+
+#[test]
+fn invalid_bootstrap_module_options_fail_before_application_execution() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::write(
+        temp.path().join("Main.java"),
+        r#"
+public class Main {
+    public static void main(String[] args) {
+        System.out.println("application-started");
+    }
+}
+"#,
+    )
+    .unwrap();
+    javac(
+        temp.path(),
+        &["--release", "8", "-d", "classes", "Main.java"],
     );
+    let cases: &[&[&str]] = &[
+        &["--add-modules"],
+        &["--add-reads"],
+        &["--add-exports"],
+        &["--add-opens"],
+        &["--enable-native-access"],
+        &["--add-modules="],
+        &["--add-modules=missing.module"],
+        &["--add-reads=java.base"],
+        &["--add-reads", "java.base="],
+        &["--add-reads=missing.module=ALL-UNNAMED"],
+        &["--add-exports=java.base=ALL-UNNAMED"],
+        &["--add-exports=java.base/missing.package=ALL-UNNAMED"],
+        &["--add-opens", "java.base/java.lang=missing.module"],
+        &["--add-opens=java.base/java.lang=ALL-UNNAMED,"],
+        &["--patch-module=java.base=missing.jar"],
+        &["-Djava.system.class.loader=Main"],
+    ];
+    for (index, args) in cases.iter().enumerate() {
+        let mut options = PackOptions::new(
+            temp.path().join("classes"),
+            temp.path().join(format!("invalid-options-{index}.janex")),
+        );
+        options.main_class = Some("Main".into());
+        options.with_launcher = true;
+        options.jvm_options = args.iter().map(|arg| (*arg).into()).collect();
+        pack(&options).unwrap();
+        let mut run = RunOptions::new(&options.output);
+        run.allow_unsigned = true;
+        assert!(prepare(&run).is_err(), "native accepted {args:?}");
+        let result = Command::new("java")
+            .arg("-jar")
+            .arg(&options.output)
+            .output()
+            .unwrap();
+        assert!(
+            !result.status.success(),
+            "standalone accepted {args:?}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(!String::from_utf8_lossy(&result.stdout).contains("application-started"));
+    }
 }
 
 #[test]

@@ -246,6 +246,18 @@ public class Fixture {
         .unwrap();
     vector(&mut vectors, 1, true, &transformed, &original, &strings);
     count += 1;
+    let mut invalid_version = transformed.clone();
+    invalid_version[6..8].copy_from_slice(&0u16.to_be_bytes());
+    assert!(classfile::restore(&invalid_version, &strings, Limits::default()).is_err());
+    vector(
+        &mut vectors,
+        1,
+        false,
+        &invalid_version,
+        &original,
+        &strings,
+    );
+    count += 1;
     vector(
         &mut vectors,
         1,

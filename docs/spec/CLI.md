@@ -120,15 +120,31 @@ original JAR filenames are retained. Supply these properties before `-jar`:
 
 These settings govern preparation in the initial JVM; package JVM options cannot override them.
 Downloads allow five redirects, prohibit HTTPS downgrade, and are bounded to 60 seconds and 512 MiB
-per dependency. HTTP requires a SHA-256 or SHA-512 checksum. HTTPS may omit it; any declared checksum
-must use one of those two algorithms and is verified on downloads and cache hits. No POMs or
+per dependency. HTTP requires a SHA-256, SHA-512, or SM3 checksum. HTTPS may omit it; declared
+checksums support all five Janex algorithms and are verified on downloads and cache hits. No POMs or
 transitive dependencies are resolved. Offline cache misses and corruption fail; online corruption
 triggers reacquisition. Cache publication is atomic. See [Dependency Cache](../DependencyCache.md).
 
-The standalone profile requires SHA-256/SHA-512 integrity coverage. Signing options cannot be
-combined with `--with-launcher`. The Java reader rejects signed packages, agents, virtual module
-requirements, external Zstd dictionaries, ZIP64 JARs, and startup options requiring direct mode.
-Per-file checksums are not repeated after the complete encoded sections have been verified.
+The standalone reader accepts None or Checksum verification and checks all recorded container and
+blob-page digests using their declared algorithms. Missing checksums do not establish integrity.
+Raw and trained external Zstd dictionaries are supported, including Stored and Extents dictionary
+sources. Dictionary-backed resource data is decoded during preparation, matching the native Host.
+ZIP64 dependency JARs and tail discovery are supported. Direct `java -jar` still depends on the initial
+JVM accepting the prefixed archive; use `janex run` or the Java `Standalone.launch(Path, String[])`
+API for ZIP64 tails rejected by that JVM. `--with-launcher` produces an ordinary ZIP tail.
+Selected local and remote Java agents are prepared as JARs before the child starts. Their order,
+unsplit options, manifest capabilities, and native `premain` behavior are retained; temporary agent
+files are removed after the child exits or preparation fails. Recorded agent-file checksums are
+verified before manifest rewriting and before any selected agent executes.
+Virtual Java module requirements are checked against the current runtime and indexed module path,
+including exact descriptor versions. Module resolution is validated before any selected agent or
+application entry point executes. Virtual requirements do not download module providers; selected
+module paths require Java 9 or later.
+Signing options cannot be combined with `--with-launcher`. Default standalone launching rejects
+signed packages and startup options requiring direct mode.
+The reusable Java [reader APIs](../JavaReader.md) separate container parsing, recorded-integrity
+checks, and caller authentication policy; parsing a signature does not authorize execution.
+The runtime resource index does not repeat per-file checksums, matching native bootstrap launching.
 This entry point does not establish publisher trust:
 the appended launcher executes before it can check the package. Existing `janex run` bootstrap and
 direct modes remain available, including their signature and remote-dependency capabilities.

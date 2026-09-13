@@ -7,32 +7,37 @@ import java.io.*;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.*;
 
 import static org.janex.format.Input.*;
 
 /// Reads a Janex 0.1 snapshot independently of the native Host.
 ///
-/// This reader requires SHA-256 or SHA-512 metadata and complete section integrity coverage.
-/// It does not establish publisher trust and rejects signed packages, external dictionaries,
-/// and unsupported launch requirements. Ordinary resource payloads remain in the snapshot.
+/// This reader verifies every recorded container checksum before interpreting resources. Signed
+/// packages require a caller-supplied authentication policy and complete secure content coverage.
+/// Use [ContainerReader] to inspect a container without preparing it for execution. Ordinary resource payloads
+/// remain in the snapshot; dictionary-backed sources are decoded during launch preparation.
 /// The caller must keep the snapshot unchanged until the launched application exits.
 /// Instances are not thread-safe. Launch selection is single-use; closure is idempotent.
 public final class JanexReader implements Closeable {
-    /// Owned seekable snapshot handle.
-    private final RandomAccessFile file;
+    /// Owned container over the caller's immutable snapshot.
+    private final ContainerReader container;
+    /// Policy shared by nested decoding and launch-resource preparation.
+    private final ReadLimits limits;
     /// Snapshot path encoded into the private resource index.
     private final Path path;
+    /// Result of the one complete container-integrity scan performed during construction.
+    private final ContainerReader.IntegrityReport integrity;
     /// Caller-supplied Zstandard decoder, shared with the runtime resource reader.
     private final BlobDecoder decoder;
     /// Optional acquisition policy for external JARs, never owned or closed by this reader.
     private final DependencyResolver resolver;
-    /// Pools indexed by their opaque section IDs.
+    /// Pool sections whose type-specific page directories are interpreted on first reference.
+    private final Map<Long, ContainerReader.Section> poolSections = new LinkedHashMap<Long, ContainerReader.Section>();
+    /// Opened pools indexed by their opaque section IDs.
     private final Map<Long, Pool> pools = new LinkedHashMap<Long, Pool>();
-    /// Application descriptors paired with their type information.
-    private final List<Map<Object, Object>[]> applications = new ArrayList<Map<Object, Object>[]>();
+    /// Validated application descriptors in section order.
+    private final List<Application> applications = new ArrayList<Application>();
     /// Sources in dependency order, shared by all selected roots.
     private final List<Source> sources = new ArrayList<Source>();
     /// Decoded string pools in private-index order.
@@ -57,20 +62,67 @@ public final class JanexReader implements Closeable {
 
     /// Opens a snapshot with a caller-supplied external dependency policy.
     ///
+    /// Only None and Checksum verification are permitted. Signed packages require the constructor
+    /// accepting an [AuthenticationPolicy]. Every recorded container checksum is verified once.
+    ///
     /// @param path local snapshot kept unchanged until the application exits
     /// @param decoder decoder producing exactly the requested number of bytes
     /// @param resolver resolver called only for selected external entries, or null to reject them
     /// @throws IOException if opening or validating the snapshot fails
     public JanexReader(Path path, BlobDecoder decoder, DependencyResolver resolver) throws IOException {
+        this(path, decoder, resolver, null);
+    }
+
+    /// Opens a snapshot under a caller-supplied authentication and dependency policy.
+    ///
+    /// Authentication runs after framing validation and before content verification, section-body
+    /// interpretation, or dependency acquisition. A signed package must also have complete secure content coverage.
+    /// Failure closes the owned reader and never falls back to unsigned preparation.
+    ///
+    /// @param path snapshot kept unchanged until all returned resources are no longer used
+    /// @param decoder Zstandard decoder producing exactly the requested number of bytes
+    /// @param resolver selected external-JAR resolver, or null to reject external dependencies
+    /// @param policy authentication policy, or null to allow only None and Checksum verification
+    /// @throws IOException if parsing, authentication, integrity, or supported section schemas fail
+    public JanexReader(Path path, BlobDecoder decoder, DependencyResolver resolver, AuthenticationPolicy policy) throws IOException {
+        this(path, decoder, resolver, policy, ReadLimits.DEFAULT);
+    }
+
+    /// Opens and verifies a snapshot with explicit decoding and preparation limits.
+    ///
+    /// Authentication and ownership follow the constructor accepting [AuthenticationPolicy].
+    /// The policy also bounds decoded blobs, imported JAR data, expanded resources, and private
+    /// index output. Dependency resolvers and decoders must impose their own acquisition and
+    /// working-memory bounds; this reader checks their returned values before further use.
+    ///
+    /// @param path snapshot kept unchanged until all returned resources are no longer used
+    /// @param decoder Zstandard decoder producing exactly the requested number of bytes
+    /// @param resolver selected external-JAR resolver, or null to reject external dependencies
+    /// @param policy authentication policy, or null to allow only None and Checksum verification
+    /// @param limits nonnull policy inherited by nested decoding and preparation
+    /// @throws IOException if opening, authentication, validation, or a resource limit fails
+    public JanexReader(Path path, BlobDecoder decoder, DependencyResolver resolver,
+                       AuthenticationPolicy policy, ReadLimits limits) throws IOException {
+        this.limits = Objects.requireNonNull(limits);
         this.path = path;
         this.decoder = Objects.requireNonNull(decoder);
         this.resolver = resolver;
-        file = new RandomAccessFile(path.toFile(), "r");
+        container = new ContainerReader(path, -1, limits);
         try {
-            container();
+            ContainerReader.Verification verification = container.verification();
+            boolean signed = verification.type() == ContainerReader.Verification.Type.OPENPGP
+                    || verification.type() == ContainerReader.Verification.Type.CMS;
+            if (policy == null) {
+                require(!signed, "Signed packages require a caller authentication policy or Janex Host");
+            } else {
+                policy.authenticate(verification, container.verificationInput());
+            }
+            integrity = container.verifyChecksums();
+            require(!signed || integrity.completeSecureCoverage(), "Signed execution requires secure checksums covering the complete container");
+            loadSections();
         } catch (Throwable failure) {
             try {
-                file.close();
+                container.close();
             } catch (IOException close) {
                 failure.addSuppressed(close);
             }
@@ -78,180 +130,135 @@ public final class JanexReader implements Closeable {
         }
     }
 
-    /// Copies an exact physical range after checking file bounds and buffer limits.
+    /// Returns the physical offset of the snapshot's external tail.
+    ///
+    /// The offset equals the file length when no tail is present. It refers to the snapshot
+    /// validated during construction and remains available after this reader is closed.
+    ///
+    /// @return zero-based byte offset immediately after the Janex container
+    public long externalTailOffset() {
+        return container.end();
+    }
+
+    /// Returns the immutable integrity report retained from construction, including after closure.
+    ///
+    /// This report does not assert signature validity or publisher trust. Authentication decisions
+    /// belong to the supplied [AuthenticationPolicy]; the reader does not persist those decisions.
+    public ContainerReader.IntegrityReport integrity() {
+        return integrity;
+    }
+
+    /// Decides whether a declared verification mechanism and its exact input may be used for launching.
+    ///
+    /// For OpenPGP or CMS, an implementation must validate the Janex signature profile, cryptographic
+    /// signature, required signer identities, and its trust, algorithm, time, and revocation policies.
+    /// It must throw on failure. None and Checksum do not authenticate a publisher; a policy requiring
+    /// authentication must reject both. The format reader does not provide a cryptographic verifier.
+    @FunctionalInterface
+    public interface AuthenticationPolicy {
+        /// Authenticates a declaration or rejects preparation before application data is interpreted.
+        ///
+        /// This callback also receives unsigned declarations, allowing policies to require signing.
+        /// A normal return permits preparation to continue; it does not waive content-integrity checks.
+        /// Arguments are independent of the source channel. Modifying the input copy cannot change
+        /// the reader's retained bytes. The policy and any resources it uses remain caller-owned.
+        ///
+        /// @param verification immutable declaration; signature internals have not been validated
+        /// @param verificationInput owned copy of the original bytes that were signed or checksummed
+        /// @throws IOException if signature validation or caller policy rejects this package
+        void authenticate(ContainerReader.Verification verification, byte[] verificationInput) throws IOException;
+    }
+
+    /// Copies an exact physical range through the owned container reader.
     private byte[] read(long offset, long length) throws IOException {
-        int size = size(length);
-        require(offset >= 0 && offset <= file.length() - size, "Janex range exceeds snapshot");
-        byte[] result = new byte[size];
-        file.seek(offset);
-        file.readFully(result);
-        return result;
+        return container.read(offset, length);
     }
 
-    /// Locates the footer before an ordinary JAR tail, or at the physical end.
-    private long boundary() throws IOException {
-        long length = file.length();
-        Set<Long> candidates = new LinkedHashSet<Long>();
-        candidates.add(length);
-        long start = Math.max(0, length - 65557);
-        byte[] tail = read(start, length - start);
-        for (int i = 0; i <= tail.length - 22; i++) {
-            if (tail[i] != 'P' || tail[i + 1] != 'K' || tail[i + 2] != 5 || tail[i + 3] != 6) {
-                continue;
-            }
-            Input end = new Input(Arrays.copyOfRange(tail, i + 4, tail.length));
-            long disk = end.little(2);
-            long directoryDisk = end.little(2);
-            long diskEntries = end.little(2);
-            long entries = end.little(2);
-            long size = end.little(4);
-            long offset = end.little(4);
-            long comment = end.little(2);
-            if (i + 22 + comment != tail.length || disk != 0 || directoryDisk != 0 || entries != diskEntries
-                    || entries == 65535 || size == 0xffffffffL || offset == 0xffffffffL) {
-                continue;
-            }
-            long jar = start + i - size - offset;
-            if (jar >= 0 && size > 0 && offset > 0
-                    && Arrays.equals(read(jar, 4), new byte[]{'P', 'K', 3, 4})
-                    && Arrays.equals(read(jar + offset, 4), new byte[]{'P', 'K', 1, 2})) {
-                candidates.add(jar);
-            }
-        }
-        long result = -1;
-        for (long end : candidates) {
-            if (end >= 24 && Arrays.equals(read(end - 24, 8), "JANEXEND".getBytes(StandardCharsets.US_ASCII))) {
-                require(result == -1, "Ambiguous Janex boundary");
-                result = end;
-            }
-        }
-        require(result >= 0, "No Janex footer before an ordinary JAR tail");
-        return result;
+    /// Creates a nested cursor under this reader's policy.
+    private Input input(byte[] bytes) throws IOException {
+        return new Input(bytes, limits);
     }
 
-    /// Parses framing and verifies metadata, every section, and both external regions.
-    @SuppressWarnings("unchecked")
-    private void container() throws IOException {
-        long end = boundary();
-        Input footer = new Input(read(end - 16, 16));
-        long metadataLength = footer.little(8);
-        long length = footer.little(8);
-        require(length >= 32 && metadataLength >= 24 && metadataLength <= length - 8 && length <= end, "Invalid Janex footer lengths");
-        long start = end - length;
-        require(Arrays.equals(read(start, 8), new byte[]{'J', 'A', 'N', 'E', 'X', 0, 0, 0}), "Invalid Janex magic");
-        Input metadata = new Input(read(end - metadataLength, metadataLength - 24));
-        require(Arrays.equals(metadata.take(8), "METADATA".getBytes(StandardCharsets.US_ASCII)), "Invalid metadata magic");
-        require(metadata.little(4) == 0 && metadata.little(4) == 1, "Unsupported Janex version");
-        Map<Object, Object> values = metadata.map();
-        int verification = metadata.u8();
-        byte[] input = Arrays.copyOf(metadata.bytes, metadata.position);
-        require(verification == 1, "Standalone Java launch requires Checksum verification; use Janex Host for signed packages");
-        verify(metadata.sized(), input);
-        metadata.end();
-        region(get(values, 1), 0, start);
-        region(get(values, 2), end, file.length() - end);
-        long offset = start + 8;
-        Set<Long> ids = new HashSet<Long>();
+    /// Returns the immutable decoding and preparation policy, including after closure.
+    public ReadLimits limits() {
+        return limits;
+    }
+
+    /// Validates applications and indexes pool locations after authentication and the integrity scan.
+    private void loadSections() throws IOException {
         Set<String> applicationIds = new HashSet<String>();
-        for (Object item : list(get(values, 0))) {
-            Map<Object, Object> section = integers(map(item));
-            long type = number(get(section, 0));
-            long id = number(get(section, 1));
-            long size = number(get(section, 2));
-            require(size >= 0 && offset <= end - metadataLength && size <= end - metadataLength - offset,
-                    "Section exceeds Janex body");
-            require(ids.add(id), "Duplicate section ID");
-            verifyRange(binary(get(section, 3)), offset, size);
-            if (type == 0x4c4f4f50424f4c42L || type == 0x50504158454e414aL) {
-                require(size >= 8 && new Input(read(offset, 8)).little(8) == type, "Incorrect section magic");
-                Map<Object, Object> info = integers(map(get(section, 4)));
-                if (type == 0x4c4f4f50424f4c42L) {
-                    pools.put(id, new Pool(offset + 8, size - 8, info));
-                } else {
-                    Input body = new Input(read(offset + 8, size - 8));
-                    require(applicationIds.add(Conditions.nonempty(get(info, 0))), "Duplicate application ID");
-                    Conditions.nonempty(get(info, 1));
-                    applications.add(new Map[]{info, integers(body.map())});
-                    body.end();
-                }
+        for (ContainerReader.Section section : container.sections()) {
+            if (section.type() == 0x4c4f4f50424f4c42L) {
+                poolSections.put(section.id(), section);
+            } else if (section.type() == 0x50504158454e414aL) {
+                require(section.info != null, "Missing section type information");
+                Application application = new Application(container.readSection(section.id()), section.typeInfo(), limits);
+                require(applicationIds.add(application.id()), "Duplicate application ID");
+                applications.add(application);
             }
-            offset += size;
-        }
-        require(offset == end - metadataLength, "Section lengths do not cover Janex body");
-    }
-
-    /// Requires exact external-region lengths and secure checksums for nonempty regions.
-    private void region(Object value, long offset, long length) throws IOException {
-        Map<Object, Object> region = integers(map(value));
-        require(number(get(region, 0)) == length, "External region length mismatch");
-        if (length != 0 || has(region, 1)) {
-            verifyRange(binary(get(region, 1)), offset, length);
         }
     }
 
-    /// Verifies exact stored bytes using a fixed-size buffer.
-    private void verifyRange(byte[] checksum, long offset, long length) throws IOException {
-        require(checksum.length > 0, "Empty checksum");
-        String algorithm = checksum[0] == 0x21 ? "SHA-256" : checksum[0] == 0x22 ? "SHA-512" : null;
-        require(algorithm != null, "Standalone verification requires SHA-256 or SHA-512");
-        require(offset >= 0 && length >= 0 && offset <= file.length() - length, "Checksum range exceeds file");
-        try {
-            MessageDigest digest = MessageDigest.getInstance(algorithm);
-            file.seek(offset);
-            byte[] buffer = new byte[32768];
-            while (length != 0) {
-                int count = (int) Math.min(length, buffer.length);
-                file.readFully(buffer, 0, count);
-                digest.update(buffer, 0, count);
-                length -= count;
-            }
-            require(MessageDigest.isEqual(digest.digest(), Arrays.copyOfRange(checksum, 1, checksum.length)), "Janex checksum mismatch");
-        } catch (NoSuchAlgorithmException failure) {
-            throw new IOException("Required digest is unavailable", failure);
-        }
+    /// Returns an immutable list of validated applications, available after this reader is closed.
+    public List<Application> applications() {
+        return Collections.unmodifiableList(applications);
     }
 
-    /// Verifies a supported secure checksum over exact bytes.
+    /// Verifies a recorded metadata or page checksum over exact bytes.
     private static void verify(byte[] checksum, byte[] bytes) throws IOException {
-        require(checksum.length > 0, "Empty checksum");
-        String algorithm = checksum[0] == 0x21 ? "SHA-256" : checksum[0] == 0x22 ? "SHA-512" : null;
-        require(algorithm != null, "Standalone verification requires SHA-256 or SHA-512");
-        try {
-            byte[] actual = MessageDigest.getInstance(algorithm).digest(bytes);
-            require(MessageDigest.isEqual(actual, Arrays.copyOfRange(checksum, 1, checksum.length)), "Janex checksum mismatch");
-        } catch (NoSuchAlgorithmException failure) {
-            throw new IOException("Required digest is unavailable", failure);
-        }
+        Checksum.decode(checksum).verify(bytes);
     }
 
     /// Describes an independently decoded range and its reversed filter output lengths.
     private final class Encoding {
-        /// Number of stored bytes.
-        final int stored;
-        /// Filter output sizes in decoding order.
-        final int[] filters;
+        /// Unsigned stored length; allocation limits are applied when the range is read.
+        final long stored;
+        /// Unsigned filter output sizes in decoding order, checked before use.
+        final long[] filters;
+        /// Optional dictionary BlobRefs in decoding order.
+        final long[][] dictionaries;
 
-        /// Reads the binary BlobEncoding schema, rejecting unsupported methods and dictionaries.
+        /// Reads the binary BlobEncoding schema, rejecting unsupported methods.
         Encoding(Input input) throws IOException {
-            stored = size(input.uint());
-            filters = new int[count(input.uint())];
+            stored = input.uint();
+            filters = new long[limits.elements(input.uint())];
+            dictionaries = new long[filters.length][];
             for (int i = filters.length - 1; i >= 0; i--) {
-                filters[i] = size(input.uint());
+                filters[i] = input.uint();
                 require(input.u8() == 1, "Unsupported blob filter");
-                require(!has(integers(input.map()), 0), "External Zstd dictionaries require Janex Host");
+                Map<Object, Object> properties = integers(input.map());
+                if (has(properties, 0)) {
+                    List<Object> ref = list(get(properties, 0));
+                    require(ref.size() == 2, "Invalid dictionary BlobRef");
+                    dictionaries[i] = new long[]{number(ref.get(0)), number(ref.get(1))};
+                }
             }
         }
 
+        /// Returns whether any stage requires an external dictionary.
+        boolean hasDictionary() {
+            for (long[] dictionary : dictionaries) {
+                if (dictionary != null) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         /// Returns the final decoded length.
-        int length() {
+        long length() {
             return filters.length == 0 ? stored : filters[filters.length - 1];
         }
 
         /// Decodes all filter stages with exact output-size checks.
         byte[] decode(byte[] bytes) throws IOException {
-            for (int length : filters) {
+            for (int i = 0; i < filters.length; i++) {
+                int length = limits.bytes(filters[i]);
+                long[] ref = dictionaries[i];
+                byte[] dictionary = ref == null ? new byte[0] : bytes(reference(ref[0], ref[1]), true);
                 try {
-                    bytes = decoder.decode(bytes, length);
+                    ZstandardFrames.validate(bytes, limits);
+                    bytes = decoder.decode(bytes, length, dictionary);
                     require(bytes.length == length, "Zstd decoded length mismatch");
                 } catch (RuntimeException failure) {
                     throw new IOException("Invalid Zstd blob", failure);
@@ -269,14 +276,14 @@ public final class JanexReader implements Closeable {
         final long length;
         /// Page entry shift.
         final int shift;
-        /// Blob count.
-        final int count;
+        /// Logical blob count, independent of the number of cached entries.
+        final long count;
         /// Page descriptors in index order.
         final List<Object> pages;
         /// Decoded entry payloads, indexed by blob ID.
-        final Map<Integer, Input> entries = new HashMap<Integer, Input>();
+        final Map<Long, Input> entries = new HashMap<Long, Input>();
         /// Registered source IDs, indexed by blob ID.
-        final Map<Integer, Integer> sourceIds = new HashMap<Integer, Integer>();
+        final Map<Long, Integer> sourceIds = new HashMap<Long, Integer>();
         /// Registered physical ranges, used to reject overlap.
         final TreeMap<Long, Long> ranges = new TreeMap<Long, Long>();
 
@@ -284,18 +291,22 @@ public final class JanexReader implements Closeable {
         Pool(long start, long length, Map<Object, Object> info) throws IOException {
             this.start = start;
             this.length = length;
-            count = count(number(get(info, 0)));
+            count = number(get(info, 0));
             long shiftValue = number(get(info, 1));
             require(shiftValue >= 8 && shiftValue <= 12, "Invalid page entry shift");
             shift = (int) shiftValue;
             pages = list(get(info, 2));
-            require(pages.size() == (count == 0 ? 0 : 1 + ((count - 1) >> shift)), "Incorrect page count");
+            require(count >= 0 && pages.size() == (count == 0 ? 0 : 1 + ((count - 1) >> shift)), "Incorrect page count");
             for (Object page : pages) {
                 List<Object> fields = list(page);
                 require(fields.size() == 2 || fields.size() == 3, "Invalid page descriptor");
-                Input bytes = new Input(binary(fields.get(1)));
+                Input bytes = input(binary(fields.get(1)));
                 Encoding encoding = new Encoding(bytes);
+                require(!encoding.hasDictionary(), "Blob table pages must not reference dictionaries");
                 bytes.end();
+                if (fields.size() == 3) {
+                    Checksum.decode(binary(fields.get(2)));
+                }
                 range(number(fields.get(0)), encoding.stored);
             }
         }
@@ -314,41 +325,51 @@ public final class JanexReader implements Closeable {
         }
 
         /// Loads the containing page and returns a fresh entry cursor.
-        Input entry(int index) throws IOException {
+        Input entry(long index) throws IOException {
             require(index >= 0 && index < count, "Blob index exceeds pool");
             if (!entries.containsKey(index)) {
-                int first = (index >> shift) << shift;
-                List<Object> fields = list(pages.get(index >> shift));
-                Input encoded = new Input(binary(fields.get(1)));
+                long first = (index >> shift) << shift;
+                List<Object> fields = list(pages.get((int) (index >> shift)));
+                Input encoded = input(binary(fields.get(1)));
                 Encoding encoding = new Encoding(encoded);
                 byte[] decoded = encoding.decode(read(start + number(fields.get(0)), encoding.stored));
                 if (fields.size() == 3) {
                     verify(binary(fields.get(2)), decoded);
                 }
-                Input page = new Input(decoded);
-                for (int i = first; i < Math.min(count, first + (1 << shift)); i++) {
+                Input page = input(decoded);
+                for (long i = first; i < Math.min(count, first + (1 << shift)); i++) {
                     int tag = page.u8();
                     byte[] payload = page.sized();
                     byte[] record = new byte[payload.length + 1];
                     record[0] = (byte) tag;
                     System.arraycopy(payload, 0, record, 1, payload.length);
-                    Input entry = new Input(record);
+                    Input entry = input(record);
                     if (tag == 0) {
                         entry.u8();
                         long offset = entry.uint();
                         Encoding stored = new Encoding(entry);
                         range(offset, stored.stored);
                         entry.end();
+                    } else if (tag == 1) {
+                        entry.u8();
+                        int count = limits.elements(entry.uint());
+                        require(count != 0, "Empty extents");
+                        for (int extent = 0; extent < count; extent++) {
+                            entry.uint();
+                            entry.uint();
+                            require(entry.uint() != 0, "Zero-length blob extent");
+                        }
+                        entry.end();
                     }
-                    entries.put(i, new Input(record));
+                    entries.put(i, input(record));
                 }
                 page.end();
             }
-            return new Input(entries.get(index).bytes);
+            return input(entries.get(index).bytes);
         }
 
         /// Registers a source in dependency order, permitting only stored extent targets.
-        int source(int index, boolean storedOnly) throws IOException {
+        int source(long index, boolean storedOnly) throws IOException {
             Input entry = entry(index);
             int kind = entry.u8();
             require(!storedOnly || kind == 0, "Extent target must be stored");
@@ -360,20 +381,24 @@ public final class JanexReader implements Closeable {
             if (kind == 0) {
                 result.offset = start + entry.uint();
                 result.encoding = new Encoding(entry);
-                result.length = result.encoding.length();
+                result.length = limits.bytes(result.encoding.length());
+                limits.bytes(result.encoding.stored);
+                for (long length : result.encoding.filters) {
+                    limits.bytes(length);
+                }
             } else {
                 require(kind == 1, "Unsupported blob entry");
-                result.extents = new int[count(entry.uint())][3];
+                result.extents = new int[limits.elements(entry.uint())][3];
                 require(result.extents.length != 0, "Empty extents");
                 long total = 0;
                 for (int[] extent : result.extents) {
-                    extent[0] = source(count(entry.uint()), true);
-                    extent[1] = size(entry.uint());
-                    extent[2] = size(entry.uint());
+                    extent[0] = source(entry.uint(), true);
+                    extent[1] = limits.bytes(entry.uint());
+                    extent[2] = limits.bytes(entry.uint());
                     require(extent[2] > 0 && extent[1] <= sources.get(extent[0]).length - extent[2], "Invalid extent range");
                     total += extent[2];
                 }
-                result.length = size(total);
+                result.length = limits.bytes(total);
             }
             entry.end();
             int id = add(result);
@@ -398,7 +423,7 @@ public final class JanexReader implements Closeable {
 
     /// Appends a bounded source descriptor.
     private int add(Source source) throws IOException {
-        count(sources.size() + 1L);
+        limits.elements(sources.size() + 1L);
         int index = sources.size();
         sources.add(source);
         return index;
@@ -406,6 +431,7 @@ public final class JanexReader implements Closeable {
 
     /// Registers owned inline bytes.
     private int inline(byte[] bytes) throws IOException {
+        limits.bytes(bytes.length);
         Source source = new Source();
         source.inline = bytes;
         source.length = bytes.length;
@@ -426,13 +452,27 @@ public final class JanexReader implements Closeable {
 
     /// Checks section identity and resolves one blob source.
     private int reference(long pool, long index) throws IOException {
-        require(pools.containsKey(pool), "Unknown BlobPool section");
-        return pools.get(pool).source(count(index), false);
+        Pool opened = pools.get(pool);
+        if (opened == null) {
+            ContainerReader.Section section = poolSections.get(pool);
+            require(section != null, "Unknown BlobPool section");
+            require(section.info != null, "Missing BlobPool type information");
+            opened = new Pool(section.offset() + 8, section.length() - 8, section.info);
+            pools.put(pool, opened);
+        }
+        return opened.source(index, false);
     }
 
     /// Reads a complete logical blob; ordinary file data is instead read lazily by ResourceIndex.
     private byte[] bytes(int index) throws IOException {
+        return bytes(index, false);
+    }
+
+    /// Reads a logical blob, forbidding dictionary references in dictionary source encodings.
+    private byte[] bytes(int index, boolean dictionary) throws IOException {
         Source source = sources.get(index);
+        require(!dictionary || source.encoding == null || !source.encoding.hasDictionary(),
+                "Dictionary decoding must not reference another dictionary");
         if (source.inline != null) {
             return source.inline;
         }
@@ -442,7 +482,7 @@ public final class JanexReader implements Closeable {
         byte[] result = new byte[source.length];
         int offset = 0;
         for (int[] extent : source.extents) {
-            System.arraycopy(bytes(extent[0]), extent[1], result, offset, extent[2]);
+            System.arraycopy(bytes(extent[0], dictionary), extent[1], result, offset, extent[2]);
             offset += extent[2];
         }
         return result;
@@ -455,8 +495,8 @@ public final class JanexReader implements Closeable {
         if (previous != null) {
             return previous;
         }
-        Input input = new Input(bytes(reference(pool, index)));
-        String[] values = new String[count(input.uint())];
+        Input input = input(bytes(reference(pool, index)));
+        String[] values = new String[limits.elements(input.uint())];
         Set<String> unique = new HashSet<String>();
         for (int i = 0; i < values.length; i++) {
             values[i] = input.string();
@@ -487,12 +527,15 @@ public final class JanexReader implements Closeable {
         if (!value.isEmpty()) {
             return value;
         }
-        int count = count(input.uint());
+        int count = limits.elements(input.uint());
         require(count >= 2, "Concatenation needs at least two strings");
         StringBuilder result = new StringBuilder();
+        long length = 0;
         for (int i = 0; i < count; i++) {
-            result.append(string(pool, input.uint()));
-            size(result.length() * 2L);
+            String part = string(pool, input.uint());
+            length += limits.text(part);
+            limits.bytes(length);
+            result.append(part);
         }
         require(result.length() != 0, "Empty resource name");
         return result.toString();
@@ -508,6 +551,14 @@ public final class JanexReader implements Closeable {
         String target;
         /// Exact resource metadata.
         Map<Object, Object> metadata = Collections.emptyMap();
+        /// Whether this file's sources and explicit transform pools still need registration.
+        boolean pending;
+        /// Deferred inline bytes, or null for a blob reference.
+        byte[] inline;
+        /// Deferred file BlobRef, when inline bytes are absent.
+        long[] reference;
+        /// Optional explicit pool references in decoding order.
+        long[][] transformPools;
     }
 
     /// Reads content descriptors and resolves explicit transform pools.
@@ -515,34 +566,65 @@ public final class JanexReader implements Closeable {
         Node node = new Node();
         int kind = input.u8();
         require(kind == 0 || kind == 1, "Unsupported content source");
-        node.source = kind == 0 ? inline(input.sized()) : reference(input);
-        node.transforms = new int[count(input.uint())][2];
+        node.source = 0;
+        node.pending = true;
+        if (kind == 0) {
+            node.inline = input.sized();
+        } else {
+            node.reference = new long[]{input.uint(), input.uint()};
+        }
+        node.transforms = new int[limits.elements(input.uint())][2];
+        node.transformPools = new long[node.transforms.length][];
         require(!directory || node.transforms.length == 0, "Directory content cannot have transforms");
         for (int i = node.transforms.length - 1; i >= 0; i--) {
-            node.transforms[i][0] = size(input.uint());
+            node.transforms[i][0] = limits.bytes(input.uint());
             require(input.u8() == 1, "Unsupported content transform");
             Map<Object, Object> properties = integers(input.map());
             if (has(properties, 0)) {
                 List<Object> ref = list(get(properties, 0));
                 require(ref.size() == 2, "Invalid transform pool reference");
-                node.transforms[i][1] = stringPool(number(ref.get(0)), number(ref.get(1)));
+                node.transformPools[i] = new long[]{number(ref.get(0)), number(ref.get(1))};
             } else {
                 node.transforms[i][1] = pool;
             }
         }
+        if (directory) {
+            materialize(node);
+        }
         return node;
     }
 
+    /// Registers sources and override pools only for selected files or required directory arrays.
+    private void materialize(Node node) throws IOException {
+        if (node.pending) {
+            node.source = node.inline != null ? inline(node.inline) : reference(node.reference[0], node.reference[1]);
+            for (int i = 0; i < node.transforms.length; i++) {
+                long[] reference = node.transformPools[i];
+                if (reference != null) {
+                    node.transforms[i][1] = stringPool(reference[0], reference[1]);
+                }
+            }
+            node.pending = false;
+        }
+    }
+
     /// Requires a normalized root-relative resource path or one valid entry component.
-    private static void path(String path, boolean component) throws IOException {
+    private void path(String path, boolean component) throws IOException {
+        path(path, component, false);
+    }
+
+    /// Checks UTF-8 path length and component count, optionally allowing relative navigation.
+    private void path(String path, boolean component, boolean navigation) throws IOException {
+        limits.text(path);
         require(!component || !path.isEmpty(), "Empty entry name");
         if (path.isEmpty()) {
             return;
         }
         String[] parts = path.split("/", -1);
+        limits.elements(parts.length);
         require(!component || parts.length == 1, "Entry name contains slash");
         for (String part : parts) {
-            require(!part.isEmpty() && !part.equals(".") && !part.equals(".."), "Invalid resource path");
+            require(!part.isEmpty() && (navigation || !part.equals(".") && !part.equals("..")), "Invalid resource path");
         }
     }
 
@@ -551,12 +633,29 @@ public final class JanexReader implements Closeable {
         return parent.isEmpty() ? name : parent + "/" + name;
     }
 
+    /// Compares valid Unicode text in UTF-8 order without allocating encoded copies.
+    private static int compareText(String left, String right) {
+        int l = 0;
+        int r = 0;
+        while (l < left.length() && r < right.length()) {
+            int a = left.codePointAt(l);
+            int b = right.codePointAt(r);
+            if (a != b) {
+                return Integer.compare(a, b);
+            }
+            l += Character.charCount(a);
+            r += Character.charCount(b);
+        }
+        return Integer.compare(left.length() - l, right.length() - r);
+    }
+
     /// Inserts missing directory parents while rejecting file/directory conflicts.
-    private static void directory(Map<String, Node> tree, String path) throws IOException {
+    private void directory(Map<String, Node> tree, String path) throws IOException {
         for (String current = path;;) {
             Node existing = tree.get(current);
             require(existing == null || existing.source == -1, "Resource file/directory conflict");
             if (existing == null) {
+                limits.elements(tree.size() + 1L);
                 tree.put(current, new Node());
             }
             int slash = current.lastIndexOf('/');
@@ -568,8 +667,8 @@ public final class JanexReader implements Closeable {
     }
 
     /// Reads and merges all layers, validating unmatched layers as well.
-    private Root root(Object reference, boolean module) throws IOException {
-        Input input = new Input(bytes(reference(reference)));
+    private Root root(Object reference, boolean module, boolean agent) throws IOException {
+        Input input = input(bytes(reference(reference)));
         int pool = stringPool(input.uint(), input.uint());
         Map<Object, Object> metadata = input.map();
         for (Object key : metadata.keySet()) {
@@ -578,35 +677,47 @@ public final class JanexReader implements Closeable {
         String jarName = metadata.containsKey("janex.java.jar_name") ? text(metadata.get("janex.java.jar_name")) : "resources.jar";
         require(jarName.endsWith(".jar") && jarName.indexOf('/') < 0 && jarName.indexOf('\\') < 0 && jarName.indexOf(0) < 0,
                 "Invalid root JAR filename");
-        Map<String, Node> tree = new TreeMap<String, Node>();
+        Map<String, Node> tree = new TreeMap<String, Node>(JanexReader::compareText);
         tree.put("", new Node());
-        int layers = count(input.uint());
+        int layers = limits.elements(input.uint());
         for (int layer = 0; layer < layers; layer++) {
             boolean matches = Conditions.matches(input.map());
             Map<String, Node> records = new LinkedHashMap<String, Node>();
             Set<String> tombstones = new LinkedHashSet<String>();
             Set<String> directories = new HashSet<String>();
+            directories.add("");
+            Set<String> files = new HashSet<String>();
             String previousDirectory = null;
-            int directoryCount = count(input.uint());
+            int directoryCount = limits.elements(input.uint());
             for (int d = 0; d < directoryCount; d++) {
                 String dir = string(pool, input.uint());
                 path(dir, false);
-                require(previousDirectory == null || compare(previousDirectory.getBytes(StandardCharsets.UTF_8), dir.getBytes(StandardCharsets.UTF_8)) < 0,
+                require(previousDirectory == null || compareText(previousDirectory, dir) < 0,
                         "Directories are not sorted and unique");
                 previousDirectory = dir;
                 Node directory = new Node();
                 directory.metadata = resourceMetadata(input.map(), -1);
                 require(records.put(dir, directory) == null, "Directory conflicts with entry");
-                directories.add(dir);
-                int entries = count(input.uint());
+                for (String current = dir;;) {
+                    directories.add(current);
+                    limits.elements(directories.size());
+                    int slash = current.lastIndexOf('/');
+                    if (slash < 0) {
+                        break;
+                    }
+                    current = current.substring(0, slash);
+                }
+                int entries = limits.elements(input.uint());
                 Node content = content(input, pool, true);
-                Input data = new Input(bytes(content.source));
+                Input data = input(bytes(content.source));
                 String previousName = null;
                 for (int e = 0; e < entries; e++) {
                     long type = data.little(4);
                     String name = name(data, pool);
                     path(name, true);
-                    require(previousName == null || compare(previousName.getBytes(StandardCharsets.UTF_8), name.getBytes(StandardCharsets.UTF_8)) < 0,
+                    String fullPath = join(dir, name);
+                    limits.text(fullPath);
+                    require(previousName == null || compareText(previousName, name) < 0,
                             "Directory entries are not sorted and unique");
                     previousName = name;
                     Node node;
@@ -619,29 +730,21 @@ public final class JanexReader implements Closeable {
                         node.source = type == 0x4c4d5953 ? -2 : -3;
                         if (node.source == -2) {
                             node.target = name(data, pool);
-                            for (String component : node.target.split("/", -1)) {
-                                require(!component.isEmpty(), "Invalid symbolic-link target");
-                            }
+                            path(node.target, false, true);
                             node.metadata = resourceMetadata(data.map(), -2);
                         }
                     }
                     if (node.source == -3) {
-                        tombstones.add(join(dir, name));
+                        tombstones.add(fullPath);
                     } else {
-                        require(records.put(join(dir, name), node) == null, "Conflicting resource paths");
+                        require(records.put(fullPath, node) == null, "Conflicting resource paths");
+                        files.add(fullPath);
+                        limits.elements(files.size());
                     }
                 }
                 data.end();
             }
-            // Validate implicit parents within the layer independently of its condition.
-            for (String dir : directories) {
-                for (String current = dir; !current.isEmpty();) {
-                    int slash = current.lastIndexOf('/');
-                    current = slash < 0 ? "" : current.substring(0, slash);
-                    Node parent = records.get(current);
-                    require(parent == null || parent.source == -1, "Conflicting implicit directory");
-                }
-            }
+            require(Collections.disjoint(directories, files), "Conflicting implicit directory");
             if (matches) {
                 for (String name : tombstones) {
                     Node old = tree.get(name);
@@ -659,17 +762,16 @@ public final class JanexReader implements Closeable {
                         require(!tree.containsKey(name) || tree.get(name).source != -1, "Entry conflicts with directory");
                     }
                     tree.put(name, record.getValue());
-                    count(tree.size());
+                    limits.elements(tree.size());
                 }
             }
         }
         input.end();
-        return finishRoot(jarName, module, tree);
+        return finishRoot(jarName, module, tree, agent);
     }
 
     /// Rewrites manifests and expands aliases for an imported or embedded root.
-    private Root finishRoot(String jarName, boolean module, Map<String, Node> tree) throws IOException {
-        runtimeManifests(tree);
+    private Root finishRoot(String jarName, boolean module, Map<String, Node> tree, boolean agent) throws IOException {
         Map<String, List<String>> children = new HashMap<String, List<String>>();
         for (String name : tree.keySet()) {
             if (!name.isEmpty()) {
@@ -679,38 +781,75 @@ public final class JanexReader implements Closeable {
             }
         }
         Map<String, Node> expanded = new LinkedHashMap<String, Node>();
-        expand(tree, children, "", "", expanded, new HashSet<String>());
+        expand(tree, children, "", "", expanded, new HashSet<String>(), agent);
         return new Root(jarName, module, expanded);
     }
 
-    /// Removes implicit JAR paths and stale signature attributes, matching native launch preparation.
-    private void runtimeManifests(Map<String, Node> tree) throws IOException {
-        for (Map.Entry<String, Node> entry : tree.entrySet()) {
-            Node node = entry.getValue();
-            if (entry.getKey().equalsIgnoreCase("META-INF/MANIFEST.MF") && node.source >= 0) {
-                require(node.transforms.length == 0, "Manifest cannot contain class-file transforms");
-                java.util.jar.Manifest manifest = new java.util.jar.Manifest(new ByteArrayInputStream(bytes(node.source)));
-                java.util.jar.Attributes main = manifest.getMainAttributes();
-                main.remove(java.util.jar.Attributes.Name.CLASS_PATH);
-                if (main.getValue(java.util.jar.Attributes.Name.MANIFEST_VERSION) == null) {
-                    main.put(java.util.jar.Attributes.Name.MANIFEST_VERSION, "1.0");
-                }
-                List<java.util.jar.Attributes> attributes = new ArrayList<java.util.jar.Attributes>(manifest.getEntries().values());
-                attributes.add(main);
-                for (java.util.jar.Attributes section : attributes) {
-                    Iterator<Object> keys = section.keySet().iterator();
-                    while (keys.hasNext()) {
-                        String key = keys.next().toString().toLowerCase(Locale.ROOT);
-                        if (key.equals("signature-version") || key.equals("magic") || key.endsWith("-digest") || key.contains("-digest-")) {
-                            keys.remove();
-                        }
-                    }
-                }
-                ByteArrayOutputStream output = new ByteArrayOutputStream();
-                manifest.write(output);
-                node.source = inline(output.toByteArray());
+    /// Identifies stale signature files directly inside META-INF, including expanded aliases.
+    private static boolean jarSignature(String path) {
+        int slash = path.lastIndexOf('/');
+        if (slash < 0 || !asciiEquals(path.substring(0, slash), "META-INF")) {
+            return false;
+        }
+        char[] units = path.substring(slash + 1).toCharArray();
+        for (int i = 0; i < units.length; i++) {
+            if (units[i] >= 'a' && units[i] <= 'z') {
+                units[i] -= 'a' - 'A';
             }
         }
+        String name = new String(units);
+        return name.startsWith("SIG-") || name.endsWith(".SF") || name.endsWith(".RSA")
+                || name.endsWith(".DSA") || name.endsWith(".EC");
+    }
+
+    /// Compares a resource path with an uppercase ASCII marker without Unicode case folding.
+    private static boolean asciiEquals(String value, String marker) {
+        if (value.length() != marker.length()) {
+            return false;
+        }
+        for (int i = 0; i < value.length(); i++) {
+            char unit = value.charAt(i);
+            if (unit >= 'a' && unit <= 'z') {
+                unit -= 'a' - 'A';
+            }
+            if (unit != marker.charAt(i)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// Rewrites a JAR manifest for selected runtime resources.
+    ///
+    /// Removes the main Class-Path attribute and signature-related attributes in all sections.
+    /// Other attributes, including agent capabilities, are retained. A missing Manifest-Version
+    /// is supplied as 1.0. The input is not modified. Original-content checksums do not describe
+    /// the returned bytes.
+    ///
+    /// @param bytes complete original manifest bytes
+    /// @return newly encoded manifest bytes
+    /// @throws IOException if the manifest cannot be parsed or encoded
+    public static byte[] runtimeManifest(byte[] bytes) throws IOException {
+        java.util.jar.Manifest manifest = new java.util.jar.Manifest(new ByteArrayInputStream(bytes));
+        java.util.jar.Attributes main = manifest.getMainAttributes();
+        main.remove(java.util.jar.Attributes.Name.CLASS_PATH);
+        if (main.getValue(java.util.jar.Attributes.Name.MANIFEST_VERSION) == null) {
+            main.put(java.util.jar.Attributes.Name.MANIFEST_VERSION, "1.0");
+        }
+        List<java.util.jar.Attributes> attributes = new ArrayList<java.util.jar.Attributes>(manifest.getEntries().values());
+        attributes.add(main);
+        for (java.util.jar.Attributes section : attributes) {
+            Iterator<Object> keys = section.keySet().iterator();
+            while (keys.hasNext()) {
+                String key = keys.next().toString().toLowerCase(Locale.ROOT);
+                if (key.equals("signature-version") || key.equals("magic") || key.endsWith("-digest") || key.contains("-digest-")) {
+                    keys.remove();
+                }
+            }
+        }
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        manifest.write(output);
+        return output.toByteArray();
     }
 
     /// Checks resource metadata, preserving exact timestamps and mode zero.
@@ -718,27 +857,7 @@ public final class JanexReader implements Closeable {
         integers(metadata);
         if (has(metadata, 0)) {
             require(kind >= 0, "Checksum is only valid for files");
-            byte[] checksum = binary(get(metadata, 0));
-            require(checksum.length > 0, "Empty file checksum");
-            int length;
-            switch (checksum[0]) {
-                case 0x11:
-                    length = 8;
-                    break;
-                case 0x12:
-                    length = 16;
-                    break;
-                case 0x21:
-                case 0x31:
-                    length = 32;
-                    break;
-                case 0x22:
-                    length = 64;
-                    break;
-                default:
-                    throw new IOException("Unsupported file checksum algorithm");
-            }
-            require(checksum.length == length + 1, "Invalid file checksum length");
+            Checksum.decode(binary(get(metadata, 0)));
         }
         if (has(metadata, 1)) {
             text(get(metadata, 1));
@@ -766,9 +885,16 @@ public final class JanexReader implements Closeable {
     }
 
     /// Resolves links component by component without escaping the resource root.
-    private static String resolve(Map<String, Node> tree, String path, Set<String> links) throws IOException {
+    private String resolve(Map<String, Node> tree, String path) throws IOException {
+        path(path, false, true);
+        Deque<String> pending = new ArrayDeque<String>();
+        if (!path.isEmpty()) {
+            Collections.addAll(pending, path.split("/", -1));
+        }
+        int followed = 0;
         String current = "";
-        for (String component : path.split("/", -1)) {
+        while (!pending.isEmpty()) {
+            String component = pending.removeFirst();
             Node parent = tree.get(current);
             require(parent != null && parent.source == -1, "Symbolic link traverses a file");
             if (component.equals(".")) {
@@ -780,16 +906,17 @@ public final class JanexReader implements Closeable {
                 current = slash < 0 ? "" : current.substring(0, slash);
                 continue;
             }
-            if (component.isEmpty() && path.isEmpty()) {
-                continue;
-            }
             String next = join(current, component);
+            limits.text(next);
             Node node = tree.get(next);
             require(node != null, "Dangling symbolic link");
             if (node.source == -2) {
-                require(links.size() < 64 && links.add(next), "Symbolic-link cycle");
-                current = resolve(tree, join(current, node.target), links);
-                links.remove(next);
+                limits.depth(++followed);
+                String[] target = node.target.split("/", -1);
+                limits.elements((long) pending.size() + target.length);
+                for (int i = target.length - 1; i >= 0; i--) {
+                    pending.addFirst(target[i]);
+                }
             } else {
                 current = next;
             }
@@ -799,30 +926,50 @@ public final class JanexReader implements Closeable {
 
     /// Expands directory aliases into the shared resource-index representation.
     private void expand(Map<String, Node> tree, Map<String, List<String>> children, String canonical, String alias,
-                        Map<String, Node> output, Set<String> active) throws IOException {
-        require(active.size() < 256, "Resource directory depth limit exceeded");
+                        Map<String, Node> output, Set<String> active, boolean agent) throws IOException {
         Node node = tree.get(canonical);
         if (node.source == -2) {
-            canonical = resolve(tree, canonical, new HashSet<String>());
+            canonical = resolve(tree, canonical);
             node = tree.get(canonical);
         }
-        require(output.put(alias, node) == null, "Duplicate expanded resource");
-        count(output.size());
+        limits.text(alias);
+        if (node.source >= 0) {
+            if (jarSignature(alias)) {
+                return;
+            }
+            materialize(node);
+            if (!agent && asciiEquals(alias, "META-INF/MANIFEST.MF")) {
+                require(node.transforms.length == 0, "Manifest cannot contain class-file transforms");
+                byte[] original = bytes(node.source);
+                if (has(node.metadata, 0)) {
+                    verify(binary(get(node.metadata, 0)), original);
+                }
+                Node manifest = new Node();
+                manifest.source = inline(runtimeManifest(original));
+                manifest.metadata = node.metadata;
+                node = manifest;
+            }
+        }
+        if (!alias.isEmpty()) {
+            require(output.put(alias, node) == null, "Duplicate expanded resource");
+            limits.elements(output.size());
+        }
         if (node.source >= 0) {
             logicalBytes += node.transforms.length == 0 ? sources.get(node.source).length : node.transforms[node.transforms.length - 1][0];
-            size(logicalBytes);
+            limits.bytes(logicalBytes);
             return;
         }
+        limits.depth(active.size());
         require(active.add(canonical), "Directory-link cycle");
         String prefix = canonical.isEmpty() ? "" : canonical + "/";
         for (String child : children.getOrDefault(canonical, Collections.emptyList())) {
             String name = child.substring(prefix.length());
-            expand(tree, children, child, join(alias, name), output, active);
+            expand(tree, children, child, join(alias, name), output, active, agent);
         }
         active.remove(canonical);
     }
 
-    /// One selected root in classpath or module-path order.
+    /// One selected application or agent resource root.
     private static final class Root {
         /// Original JAR filename.
         final String name;
@@ -849,8 +996,17 @@ public final class JanexReader implements Closeable {
         public final List<String> arguments = new ArrayList<String>();
         /// JVM options in application order.
         public final List<String> options = new ArrayList<String>();
+        /// Selected module names and exact versions; an empty version accepts any descriptor version.
+        /// The launcher checks these requirements against the runtime and indexed module path.
+        public final Map<String, String> moduleRequirements = new LinkedHashMap<String, String>();
         /// Host-compatible resource index referencing the snapshot.
         public byte[] resources;
+        /// Resource index containing the selected agent roots in option order, or null when absent.
+        public byte[] agentResources;
+        /// One unsplit option for each root in agentResources; an empty string omits the option.
+        public final List<String> agentOptions = new ArrayList<String>();
+        /// Original file checksums by resource path, one map per agent root, verified before manifest rewriting.
+        public final List<Map<String, byte[]>> agentChecksums = new ArrayList<Map<String, byte[]>>();
         /// Selected physical and external classpath entries.
         private final List<Object> classPath = new ArrayList<Object>();
         /// Selected physical and external module-path entries.
@@ -876,36 +1032,110 @@ public final class JanexReader implements Closeable {
     public Launch launch(String application) throws IOException {
         require(!closed && !selected, "Janex reader is closed or already selected");
         selected = true;
-        Map<Object, Object>[] selected = null;
-        for (Map<Object, Object>[] candidate : applications) {
-            if (application == null || application.equals(text(get(candidate[0], 0)))) {
+        Application selected = null;
+        for (Application candidate : applications) {
+            if (application == null || application.equals(candidate.id())) {
                 require(selected == null, "Multiple applications; set -Djanex.application=ID");
                 selected = candidate;
             }
         }
         require(selected != null, "No matching Janex application");
-        require(text(get(selected[0], 1)).equals("janex.java"), "Unsupported application type");
-        Map<Object, Object> descriptor = integers(map(get(selected[1], 0)));
+        require(selected.type().equals("janex.java"), "Unsupported application type");
+        Map<Object, Object> descriptor = selected.descriptor;
         Map<Object, Object> configuration = integers(map(get(descriptor, 0)));
         Launch launch = new Launch();
-        overlay(configuration, launch, true, 0);
+        overlay(configuration, launch, true, 0, 0, limits);
         require(launch.entryPoint, "No entry point for the current Java runtime");
-        require(launch.agents.isEmpty(), "Standalone Java agents are not yet supported; use Janex Host");
+        require(feature() >= 9 || launch.modulePath.isEmpty() && launch.mainModule.isEmpty(),
+                "Modules require Java 9 or later");
         List<Root> roots = new ArrayList<Root>();
         for (Object entry : launch.classPath) {
             roots.add(pathEntry(entry, false));
         }
         for (Object entry : launch.modulePath) {
-            roots.add(pathEntry(entry, true));
+            Map<Object, Object> reference = map(entry);
+            ModuleRequirement requirement = number(get(reference, 0)) == 1
+                    ? ModuleRequirement.parse(text(get(reference, 1)), true) : null;
+            if (requirement == null) {
+                roots.add(pathEntry(entry, true));
+            } else {
+                String previous = launch.moduleRequirements.get(requirement.name);
+                require(previous == null || previous.isEmpty() || requirement.version.isEmpty()
+                        || previous.equals(requirement.version), "Conflicting required module versions: " + requirement.name);
+                if (previous == null || !requirement.version.isEmpty()) {
+                    launch.moduleRequirements.put(requirement.name, requirement.version);
+                }
+            }
         }
-        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        List<Root> agents = new ArrayList<Root>();
+        for (Object value : launch.agents) {
+            Map<Object, Object> agent = integers(map(value));
+            Root root = pathEntry(get(agent, 0), false, true);
+            agents.add(root);
+            Map<String, byte[]> checksums = new LinkedHashMap<String, byte[]>();
+            for (Map.Entry<String, Node> entry : root.files.entrySet()) {
+                Node node = entry.getValue();
+                if (node.source >= 0 && has(node.metadata, 0)) {
+                    checksums.put(entry.getKey(), binary(get(node.metadata, 0)).clone());
+                }
+            }
+            launch.agentChecksums.add(checksums);
+            String option = text(get(agent, 1));
+            require(option.indexOf(0) < 0, "Java agent option contains a NUL character");
+            launch.agentOptions.add(option);
+        }
+        // The private index carries dictionary-backed data inline, as on the native Host path.
+        // Resolving dictionaries can register additional sources, so finish before writing the count.
+        long inlineLength = 0;
+        for (int i = 0; i < sources.size(); i++) {
+            Source source = sources.get(i);
+            if (source.inline != null || source.encoding != null && source.encoding.hasDictionary()) {
+                inlineLength += source.length;
+                limits.bytes(inlineLength);
+            }
+            if (source.encoding != null && source.encoding.hasDictionary()) {
+                source.inline = bytes(i);
+            }
+        }
+        launch.resources = index(roots, launch.moduleRequirements);
+        if (!agents.isEmpty()) {
+            launch.agentResources = index(agents, Collections.emptyMap());
+            limits.bytes((long) launch.resources.length + launch.agentResources.length);
+        }
+        return launch;
+    }
+
+    /// Serializes a selected root list against the shared source and string-pool tables.
+    private byte[] index(List<Root> roots, Map<String, String> requirements) throws IOException {
+        SortedSet<Integer> usedSources = new TreeSet<Integer>();
+        SortedSet<Integer> usedPools = new TreeSet<Integer>();
+        for (Root root : roots) {
+            for (Node node : root.files.values()) {
+                if (node.source >= 0) {
+                    collectSource(node.source, usedSources);
+                    for (int[] transform : node.transforms) {
+                        usedPools.add(transform[1]);
+                    }
+                }
+            }
+        }
+        Map<Integer, Integer> sourceIds = new HashMap<Integer, Integer>();
+        for (int id : usedSources) {
+            sourceIds.put(id, sourceIds.size());
+        }
+        Map<Integer, Integer> poolIds = new HashMap<Integer, Integer>();
+        for (int id : usedPools) {
+            poolIds.put(id, poolIds.size());
+        }
+        IndexBuffer buffer = new IndexBuffer();
         DataOutputStream output = new DataOutputStream(buffer);
         output.writeBytes("JNXRES01");
-        output.writeInt(MAX_BYTES);
-        output.writeInt(MAX_ELEMENTS);
-        string(output, path.toString());
-        output.writeInt(sources.size());
-        for (Source source : sources) {
+        output.writeInt(limits.maxBytes());
+        output.writeInt(limits.maxElements());
+        string(output, path.toString(), limits);
+        output.writeInt(usedSources.size());
+        for (int id : usedSources) {
+            Source source = sources.get(id);
             if (source.inline != null) {
                 output.writeByte(0);
                 output.writeInt(source.inline.length);
@@ -913,45 +1143,48 @@ public final class JanexReader implements Closeable {
             } else if (source.encoding != null) {
                 output.writeByte(1);
                 output.writeLong(source.offset);
-                output.writeInt(source.encoding.stored);
+                output.writeInt(limits.bytes(source.encoding.stored));
                 output.writeInt(source.encoding.filters.length);
-                for (int length : source.encoding.filters) {
-                    output.writeInt(length);
+                for (long length : source.encoding.filters) {
+                    output.writeInt(limits.bytes(length));
                 }
             } else {
                 output.writeByte(2);
                 output.writeInt(source.extents.length);
                 for (int[] extent : source.extents) {
-                    for (int value : extent) {
-                        output.writeInt(value);
-                    }
+                    output.writeInt(sourceIds.get(extent[0]));
+                    output.writeInt(extent[1]);
+                    output.writeInt(extent[2]);
                 }
             }
-            size(buffer.size());
         }
-        output.writeInt(strings.size());
-        for (String[] pool : strings) {
+        output.writeInt(usedPools.size());
+        for (int id : usedPools) {
+            String[] pool = strings.get(id);
             output.writeInt(pool.length);
             for (String value : pool) {
-                string(output, value);
+                string(output, value, limits);
             }
-            size(buffer.size());
         }
-        output.writeInt(0);
+        output.writeInt(requirements.size());
+        for (Map.Entry<String, String> requirement : requirements.entrySet()) {
+            string(output, requirement.getKey(), limits);
+            string(output, requirement.getValue(), limits);
+        }
         output.writeInt(roots.size());
         for (Root root : roots) {
-            string(output, root.name);
+            string(output, root.name, limits);
             output.writeBoolean(root.module);
             output.writeInt(root.files.size());
             for (Map.Entry<String, Node> entry : root.files.entrySet()) {
-                string(output, entry.getKey());
                 Node node = entry.getValue();
-                output.writeInt(node.source);
+                string(output, node.source == -1 ? entry.getKey() + "/" : entry.getKey(), limits);
+                output.writeInt(node.source < 0 ? node.source : sourceIds.get(node.source));
                 if (node.source >= 0) {
                     output.writeInt(node.transforms.length);
                     for (int[] transform : node.transforms) {
                         output.writeInt(transform[0]);
-                        output.writeInt(transform[1]);
+                        output.writeInt(poolIds.get(transform[1]));
                     }
                 }
                 int flags = 0;
@@ -974,19 +1207,64 @@ public final class JanexReader implements Closeable {
                 if (has(node.metadata, 5)) {
                     output.writeInt((int) number(get(node.metadata, 5)));
                 }
-                size(buffer.size());
             }
         }
-        launch.resources = buffer.toByteArray();
-        return launch;
+        return buffer.toByteArray();
+    }
+
+    /// Checks private-index growth before accepting each write.
+    private final class IndexBuffer extends OutputStream {
+        /// Accumulated index bytes, with bounded logical length.
+        private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+
+        /// Creates an empty index buffer under the enclosing reader's policy.
+        private IndexBuffer() {
+        }
+
+        /// Appends one byte after checking the prospective length.
+        @Override
+        public void write(int value) throws IOException {
+            limits.bytes((long) bytes.size() + 1);
+            bytes.write(value);
+        }
+
+        /// Appends a byte range after validating both its bounds and the prospective length.
+        @Override
+        public void write(byte[] value, int offset, int length) throws IOException {
+            if (offset < 0 || length < 0 || offset > value.length - length) {
+                throw new IndexOutOfBoundsException();
+            }
+            limits.bytes((long) bytes.size() + length);
+            bytes.write(value, offset, length);
+        }
+
+        /// Returns an owned copy of the completed index.
+        private byte[] toByteArray() {
+            return bytes.toByteArray();
+        }
+    }
+
+    /// Collects reachable source IDs while preserving the existing dependency order.
+    private void collectSource(int id, Set<Integer> used) {
+        Source source = sources.get(id);
+        if (used.add(id) && source.inline == null && source.extents != null) {
+            for (int[] extent : source.extents) {
+                collectSource(extent[0], used);
+            }
+        }
     }
 
     /// Resolves an embedded root or imports a caller-acquired external JAR.
     private Root pathEntry(Object value, boolean module) throws IOException {
+        return pathEntry(value, module, false);
+    }
+
+    /// Resolves a path entry, retaining original manifests for agent integrity verification.
+    private Root pathEntry(Object value, boolean module, boolean agent) throws IOException {
         Map<Object, Object> entry = integers(map(value));
         long kind = number(get(entry, 0));
         if (kind == 0) {
-            return root(get(entry, 1), module);
+            return root(get(entry, 1), module, agent);
         }
         require(kind == 1, "Unsupported Java path entry");
         String uri = Conditions.nonempty(get(entry, 1));
@@ -995,12 +1273,12 @@ public final class JanexReader implements Closeable {
         Dependency dependency = Objects.requireNonNull(resolver.resolve(uri, checksum));
         require(dependency.jarName.endsWith(".jar") && dependency.jarName.indexOf('/') < 0
                 && dependency.jarName.indexOf('\\') < 0 && dependency.jarName.indexOf(0) < 0, "Invalid dependency JAR filename");
-        return jarRoot(dependency, module);
+        return jarRoot(dependency, module, agent);
     }
 
     /// Imports bounded JAR entries and applies increasing multi-release layers for this runtime.
-    private Root jarRoot(Dependency dependency, boolean module) throws IOException {
-        List<JarArchive.Entry> entries = JarArchive.read(dependency.bytes);
+    private Root jarRoot(Dependency dependency, boolean module, boolean agent) throws IOException {
+        List<JarArchive.Entry> entries = JarArchive.read(dependency.bytes, limits);
         boolean multiRelease = false;
         for (JarArchive.Entry entry : entries) {
             if (entry.name.equals("META-INF/MANIFEST.MF")) {
@@ -1035,9 +1313,8 @@ public final class JanexReader implements Closeable {
                 node.source = -2;
                 node.target = utf8(entry.bytes);
                 require(node.target.indexOf(0) < 0, "Invalid JAR symbolic-link target");
-                for (String component : node.target.split("/", -1)) {
-                    require(!component.isEmpty(), "Invalid JAR symbolic-link target");
-                }
+                require(!node.target.isEmpty(), "Empty JAR symbolic-link target");
+                path(node.target, false, true);
             } else if (!directory) {
                 node.source = inline(entry.bytes);
             }
@@ -1045,11 +1322,11 @@ public final class JanexReader implements Closeable {
                 node.metadata = new LinkedHashMap<Object, Object>();
                 node.metadata.put(BigInteger.valueOf(5), BigInteger.valueOf(entry.mode & 07777));
             }
-            Map<String, Node> layer = layers.computeIfAbsent(version, ignored -> new TreeMap<String, Node>());
+            Map<String, Node> layer = layers.computeIfAbsent(version, ignored -> new TreeMap<String, Node>(JanexReader::compareText));
             require(layer.put(name, node) == null, "Conflicting JAR resource paths");
         }
-        Map<String, Node> tree = new TreeMap<String, Node>();
-        Map<String, Node> validation = new TreeMap<String, Node>();
+        Map<String, Node> tree = new TreeMap<String, Node>(JanexReader::compareText);
+        Map<String, Node> validation = new TreeMap<String, Node>(JanexReader::compareText);
         tree.put("", new Node());
         validation.put("", new Node());
         for (Map.Entry<Integer, Map<String, Node>> layer : layers.entrySet()) {
@@ -1058,11 +1335,11 @@ public final class JanexReader implements Closeable {
                 mergeJarLayer(tree, layer.getValue());
             }
         }
-        return finishRoot(dependency.jarName, module, tree);
+        return finishRoot(dependency.jarName, module, tree, agent);
     }
 
     /// Merges one JAR layer without permitting implicit file/directory replacement.
-    private static void mergeJarLayer(Map<String, Node> tree, Map<String, Node> layer) throws IOException {
+    private void mergeJarLayer(Map<String, Node> tree, Map<String, Node> layer) throws IOException {
         for (Map.Entry<String, Node> entry : layer.entrySet()) {
             String name = entry.getKey();
             if (entry.getValue().source == -1) {
@@ -1073,16 +1350,29 @@ public final class JanexReader implements Closeable {
                 require(!tree.containsKey(name) || tree.get(name).source != -1, "JAR file/directory conflict");
             }
             tree.put(name, entry.getValue());
-            count(tree.size());
+            limits.elements(tree.size());
         }
     }
 
-    /// Visits all configuration nodes for validation and applies matching overlays in order.
-    private void overlay(Map<Object, Object> config, Launch launch, boolean parent, int depth) throws IOException {
-        require(depth <= 64, "Launch overlay depth limit exceeded");
+    /// Validates every configuration branch without selecting a runtime or resolving resources.
+    static void validateConfiguration(Map<Object, Object> config, ReadLimits limits) throws IOException {
+        overlay(config, new Launch(), false, 0, 0, limits);
+    }
+
+    /// Applies matching overlays in order while validating all nodes; pending counts queued siblings.
+    private static void overlay(Map<Object, Object> config, Launch launch, boolean parent, int depth,
+                                int pending, ReadLimits limits) throws IOException {
+        limits.depth(depth);
         integers(config);
-        boolean matches = has(config, 0) ? Conditions.matches(map(get(config, 0))) : true;
-        matches &= parent;
+        boolean matches = parent;
+        if (has(config, 0)) {
+            Map<Object, Object> condition = map(get(config, 0));
+            if (parent) {
+                matches = Conditions.matches(condition);
+            } else {
+                Conditions.validate(condition);
+            }
+        }
         if (has(config, 1)) {
             Object value = get(config, 1);
             String mainClass = "";
@@ -1099,20 +1389,57 @@ public final class JanexReader implements Closeable {
                 launch.mainModule = mainModule;
             }
         }
-        append(config, 2, launch.modulePath, matches);
-        append(config, 3, launch.classPath, matches);
-        append(config, 4, launch.agents, matches);
-        appendStrings(config, 5, launch.options, matches);
-        appendStrings(config, 7, launch.arguments, matches);
+        for (int key = 2; key <= 3; key++) {
+            if (has(config, key) && get(config, key) != null) {
+                for (Object value : list(get(config, key))) {
+                    validatePathEntry(value, key == 2);
+                }
+            }
+        }
+        append(config, 2, launch.modulePath, matches, limits);
+        append(config, 3, launch.classPath, matches, limits);
+        if (has(config, 4) && get(config, 4) != null) {
+            for (Object value : list(get(config, 4))) {
+                Map<Object, Object> agent = integers(map(value));
+                validatePathEntry(get(agent, 0), false);
+                text(get(agent, 1));
+            }
+        }
+        append(config, 4, launch.agents, matches, limits);
+        appendStrings(config, 5, launch.options, matches, limits);
+        appendStrings(config, 7, launch.arguments, matches, limits);
         if (has(config, 6)) {
-            for (Object child : list(get(config, 6))) {
-                overlay(map(child), launch, matches, depth + 1);
+            List<Object> children = list(get(config, 6));
+            int remaining = matches ? limits.elements((long) pending + children.size()) : pending;
+            for (Object child : children) {
+                if (matches) {
+                    remaining--;
+                }
+                overlay(map(child), launch, matches, depth + 1, remaining, limits);
+            }
+        }
+    }
+
+    /// Checks path-reference structure and virtual-module placement, including inactive overlays.
+    private static void validatePathEntry(Object value, boolean module) throws IOException {
+        Map<Object, Object> reference = integers(map(value));
+        long kind = number(get(reference, 0));
+        require(kind == 0 || kind == 1, "Unsupported Java path entry");
+        if (kind == 0) {
+            List<Object> blob = list(get(reference, 1));
+            require(blob.size() == 2, "Invalid path BlobRef");
+            number(blob.get(0));
+            number(blob.get(1));
+        } else {
+            ModuleRequirement.parse(Conditions.nonempty(get(reference, 1)), module);
+            if (has(reference, 2)) {
+                Checksum.decode(binary(get(reference, 2)));
             }
         }
     }
 
     /// Appends or clears a selected list while validating its outer structure.
-    private static void append(Map<Object, Object> config, int key, List<Object> target, boolean matches) throws IOException {
+    private static void append(Map<Object, Object> config, int key, List<Object> target, boolean matches, ReadLimits limits) throws IOException {
         if (has(config, key)) {
             Object value = get(config, key);
             List<Object> items = value == null ? Collections.emptyList() : list(value);
@@ -1120,15 +1447,15 @@ public final class JanexReader implements Closeable {
                 if (value == null) {
                     target.clear();
                 } else {
+                    limits.elements((long) target.size() + items.size());
                     target.addAll(items);
-                    count(target.size());
                 }
             }
         }
     }
 
     /// Appends or clears a string list without splitting argument values.
-    private static void appendStrings(Map<Object, Object> config, int key, List<String> target, boolean matches) throws IOException {
+    private static void appendStrings(Map<Object, Object> config, int key, List<String> target, boolean matches, ReadLimits limits) throws IOException {
         if (has(config, key)) {
             Object value = get(config, key);
             List<String> items = new ArrayList<String>();
@@ -1141,8 +1468,8 @@ public final class JanexReader implements Closeable {
                 if (value == null) {
                     target.clear();
                 } else {
+                    limits.elements((long) target.size() + items.size());
                     target.addAll(items);
-                    count(target.size());
                 }
             }
         }
@@ -1154,7 +1481,12 @@ public final class JanexReader implements Closeable {
     /// @param value string whose code units are preserved
     /// @throws IOException if the string exceeds limits or writing fails
     public static void string(DataOutputStream output, String value) throws IOException {
-        size(value.length() * 2L);
+        string(output, value, ReadLimits.DEFAULT);
+    }
+
+    /// Writes private-index text after checking its UTF-16 byte length against the selected policy.
+    private static void string(DataOutputStream output, String value, ReadLimits limits) throws IOException {
+        limits.bytes(value.length() * 2L);
         output.writeInt(value.length());
         output.writeChars(value);
     }
@@ -1174,9 +1506,11 @@ public final class JanexReader implements Closeable {
         ///
         /// @param input encoded bytes that must not be modified
         /// @param length required decoded byte length, between zero and the reader's byte limit
+        /// @param dictionary decoded raw or formatted dictionary bytes, or an empty array when absent;
+        ///         the array must not be modified and must initialize every frame
         /// @return a new array containing exactly the decoded bytes
         /// @throws IOException if the input is invalid or cannot produce the required output
-        byte[] decode(byte[] input, int length) throws IOException;
+        byte[] decode(byte[] input, int length, byte[] dictionary) throws IOException;
     }
 
     /// Acquires an external JAR under the caller's network, cache, and integrity policy.
@@ -1214,7 +1548,7 @@ public final class JanexReader implements Closeable {
     public void close() throws IOException {
         if (!closed) {
             closed = true;
-            file.close();
+            container.close();
         }
     }
 }

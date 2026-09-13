@@ -64,6 +64,9 @@ public final class ResourceLoader extends URLClassLoader {
             try {
                 Class.forName("org.janex.bootstrap.ModuleSupport").getMethod("initialize", ResourceLoader.class).invoke(null, this);
             } catch (ClassNotFoundException java8) {
+                if (!index.requirements.isEmpty()) {
+                    throw new IOException("Module requirements need Java 9 or later");
+                }
                 for (Root root : allRoots) {
                     if (root.root.module) {
                         throw new IOException("Modules require Java 9 or later");

@@ -1421,7 +1421,7 @@ and external-region bytes.
 
 ## Package URLs
 
-Janex uses canonical [Package URLs](https://github.com/package-url/purl-spec) to name packages and
+Janex uses canonical [Package URLs (ECMA-427)](https://ecma-tc54.github.io/ECMA-427/) to name packages and
 resolvable requirements.
 
 ### The `janex` Type

@@ -41,6 +41,7 @@ pub mod container;
 pub mod content;
 mod error;
 pub mod localized;
+pub mod purl;
 pub mod resource;
 pub mod strings;
 pub mod version;

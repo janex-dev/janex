@@ -17,7 +17,6 @@ use crate::{
 use std::{
     collections::BTreeSet,
     io::{Read, Seek},
-    str::FromStr,
 };
 
 /// A Java entry point selected from the classpath or one named module.
@@ -123,7 +122,7 @@ impl PathEntry {
         let Self::External { uri, .. } = self else {
             return None;
         };
-        let purl = packageurl::PackageUrl::from_str(uri).ok()?;
+        let purl = crate::purl::parse(uri).ok()?;
         (purl.ty() == "janex" && purl.namespace() == Some("java-module"))
             .then(|| (purl.name().into(), purl.version().map(str::to_owned)))
     }
@@ -552,11 +551,7 @@ fn validate_uri(uri: &str, module_path: bool) -> Result<()> {
     let parsed =
         fluent_uri::Uri::parse(uri).map_err(|_| invalid("invalid external resource URI"))?;
     if parsed.scheme().as_str().eq_ignore_ascii_case("pkg") {
-        let purl =
-            packageurl::PackageUrl::from_str(uri).map_err(|_| invalid("invalid Package URL"))?;
-        if purl.to_string() != uri {
-            return Err(invalid("noncanonical Package URL"));
-        }
+        let purl = crate::purl::parse(uri)?;
         if purl.ty() == "janex"
             && (!module_path
                 || purl.namespace() != Some("java-module")

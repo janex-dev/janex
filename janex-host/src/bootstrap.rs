@@ -238,7 +238,7 @@ impl Builder<'_> {
                     dictionary |= filter.properties.get(0)?.is_some();
                 }
                 if dictionary {
-                    // The portable decoder does not implement external dictionaries.
+                    // The private resource index carries dictionary-backed sources inline.
                     let bytes = self.blobs.resolve(reference)?;
                     self.inline(&bytes)?
                 } else {

@@ -4,7 +4,6 @@
 package org.janex.format;
 
 import java.io.IOException;
-import java.math.BigInteger;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -19,11 +18,22 @@ final class Conditions {
 
     /// Validates a condition and returns whether it matches this runtime.
     static boolean matches(Map<Object, Object> condition) throws IOException {
+        return evaluate(condition, true);
+    }
+
+    /// Validates all known condition fields without consulting the current process.
+    static void validate(Map<Object, Object> condition) throws IOException {
+        evaluate(condition, false);
+    }
+
+    /// Validates a condition and optionally compares it with current process properties.
+    private static boolean evaluate(Map<Object, Object> condition, boolean current) throws IOException {
         integers(condition);
         require(!has(condition, 0) && !has(condition, 3), "Reserved condition key");
-        String os = System.getProperty("os.name");
-        os = os.startsWith("Windows") ? "windows" : os.equals("Mac OS X") ? "macos" : os.equals("Linux") ? "linux" : os;
-        String arch = System.getProperty("os.arch");
+        String os = current ? System.getProperty("os.name") : "";
+        os = os.startsWith("Windows") ? "windows" : os.equals("Mac OS X") ? "macos" : os.equals("Linux") ? "linux"
+                : os.equals("FreeBSD") ? "freebsd" : os;
+        String arch = current ? System.getProperty("os.arch") : "";
         arch = arch.equals("amd64") || arch.equals("x86_64") ? "x86-64"
                 : arch.matches("i[3-6]86") ? "x86" : arch.equals("arm64") ? "aarch64" : arch;
         boolean result = true;
@@ -42,10 +52,10 @@ final class Conditions {
             Map<Object, Object> requirements = integers(map(get(runtime, 1)));
             if (type.equals("janex.java")) {
                 if (has(requirements, 0)) {
-                    result &= range(nonempty(get(requirements, 0)), System.getProperty("java.version"));
+                    result &= range(nonempty(get(requirements, 0)), current ? System.getProperty("java.version") : "8");
                 }
                 if (has(requirements, 1)) {
-                    result &= nonempty(get(requirements, 1)).equals(System.getProperty("java.vendor"));
+                    result &= nonempty(get(requirements, 1)).equals(current ? System.getProperty("java.vendor") : "");
                 }
             } else {
                 result = false;
@@ -82,6 +92,7 @@ final class Conditions {
 
     /// Validates a canonical VERS timeline and tests one Java version.
     static boolean range(String text, String candidate) throws IOException {
+        Version current = new Version(candidate, false);
         require(text.startsWith("vers:jep322/") && text.matches("[!-~]+"), "Invalid Java VERS");
         String body = text.substring(12);
         if (body.equals("*")) {
@@ -109,7 +120,6 @@ final class Conditions {
             versions.add(version);
             operators.add(operator);
         }
-        Version current = new Version(candidate, false);
         boolean included = true;
         for (String operator : operators) {
             if (!operator.equals("!=")) {
@@ -145,19 +155,32 @@ final class Conditions {
 
         /// Parses a Java version, expanding Java 8 aliases.
         Version(String value, boolean canonical) throws IOException {
-            if (value.matches("8u[0-9]+")) {
+            if (value.startsWith("8u")) {
+                decimal(value.substring(2));
                 value = "8.0." + value.substring(2);
                 canonical = false;
             } else if (value.startsWith("1.8.0")) {
-                Matcher alias = Pattern.compile("1\\.8\\.0(?:_([0-9]+))?(?:-([A-Za-z0-9]+))?").matcher(value);
-                require(alias.matches(), "Invalid Java 8 alias");
-                String update = alias.group(1);
-                String suffix = alias.group(2);
-                if (update != null && suffix != null && suffix.matches("b[0-9]+")) {
-                    String build = suffix.substring(1);
-                    require(build.length() == 1 || !build.startsWith("0"), "Nonminimal Java 8 build");
-                    require(new BigInteger(build).bitLength() <= 31, "Java 8 build overflow");
-                    suffix = null;
+                String alias = value.substring(5);
+                String update = null;
+                String suffix = null;
+                if (alias.startsWith("_")) {
+                    int separator = alias.indexOf('-');
+                    update = alias.substring(1, separator < 0 ? alias.length() : separator);
+                    decimal(update);
+                    if (separator >= 0) {
+                        suffix = alias.substring(separator + 1);
+                        if (suffix.startsWith("b") && numeric(suffix.substring(1))) {
+                            decimal(suffix.substring(1));
+                            suffix = null;
+                        } else {
+                            versionText(suffix, false);
+                        }
+                    }
+                } else if (alias.startsWith("-")) {
+                    suffix = alias.substring(1);
+                    versionText(suffix, false);
+                } else {
+                    require(alias.isEmpty(), "Invalid Java 8 alias");
                 }
                 value = update == null ? "8" : "8.0." + update;
                 if (suffix != null) {
@@ -165,28 +188,46 @@ final class Conditions {
                 }
                 canonical = false;
             }
-            Matcher matcher = Pattern.compile("([0-9]+(?:\\.[0-9]+)*)(?:-([A-Za-z0-9]+))?(?:\\+([0-9]*))?(?:-([A-Za-z0-9.-]+))?").matcher(value);
-            require(matcher.matches(), "Invalid Java version");
-            String[] components = matcher.group(1).split("\\.");
+            int plus = value.indexOf('+');
+            String beforeBuild = plus < 0 ? value : value.substring(0, plus);
+            String build = plus < 0 ? null : value.substring(plus + 1);
+            String[] prefix = beforeBuild.split("-", 3);
+            String prerelease = prefix.length > 1 ? prefix[1] : null;
+            String optional = prefix.length > 2 ? prefix[2] : null;
+            String[] components = prefix[0].split("\\.", -1);
             numbers = new int[components.length];
             for (int i = 0; i < numbers.length; i++) {
-                String component = components[i];
-                require(component.length() == 1 || !component.startsWith("0"), "Nonminimal Java version");
-                BigInteger integer = new BigInteger(component);
-                require(integer.bitLength() <= 31, "Java version number overflow");
-                numbers[i] = integer.intValue();
+                numbers[i] = decimal(components[i]);
             }
             require(numbers[0] >= 8, "Java 8 or later is required");
             require(!canonical || numbers.length == 1 || numbers[numbers.length - 1] != 0, "Noncanonical VERS version");
-            pre = matcher.group(2);
-            String build = matcher.group(3);
+            if (prerelease != null) {
+                versionText(prerelease, false);
+            }
+            if (optional != null) {
+                versionText(optional, true);
+            }
             if (build != null) {
-                require(!build.isEmpty() || (pre == null && matcher.group(4) != null), "Empty Java build number");
-                require(build.length() <= 1 || !build.startsWith("0"), "Nonminimal Java build number");
+                require(optional == null, "Optional version information must follow the build");
+                int separator = build.indexOf('-');
+                optional = separator < 0 ? null : build.substring(separator + 1);
+                build = separator < 0 ? build : build.substring(0, separator);
+                require(!build.isEmpty() || (prerelease == null && optional != null), "Empty Java build number");
                 if (!build.isEmpty()) {
-                    require(new BigInteger(build).bitLength() <= 31, "Java build number overflow");
+                    decimal(build);
+                }
+                if (optional != null) {
+                    versionText(optional, true);
                 }
             }
+            if (prerelease != null && numeric(prerelease)) {
+                int start = 0;
+                while (start + 1 < prerelease.length() && prerelease.charAt(start) == '0') {
+                    start++;
+                }
+                prerelease = prerelease.substring(start);
+            }
+            pre = prerelease;
         }
 
         /// Compares numeric components and then prerelease identifiers.
@@ -201,12 +242,49 @@ final class Conditions {
             if (pre == null || other.pre == null) {
                 return pre == null ? other.pre == null ? 0 : 1 : -1;
             }
-            boolean numeric = pre.matches("[0-9]+");
-            boolean otherNumeric = other.pre.matches("[0-9]+");
+            boolean numeric = numeric(pre);
+            boolean otherNumeric = numeric(other.pre);
             if (numeric && otherNumeric) {
-                return new BigInteger(pre).compareTo(new BigInteger(other.pre));
+                int length = Integer.compare(pre.length(), other.pre.length());
+                return length != 0 ? length : pre.compareTo(other.pre);
             }
             return numeric != otherNumeric ? numeric ? -1 : 1 : pre.compareTo(other.pre);
+        }
+    }
+
+    /// Tests a nonempty ASCII decimal sequence.
+    private static boolean numeric(String value) {
+        if (value.isEmpty()) {
+            return false;
+        }
+        for (int index = 0; index < value.length(); index++) {
+            char ch = value.charAt(index);
+            if (ch < '0' || ch > '9') {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// Parses a minimally written nonnegative integer in the Runtime.Version range.
+    private static int decimal(String value) throws IOException {
+        require(numeric(value) && (value.length() == 1 || value.charAt(0) != '0'), "Invalid Java version number");
+        int result = 0;
+        for (int index = 0; index < value.length(); index++) {
+            int digit = value.charAt(index) - '0';
+            require(result <= (Integer.MAX_VALUE - digit) / 10, "Java version number overflow");
+            result = result * 10 + digit;
+        }
+        return result;
+    }
+
+    /// Checks a nonempty ASCII prerelease or optional-information component.
+    private static void versionText(String value, boolean optional) throws IOException {
+        require(!value.isEmpty(), "Empty Java version component");
+        for (int index = 0; index < value.length(); index++) {
+            char ch = value.charAt(index);
+            require(ch >= '0' && ch <= '9' || ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z'
+                    || optional && (ch == '.' || ch == '-'), "Invalid Java version component");
         }
     }
 }

@@ -14,37 +14,67 @@ import java.util.*;
 /// Reads bounded binary fields and deterministic CBOR without interpreting application schemas.
 final class Input {
     /// Maximum size of a buffered value.
-    static final int MAX_BYTES = 512 * 1024 * 1024;
+    static final int MAX_BYTES = ReadLimits.DEFAULT.maxBytes();
     /// Maximum number of collection elements.
     static final int MAX_ELEMENTS = 1_000_000;
     /// Owned or borrowed immutable input bytes.
     final byte[] bytes;
+    /// Policy inherited by nested fields.
+    final ReadLimits limits;
     /// Offset of the next unread byte.
     int position;
+    /// Optional original byte spans for decoded maps, keyed by object identity.
+    private final Map<Object, int[]> mapSpans;
+
+    /// Identifies malformed values separately from source I/O failures and resource limits.
+    static final class Invalid extends IOException {
+        /// Serialization identity for diagnostic transport.
+        private static final long serialVersionUID = 1L;
+
+        /// Creates a malformed-value diagnostic.
+        Invalid(String message) {
+            super(message);
+        }
+    }
 
     /// Borrows bytes that must remain unchanged while this cursor is used.
     Input(byte[] bytes) throws IOException {
-        size(bytes.length);
+        this(bytes, false);
+    }
+
+    /// Borrows input bytes and optionally records exact map encodings for metadata access.
+    Input(byte[] bytes, boolean recordMaps) throws IOException {
+        this(bytes, recordMaps, ReadLimits.DEFAULT);
+    }
+
+    /// Borrows input bytes under the supplied policy.
+    Input(byte[] bytes, ReadLimits limits) throws IOException {
+        this(bytes, false, limits);
+    }
+
+    /// Borrows bytes with optional map-span recording and inherited nested limits.
+    Input(byte[] bytes, boolean recordMaps, ReadLimits limits) throws IOException {
+        this.limits = Objects.requireNonNull(limits);
+        limits.bytes(bytes.length);
         this.bytes = bytes;
+        mapSpans = recordMaps ? new IdentityHashMap<Object, int[]>() : null;
     }
 
     /// Rejects failed format constraints.
     static void require(boolean valid, String message) throws IOException {
         if (!valid) {
-            throw new IOException(message);
+            throw new Invalid(message);
         }
     }
 
     /// Checks a bounded nonnegative byte length.
     static int size(long value) throws IOException {
-        require(value >= 0 && value <= MAX_BYTES, "Janex byte limit exceeded");
-        return (int) value;
+        return ReadLimits.DEFAULT.bytes(value);
     }
 
     /// Checks a bounded collection length.
     static int count(long value) throws IOException {
-        require(value >= 0 && value <= MAX_ELEMENTS, "Janex element limit exceeded");
-        return (int) value;
+        return ReadLimits.DEFAULT.elements(value);
     }
 
     /// Reads one unsigned byte.
@@ -73,12 +103,12 @@ final class Input {
                 return result;
             }
         }
-        throw new IOException("ULEB128 overflow");
+        throw new Invalid("ULEB128 overflow");
     }
 
     /// Copies an exact bounded byte range and advances the cursor.
     byte[] take(long length) throws IOException {
-        int size = size(length);
+        int size = limits.bytes(length);
         require(size <= bytes.length - position, "Truncated Janex value");
         byte[] result = Arrays.copyOfRange(bytes, position, position + size);
         position += size;
@@ -103,7 +133,9 @@ final class Input {
                     .onUnmappableCharacter(CodingErrorAction.REPORT)
                     .decode(ByteBuffer.wrap(bytes)).toString();
         } catch (CharacterCodingException failure) {
-            throw new IOException("Invalid UTF-8", failure);
+            Invalid invalid = new Invalid("Invalid UTF-8");
+            invalid.initCause(failure);
+            throw invalid;
         }
     }
 
@@ -113,11 +145,17 @@ final class Input {
         if (value.length == 0) {
             return Collections.emptyMap();
         }
-        Input input = new Input(value);
+        Input input = new Input(value, limits);
         Map<Object, Object> result = map(input.cbor(0));
         input.end();
         require(!result.isEmpty(), "Empty sized CBOR map must use zero length");
         return result;
+    }
+
+    /// Copies the original CBOR bytes of a map decoded with span recording enabled.
+    byte[] encodedMap(Map<Object, Object> map) {
+        int[] span = mapSpans.get(map);
+        return Arrays.copyOfRange(bytes, span[0], span[1]);
     }
 
     /// Requires a CBOR map.
@@ -197,8 +235,9 @@ final class Input {
     }
 
     /// Validates and reads one deterministic CBOR item with bounded nesting.
-    private Object cbor(int depth) throws IOException {
-        require(depth <= 64, "CBOR nesting limit exceeded");
+    Object cbor(int depth) throws IOException {
+        limits.depth(depth);
+        int begin = position;
         int initial = u8();
         int major = initial >>> 5;
         int info = initial & 31;
@@ -253,13 +292,15 @@ final class Input {
             Object value = cbor(depth + 1);
             return new Opaque(argument, value);
         }
-        require(argument.bitLength() <= 31, "CBOR length exceeds limit");
+        if (argument.bitLength() > 31) {
+            throw new IOException("CBOR length exceeds limit");
+        }
         int length = argument.intValue();
         if (major == 2 || major == 3) {
             byte[] raw = take(length);
             return major == 2 ? raw : utf8(raw);
         }
-        count(length);
+        limits.elements(length);
         if (major == 4) {
             List<Object> result = new ArrayList<Object>();
             for (int i = 0; i < length; i++) {
@@ -277,6 +318,9 @@ final class Input {
             require(previous == null || compare(previous, encoded) < 0, "CBOR keys are not unique and sorted");
             previous = encoded;
             result.put(key, cbor(depth + 1));
+        }
+        if (mapSpans != null) {
+            mapSpans.put(result, new int[]{begin, position});
         }
         return result;
     }

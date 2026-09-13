@@ -5,11 +5,14 @@ package org.janex.bootstrap;
 
 import java.io.*;
 import java.lang.management.ManagementFactory;
+import java.nio.channels.Channels;
+import java.nio.channels.FileChannel;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
 import java.util.jar.*;
 import org.janex.format.JanexReader;
+import org.janex.format.Checksum;
 import org.janex.bootstrap.internal.zstd.Zstandard;
 
 /// Launches a Janex file carrying this executable JAR as its tail.
@@ -28,6 +31,21 @@ public final class Standalone {
     /// @throws Exception if the package cannot be read or the child JVM cannot be started
     public static void main(String[] arguments) throws Exception {
         Path executable = Paths.get(Standalone.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+        System.exit(launch(executable, arguments));
+    }
+
+    /// Launches a Janex file with an executable JAR tail and waits for its child JVM.
+    ///
+    /// The current Java installation, working directory, and standard streams are inherited.
+    /// The input is copied to a private snapshot before validation. Temporary files are removed
+    /// when the child exits or preparation fails. Recorded integrity is verified without
+    /// establishing publisher trust. This method does not terminate the calling JVM.
+    ///
+    /// @param executable Janex file with an ordinary or ZIP64 executable JAR tail
+    /// @param arguments arguments appended after the selected package's preset arguments
+    /// @return the child process's exit status
+    /// @throws Exception if preparation, process creation, waiting, or cleanup fails
+    public static int launch(Path executable, String[] arguments) throws Exception {
         int exit;
         try (Session session = new Session()) {
             Path snapshot = session.directory.resolve("snapshot.janex");
@@ -36,14 +54,16 @@ public final class Standalone {
                 transfer(input, output, 512L * 1024 * 1024);
             }
             JanexReader.Launch launch;
-            try (JanexReader reader = new JanexReader(snapshot, (input, length) -> {
+            long tailOffset;
+            try (JanexReader reader = new JanexReader(snapshot, (input, length, dictionary) -> {
                 byte[] decoded = new byte[length];
-                if (Zstandard.decompress(input, 0, input.length, decoded, 0, length) != length) {
+                if (Zstandard.decompress(input, 0, input.length, decoded, 0, length, dictionary) != length) {
                     throw new IOException("Zstd decoded length mismatch");
                 }
                 return decoded;
             }, new Dependencies())) {
                 launch = reader.launch(System.getProperty("janex.application"));
+                tailOffset = reader.externalTailOffset();
             }
             launch.arguments.addAll(Arrays.asList(arguments));
             int feature = JanexReader.feature();
@@ -52,11 +72,27 @@ public final class Standalone {
             }
             List<String> options = new ArrayList<String>(ManagementFactory.getRuntimeMXBean().getInputArguments());
             options.addAll(launch.options);
+            Path launcher = session.directory.resolve("launcher.jar");
+            try (FileChannel input = FileChannel.open(snapshot);
+                 OutputStream output = Files.newOutputStream(launcher)) {
+                if (tailOffset == input.size()) {
+                    throw new IOException("Standalone launching requires an executable JAR tail");
+                }
+                input.position(tailOffset);
+                transfer(Channels.newInputStream(input), output, 512L * 1024 * 1024);
+            }
             Path bridge = session.directory.resolve("bootstrap.jar");
-            writeBridge(snapshot, bridge, launch, options, feature);
+            writeBridge(launcher, bridge, launch, options, feature);
+            List<String> nativeOptions = nativeOptions(options, feature);
+            String java = Paths.get(System.getProperty("java.home"), "bin", isWindows() ? "java.exe" : "java").toString();
+            if (feature >= 9) {
+                validateModules(session, java, bridge, nativeOptions);
+            }
+            List<String> agents = prepareAgents(session.directory, launch);
             List<String> command = new ArrayList<String>();
-            command.add(Paths.get(System.getProperty("java.home"), "bin", isWindows() ? "java.exe" : "java").toString());
-            command.addAll(nativeOptions(options, feature));
+            command.add(java);
+            command.addAll(nativeOptions);
+            command.addAll(agents);
             if (feature >= 9) {
                 command.add("--add-modules=ALL-SYSTEM");
             }
@@ -64,20 +100,98 @@ public final class Standalone {
             command.add("-cp");
             command.add(bridge.toString());
             command.add("org.janex.bootstrap.Bootstrap");
-            ProcessBuilder builder = new ProcessBuilder(command).inheritIO();
-            // The first JVM has already expanded these variables into its effective options.
-            builder.environment().remove("JDK_JAVA_OPTIONS");
-            builder.environment().remove("JAVA_TOOL_OPTIONS");
-            builder.environment().remove("_JAVA_OPTIONS");
-            session.process = builder.start();
+            session.process = process(command).inheritIO().start();
             exit = session.process.waitFor();
         }
-        System.exit(exit);
+        return exit;
+    }
+
+    /// Creates a child builder without re-expanding options already consumed by the initial JVM.
+    private static ProcessBuilder process(List<String> command) {
+        ProcessBuilder builder = new ProcessBuilder(command);
+        builder.environment().remove("JDK_JAVA_OPTIONS");
+        builder.environment().remove("JAVA_TOOL_OPTIONS");
+        builder.environment().remove("_JAVA_OPTIONS");
+        return builder;
+    }
+
+    /// Checks indexed module resolution in a child without application entry points or agents.
+    private static void validateModules(Session session, String java, Path bridge, List<String> options)
+            throws IOException, InterruptedException {
+        List<String> command = new ArrayList<String>();
+        command.add(java);
+        command.add("--add-exports=java.base/jdk.internal.module=ALL-UNNAMED");
+        command.add("--add-modules=ALL-SYSTEM");
+        for (String option : options) {
+            if (option.equals("--enable-preview") || option.startsWith("--enable-native-access=")
+                    || option.equals("--add-opens=java.base/java.lang=ALL-UNNAMED")) {
+                command.add(option);
+            }
+        }
+        command.add("-cp");
+        command.add(bridge.toString());
+        command.add("org.janex.bootstrap.ModuleSupport");
+        Path diagnostics = session.directory.resolve("module-check.txt");
+        session.process = process(command).redirectErrorStream(true).redirectOutput(diagnostics.toFile()).start();
+        session.process.getOutputStream().close();
+        if (session.process.waitFor() != 0) {
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            try (InputStream input = Files.newInputStream(diagnostics)) {
+                transfer(input, output, 1024 * 1024);
+            }
+            throw new IOException("Java module validation failed: " + output.toString("UTF-8"));
+        }
+        Files.delete(diagnostics);
     }
 
     /// Returns whether this process runs on Windows.
     private static boolean isWindows() {
         return System.getProperty("os.name").startsWith("Windows");
+    }
+
+    /// Materializes selected agent roots before any descriptor-supplied agent runs.
+    private static List<String> prepareAgents(Path directory, JanexReader.Launch launch) throws IOException {
+        List<String> result = new ArrayList<String>();
+        if (launch.agentResources == null) {
+            return result;
+        }
+        try (ResourceIndex index = new ResourceIndex(new ByteArrayInputStream(launch.agentResources))) {
+            if (index.roots.size() != launch.agentOptions.size() || index.roots.size() != launch.agentChecksums.size()) {
+                throw new IOException("Java agent roots and options disagree");
+            }
+            for (int i = 0; i < index.roots.size(); i++) {
+                Path path = directory.resolve("agent-" + i + ".jar");
+                if (path.toString().indexOf('=') >= 0) {
+                    throw new IOException("Java agent path contains an unrepresentable equals sign");
+                }
+                try (JarOutputStream output = new JarOutputStream(Files.newOutputStream(path))) {
+                    for (Map.Entry<String, ResourceIndex.Resource> entry : index.roots.get(i).files.entrySet()) {
+                        if (entry.getKey().isEmpty()) {
+                            continue;
+                        }
+                        ResourceIndex.Resource resource = entry.getValue();
+                        JarEntry member = new JarEntry(entry.getKey() + (resource.id < 0 ? "/" : ""));
+                        member.setTime(0);
+                        output.putNextEntry(member);
+                        if (resource.id >= 0) {
+                            byte[] bytes = resource.read();
+                            byte[] checksum = launch.agentChecksums.get(i).get(entry.getKey());
+                            if (checksum != null) {
+                                Checksum.decode(checksum).verify(bytes);
+                            }
+                            if (entry.getKey().equalsIgnoreCase("META-INF/MANIFEST.MF")) {
+                                bytes = JanexReader.runtimeManifest(bytes);
+                            }
+                            output.write(bytes);
+                        }
+                        output.closeEntry();
+                    }
+                }
+                String option = launch.agentOptions.get(i);
+                result.add("-javaagent:" + path + (option.isEmpty() ? "" : "=" + option));
+            }
+        }
+        return result;
     }
 
     /// Copies a bounded stream without closing either endpoint.
@@ -140,10 +254,10 @@ public final class Standalone {
         return result;
     }
 
-    /// Copies this JAR and embeds data consumed by the existing resource loader and entry point.
-    private static void writeBridge(Path snapshot, Path output, JanexReader.Launch launch,
+    /// Copies the extracted launcher JAR and embeds the selected resource index and launch data.
+    private static void writeBridge(Path launcher, Path output, JanexReader.Launch launch,
                                     List<String> options, int feature) throws IOException {
-        try (JarFile source = new JarFile(snapshot.toFile());
+        try (JarFile source = new JarFile(launcher.toFile());
              JarOutputStream jar = new JarOutputStream(Files.newOutputStream(output))) {
             Enumeration<JarEntry> entries = source.entries();
             while (entries.hasMoreElements()) {

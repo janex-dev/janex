@@ -5,12 +5,10 @@
 
 use crate::{Error, Result, error::invalid};
 use janex_format::checksum::{Algorithm, Checksum};
-use packageurl::PackageUrl;
 use std::{
     fs,
     io::{Read, Write},
     path::PathBuf,
-    str::FromStr,
     time::{Duration, Instant},
 };
 use url::Url;
@@ -261,9 +259,9 @@ fn download(mut url: Url, options: &DependencyOptions) -> Result<Vec<u8>> {
 /// Maps a canonical external name to its exact transport URL and original JAR filename.
 fn address(uri: &str, options: &DependencyOptions) -> Result<(Url, String)> {
     let (url, name) = if uri.starts_with("pkg:") {
-        let package = PackageUrl::from_str(uri)
+        let package = janex_format::purl::parse(uri)
             .map_err(|error| invalid(format!("invalid dependency PURL: {error}")))?;
-        if package.to_string() != uri || package.ty() != "maven" || package.subpath().is_some() {
+        if package.ty() != "maven" || package.subpath().is_some() {
             return Err(Error::Unsupported(
                 "dependency resolver requires a canonical Maven PURL without a subpath".into(),
             ));

@@ -8,6 +8,8 @@ import java.util.*;
 import java.math.BigInteger;
 
 import org.janex.bootstrap.internal.zstd.Zstandard;
+import org.janex.format.ReadLimits;
+import org.janex.format.ZstandardFrames;
 
 /// Reads Host-selected resources from a private snapshot without rebuilding classpath JARs.
 ///
@@ -233,6 +235,7 @@ final class ResourceIndex implements Closeable {
             snapshot.readFully(bytes);
             try {
                 for (int length : source.filters) {
+                    ZstandardFrames.validate(bytes, new ReadLimits(maxBytes, maxElements, ReadLimits.DEFAULT.maxDepth()));
                     byte[] output = new byte[length];
                     int written = Zstandard.decompress(bytes, 0, bytes.length, output, 0, output.length);
                     if (written != length) {
@@ -338,7 +341,8 @@ final class ResourceIndex implements Closeable {
             }
             byte[] bytes = id == -1 ? new byte[0] : source(id);
             for (int[] transform : transforms) {
-                bytes = ClassFiles.restore(bytes, pools[transform[1]], transform[0]);
+                bytes = ClassFiles.restore(bytes, pools[transform[1]], transform[0],
+                        new ReadLimits(maxBytes, maxElements, ReadLimits.DEFAULT.maxDepth()));
             }
             return bytes;
         }

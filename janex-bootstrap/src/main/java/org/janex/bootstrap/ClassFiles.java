@@ -4,6 +4,8 @@
 package org.janex.bootstrap;
 
 import java.io.*;
+import org.janex.format.ClassFile;
+import org.janex.format.ReadLimits;
 
 /// Restores the two external UTF-8 constant-pool entry forms defined by Janex 0.1.
 final class ClassFiles {
@@ -19,6 +21,14 @@ final class ClassFiles {
     /// @return a new ordinary class file
     /// @throws IOException if framing, references, or output length are invalid
     static byte[] restore(byte[] bytes, String[] pool, int length) throws IOException {
+        return restore(bytes, pool, length, ReadLimits.DEFAULT);
+    }
+
+    /// Restores and structurally validates class bytes under the inherited resource limits.
+    static byte[] restore(byte[] bytes, String[] pool, int length, ReadLimits limits) throws IOException {
+        if (length < 0 || length > limits.maxBytes() || bytes.length > limits.maxBytes()) {
+            throw new IOException("CLASSFILE byte limit exceeded");
+        }
         DataInputStream input = new DataInputStream(new ByteArrayInputStream(bytes));
         byte[] result = new byte[length];
         ByteArrayOutput output = new ByteArrayOutput(result);
@@ -29,7 +39,7 @@ final class ClassFiles {
         data.writeInt(0xcafebabe);
         data.writeInt(input.readInt());
         int count = input.readUnsignedShort();
-        if (count == 0) {
+        if (count == 0 || count > limits.maxElements()) {
             throw new IOException("Invalid constant pool count");
         }
         data.writeShort(count);
@@ -41,6 +51,9 @@ final class ClassFiles {
                     String name = string(input, pool);
                     if (name.isEmpty()) {
                         throw new IOException("Empty external class name");
+                    }
+                    if ((long) text.length() + name.length() + (text.isEmpty() ? 0 : 1) > 65535) {
+                        throw new IOException("External class string exceeds 65535 bytes");
                     }
                     text = text.isEmpty() ? name : text + '/' + name;
                 }
@@ -95,6 +108,7 @@ final class ClassFiles {
         if (output.position != result.length) {
             throw new IOException("CLASSFILE decoded size mismatch");
         }
+        ClassFile.validate(result, limits);
         return result;
     }
 
@@ -111,7 +125,11 @@ final class ClassFiles {
                 if (value < 0 || value >= pool.length) {
                     throw new IOException("String index out of range");
                 }
-                return pool[(int) value];
+                String text = pool[(int) value];
+                if (text.length() > 65535) {
+                    throw new IOException("External class string exceeds 65535 bytes");
+                }
+                return text;
             }
         }
         throw new IOException("String index overflow");
