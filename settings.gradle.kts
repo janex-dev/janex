@@ -5,3 +5,4 @@ rootProject.name = "janex"
 
 include("janex-bootstrap")
 include("janex-reader")
+include("janex-gradle-plugin")

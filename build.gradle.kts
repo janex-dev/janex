@@ -60,6 +60,7 @@ val cargoClean = tasks.register<Exec>("cargoClean") {
 
 tasks.assemble {
     dependsOn(":janex-bootstrap:assemble", cargoBuild)
+    dependsOn(":janex-gradle-plugin:assemble")
 }
 
 tasks.register("assembleRelease") {
@@ -87,11 +88,13 @@ tasks.register<Exec>("checkWindowsX86Launcher") {
 }
 
 tasks.check {
+    dependsOn(":janex-gradle-plugin:check")
     dependsOn(":janex-bootstrap:check")
     dependsOn(":janex-reader:check")
     dependsOn(cargoFmtCheck, cargoClippy, cargoTest)
 }
 
 tasks.clean {
+    dependsOn(":janex-gradle-plugin:clean")
     dependsOn(":janex-bootstrap:clean", ":janex-reader:clean", cargoClean)
 }

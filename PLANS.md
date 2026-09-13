@@ -295,6 +295,16 @@ placeholder interfaces do not constitute completion.
 - Cover application arguments, signatures and tampering, resource lifetime, Java 8, direct mode,
   JAR tails, and Unix process termination with executable integration tests.
 
+## Gradle Plugin
+
+- Provide `org.janex` as a Java Gradle plugin that can also be included as a standalone build.
+- Package the project JAR and ordered runtime dependencies through the native CLI, with lazy
+  application conventions, explicit classpath/module-path overrides, and both launcher forms.
+- Require an explicitly configured local CLI until native tool distribution is available.
+- Generate Maven publications and plugin markers for local or configured CNB repositories.
+- Verify real packaged applications with TestKit, configuration-cache reuse, dependency changes,
+  and preservation of the previous output when the CLI fails. Keep a runnable composite-build demo.
+
 ## Java Bootstrap Validation
 
 The root Gradle build uses Java 8 base classes and Java 9 module classes in a reproducible
