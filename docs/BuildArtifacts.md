@@ -9,6 +9,11 @@ permissions.
 CI and artifact builds use BellSoft Liberica JDK. Builds use JDK 25; compatibility
 tests additionally use Liberica JDK 8.
 
+Both workflows cache Cargo downloads, dependency build outputs, and installed Cargo
+tools using `Swatinem/rust-cache`. Artifact caches are separated by target; CI caches
+are separated by runner OS. Rust versions and Cargo manifests also contribute to
+the cache keys. Zig retains its separate compiler cache.
+
 | System | Architectures | Build tools | Contents |
 | --- | --- | --- | --- |
 | Linux | x86-64, ARM64 | cargo-zigbuild on Linux x64 | CLI and native launcher |

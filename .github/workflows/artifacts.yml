@@ -42,6 +42,9 @@ jobs:
         with:
           toolchain: ${{ matrix.os == 'windows-11-arm' && 'stable-aarch64-pc-windows-msvc' || 'stable' }}
           targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
       - uses: actions/setup-java@v6
         with:
           distribution: liberica
