@@ -26,6 +26,10 @@ jobs:
             os: ubuntu-26.04
           - target: aarch64-unknown-linux-musl
             os: ubuntu-26.04-arm
+          - target: x86_64-unknown-freebsd
+            os: ubuntu-26.04
+          - target: aarch64-unknown-freebsd
+            os: ubuntu-26.04-arm
           - target: i686-pc-windows-msvc
             os: windows-2025
           - target: x86_64-pc-windows-msvc

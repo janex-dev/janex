@@ -17,6 +17,7 @@ the cache keys. Zig retains its separate compiler cache.
 | System | Architectures | Build tools | Contents |
 | --- | --- | --- | --- |
 | Linux | x86-64, ARM64 | cargo-zigbuild on Linux x64 | CLI and native launcher |
+| FreeBSD | x86-64, ARM64 | cargo-zigbuild on Linux | CLI and native launcher |
 | Windows | x86, x64, ARM64 | MSVC; ARM64 builds on Windows ARM64 | CLI and native launcher |
 | macOS | x64, ARM64 | Xcode on macOS ARM64 | CLI |
 
@@ -24,6 +25,9 @@ Linux binaries statically link musl and use mimalloc for Rust allocations and C
 allocation functions. Windows binaries statically link the MSVC CRT; macOS links
 the system libraries. Both retain Rust's default system allocator and the native
 libraries' default allocation functions. The Java process retains its own allocator.
+
+FreeBSD binaries use the default allocator and dynamically link FreeBSD system
+libraries. Both architectures are cross-compiled on Linux with Zig.
 
 Mach-O native launcher prefixes are not implemented, so macOS artifacts contain
 only the CLI. The CLI supports bootstrap, direct, and standalone `java -jar` packages.
@@ -39,12 +43,13 @@ cargo install cargo-zigbuild --version 0.23.4 --locked
 ./gradlew packageArtifacts -PjanexTarget=aarch64-unknown-linux-musl
 ```
 
-Linux requires cargo-zigbuild and Zig 0.15.2 on PATH; the workflow installs Zig with
+Linux musl and FreeBSD targets require cargo-zigbuild and Zig 0.15.2 on PATH; the workflow installs Zig with
 `mlugg/setup-zig` and cargo-zigbuild with Cargo. On Windows, Rust discovers the
 installed Visual Studio C++ tools automatically. For macOS, install Xcode's command
 line tools. Supported `janexTarget` values are:
 
 - `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`
+- `x86_64-unknown-freebsd`, `aarch64-unknown-freebsd`
 - `i686-pc-windows-msvc`, `x86_64-pc-windows-msvc`, `aarch64-pc-windows-msvc`
 - `x86_64-apple-darwin`, `aarch64-apple-darwin`
 
@@ -60,6 +65,10 @@ The workflow checks executable architecture and runtime dependencies before uplo
 Linux additionally checks that mimalloc overrides the C allocation symbols. Windows
 checks that no dynamically linked MSVC runtime is required; macOS checks that all
 dynamic dependencies are system libraries.
+
+FreeBSD checks validate ELF architecture, the FreeBSD ABI and interpreter, and
+system library dependencies. Launch checks run only on a FreeBSD host; the Linux
+cross-build jobs inspect and package the binaries without executing them.
 
 Launch checks cover packaged resources, bootstrap and direct modes, and `java -jar`.
 They exercise Unicode arguments except in Windows direct and `java -jar` modes,

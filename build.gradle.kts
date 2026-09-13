@@ -79,21 +79,22 @@ val artifactNames = if (artifactTarget.endsWith("-apple-darwin")) listOf("janex"
 
 val assembleArtifacts = tasks.register<Exec>("assembleArtifacts") {
     group = "build"
-    description = "Builds distribution binaries for the selected Linux, Windows, or macOS target."
+    description = "Builds distribution binaries for the selected Linux, FreeBSD, Windows, or macOS target."
     dependsOn(":janex-bootstrap:jar")
     val target = artifactTarget
     doFirst {
         require(target in setOf(
             "x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl",
+            "x86_64-unknown-freebsd", "aarch64-unknown-freebsd",
             "i686-pc-windows-msvc", "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc",
             "x86_64-apple-darwin", "aarch64-apple-darwin"
         )) {
-            "Set -PjanexTarget to a supported Linux musl, Windows MSVC, or macOS target: $target"
+            "Set -PjanexTarget to a supported Linux musl, FreeBSD, Windows MSVC, or macOS target: $target"
         }
     }
     workingDir(layout.projectDirectory)
     val command = mutableListOf(
-        "cargo", if (target.endsWith("-musl")) "zigbuild" else "build",
+        "cargo", if (target.endsWith("-musl") || target.endsWith("-freebsd")) "zigbuild" else "build",
         "--release", "--locked", "--target", target, "--package", "janex-cli", "--bins"
     )
     if (!target.endsWith("-apple-darwin")) {

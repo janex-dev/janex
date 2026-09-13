@@ -28,6 +28,7 @@ public final class ArtifactCheck {
     }
 
     /// Verifies executable structure, dependencies, resources, and program arguments.
+    /// FreeBSD targets receive structural checks only when the host is not FreeBSD.
     ///
     /// @param args target triple and directory containing the release binaries
     /// @throws Exception if inspection or a launch check fails
@@ -42,6 +43,10 @@ public final class ArtifactCheck {
         inspect(target, cli);
         if (launcher != null) {
             inspect(target, launcher);
+        }
+        if (target.endsWith("-freebsd") && !System.getProperty("os.name").equals("FreeBSD")) {
+            System.out.println("Verified FreeBSD binary structure; launch checks require a FreeBSD host: " + target);
+            return;
         }
         List<String> runner = new ArrayList<>();
         if (target.equals("aarch64-unknown-linux-musl")) {
@@ -119,6 +124,26 @@ public final class ArtifactCheck {
                 String dependency = lines[i].trim();
                 if (!dependency.startsWith("/usr/lib/") && !dependency.startsWith("/System/Library/")) {
                     throw new AssertionError("Non-system library dependency: " + dependency);
+                }
+            }
+        } else if (target.endsWith("-freebsd")) {
+            String machine = target.startsWith("aarch64-") ? "AArch64" : "Advanced Micro Devices X86-64";
+            String header = run("readelf", "-hW", binary);
+            if (!header.contains(machine)
+                    || !(header.contains("UNIX - FreeBSD") || run("readelf", "-nW", binary).contains("FreeBSD"))
+                    || !run("readelf", "-lW", binary).contains("/libexec/ld-elf.so.1")) {
+                throw new AssertionError("Unexpected FreeBSD ELF architecture or interpreter: " + binary);
+            }
+            for (String line : run("readelf", "-dW", binary).split("\\R")) {
+                if (line.contains("(RPATH)") || line.contains("(RUNPATH)")) {
+                    throw new AssertionError("Unexpected FreeBSD runtime search path: " + binary);
+                }
+                if (line.contains("(NEEDED)")) {
+                    String library = line.substring(line.indexOf('[') + 1, line.indexOf(']'));
+                    if (!Arrays.asList("libc.so.7", "libm.so.5", "libthr.so.3", "libutil.so.9",
+                            "libexecinfo.so.1", "libgcc_s.so.1", "librt.so.1").contains(library)) {
+                        throw new AssertionError("Unexpected FreeBSD library dependency: " + library);
+                    }
                 }
             }
         } else {
