@@ -285,8 +285,11 @@ placeholder interfaces do not constitute completion.
 ## Java Bootstrap Validation
 
 The root Gradle build uses Java 8 base classes and Java 9 module classes in a reproducible
-multi-release JAR. The portable Zstandard decoder is implemented under MPL-2.0. Run `./gradlew assemble check`
-before Cargo. Rust embeds `janex-bootstrap/build/libs/janex-bootstrap.jar`; generated JARs remain
+multi-release JAR. The portable Zstandard decoder is implemented under MPL-2.0. `./gradlew build`
+assembles Java and Rust and runs both languages' checks; `assembleRelease` produces optimized native
+binaries. Cargo compilation, Clippy, and tests depend on the bootstrap JAR task, with incremental
+compilation managed by Cargo. `clean` removes both languages' build outputs.
+Rust embeds `janex-bootstrap/build/libs/janex-bootstrap.jar`; generated JARs remain
 in ignored build directories and are not stored in the source repository.
 
 Cover NIO URI round trips, full directory traversal, channel positioning, write rejection,

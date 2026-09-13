@@ -2,20 +2,21 @@
 
 This Gradle subproject provides entry invocation, snapshot resource loading, and a read-only NIO file system. `janex-java`
 embeds the JAR generated at `janex-bootstrap/build/libs/janex-bootstrap.jar`. Generated JARs are
-not stored in the source repository. Build Java before compiling or testing Rust.
+not stored in the source repository. The root Gradle build generates Java artifacts before invoking Cargo.
 The root Gradle build uses JDK 25, compiling the base with `--release 8` and module support with
 `--release 9` in a multi-release JAR.
 Use the root Wrapper (`gradlew.bat` on Windows):
 
 ```text
-./gradlew assemble check
-cargo build --workspace --locked
-cargo test --workspace --locked
+./gradlew build
+./gradlew assembleRelease
 ```
 
-`./gradlew build` compiles Java sources and test fixtures, tests Zstandard format boundaries,
-and builds the reproducible JAR. Cross-language codec and launch tests run through Cargo.
-After changing Java sources, rebuild with Gradle before running Cargo again. End users receive
+`build` assembles both languages and runs Java checks, Rust formatting, Clippy, and workspace tests.
+`assemble` builds debug binaries; `assembleRelease` builds optimized binaries without running checks.
+`check` runs verification, and `clean` removes Java and Cargo build outputs. Cargo tasks always invoke
+Cargo, which owns incremental compilation. Compiling or testing Rust directly requires first running
+`:janex-bootstrap:jar`; the root tasks handle this dependency automatically. End users receive
 the JAR inside the native executable or a `--with-launcher` package and need no build tools.
 
 The Host authenticates an owned snapshot once, evaluates conditions and layers, resolves links,
