@@ -248,15 +248,20 @@ public class Agent {
     launch.dependencies.offline = true;
     launch.arguments = vec!["true".into(), "snapshot".into()];
     let plan = prepare(&launch).unwrap();
-    for entry in fs::read_dir(temp.path().join("cache")).unwrap() {
-        let path = entry.unwrap().path();
-        if path
-            .extension()
-            .is_some_and(|extension| extension == "cache")
-        {
-            fs::write(path, b"cache changed after preparation").unwrap();
-        }
-    }
+    let digest = Checksum::compute(Algorithm::Sha256, library.as_slice()).unwrap();
+    let hex: String = digest
+        .digest()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let cached_library = temp
+        .path()
+        .join("cache/files/sha256")
+        .join(&hex[..2])
+        .join(&hex[2..])
+        .join("library-1.2.jar");
+    assert_eq!(fs::read(&cached_library).unwrap(), library);
+    fs::write(cached_library, b"cache changed after preparation").unwrap();
     assert!(capture(&plan).status.success());
     fs::remove_file(&marker).unwrap();
     assert!(prepare(&launch).is_err());

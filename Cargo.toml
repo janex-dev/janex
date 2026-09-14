@@ -17,6 +17,7 @@ janex-java = { path = "janex-java" }
 janex-format = { path = "janex-format" }
 janex-host = { path = "janex-host" }
 mimalloc = { version = "0.1.52", features = ["override"] }
+zstd = { version = "0.14", default-features = false, features = ["arrays", "zdict_builder"] }
 
 [workspace.lints.rust]
 missing_docs = "warn"

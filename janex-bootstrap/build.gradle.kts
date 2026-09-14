@@ -36,7 +36,7 @@ tasks.named<JavaCompile>(java9.compileJavaTaskName) { options.release = 9 }
 tasks.withType<Jar>().configureEach {
     isPreserveFileTimestamps = false
     isReproducibleFileOrder = true
-    entryCompression = ZipEntryCompression.STORED
+    entryCompression = ZipEntryCompression.DEFLATED
     filePermissions { unix("rw-r--r--") }
     dirPermissions { unix("rwxr-xr-x") }
 }

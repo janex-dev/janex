@@ -22,7 +22,7 @@ zeroize = "1"
 zip = { version = "8.6", default-features = false, features = ["deflate-flate2"] }
 
 [dev-dependencies]
-zstd = "0.14"
+zstd.workspace = true
 
 [lints]
 workspace = true

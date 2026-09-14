@@ -187,6 +187,9 @@ fn executable_preserves_arguments_resources_exit_status_and_native_java() {
         .unwrap()[0],
     )
     .unwrap();
+    let constrained = temp.path().join("architecture-constrained.exe");
+    fs::copy(&path, &constrained).unwrap();
+    let path = constrained;
     require_runtime_architecture(&path, &runtime.architecture);
     report(
         &command(&path)
@@ -318,8 +321,10 @@ fn embedded_public_pins_authenticate_signed_wrappers_and_tampering_fails() {
             .range()
             .start as usize;
         bytes[start + 16] ^= 1;
-        fs::write(&path, &bytes).unwrap();
-        let output = command(&path).output().unwrap();
+        let tampered = temp.path().join(format!("tampered-{index}.exe"));
+        fs::write(&tampered, &bytes).unwrap();
+        fs::set_permissions(&tampered, fs::metadata(&path).unwrap().permissions()).unwrap();
+        let output = command(&tampered).output().unwrap();
         assert_eq!(output.status.code(), Some(1));
         assert!(output.stdout.is_empty());
     }
@@ -346,8 +351,10 @@ fn malformed_headers_and_configuration_fail_before_application_execution() {
     for offset in [start - 1, start - 12, start - 13] {
         let mut bytes = original.clone();
         bytes[offset] ^= 0xff;
-        fs::write(&path, bytes).unwrap();
-        let output = command(&path).output().unwrap();
+        let malformed = temp.path().join(format!("malformed-{offset}.exe"));
+        fs::write(&malformed, bytes).unwrap();
+        fs::set_permissions(&malformed, fs::metadata(&path).unwrap().permissions()).unwrap();
+        let output = command(&malformed).output().unwrap();
         assert_eq!(output.status.code(), Some(1));
         assert!(output.stdout.is_empty());
     }
