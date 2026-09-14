@@ -147,9 +147,10 @@ pub fn prepare(
     if bytes.len() as u64 > options.max_snapshot_bytes {
         return Err(invalid("native executable exceeds the snapshot byte limit"));
     }
-    let reader = Reader::open_auto(Cursor::new(bytes.as_slice()), options.limits)?;
+    let reader = Reader::open_auto(Cursor::new(bytes), options.limits)?;
     let start = usize::try_from(reader.range().start)
         .map_err(|_| invalid("native header exceeds address space"))?;
+    let bytes = reader.into_inner().into_inner();
     if start < 12 || bytes.get(start - 8..start) != Some(CONFIG_MARK.as_slice()) {
         return Err(invalid("missing native launcher configuration"));
     }

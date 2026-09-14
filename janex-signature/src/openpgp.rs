@@ -30,6 +30,7 @@ use pgp::{
 };
 use rand::rngs::OsRng;
 use rsa::traits::PublicKeyParts;
+use sha2_legacy::{Sha256, Sha384, Sha512, digest::DynDigest};
 use std::{
     io::Cursor,
     time::{SystemTime, UNIX_EPOCH},
@@ -220,10 +221,13 @@ fn verify_raw(
         ));
     }
     let algorithm = key_algorithm(key, config.hash_alg)?;
-    let mut hasher = config
-        .hash_alg
-        .new_hasher()
-        .map_err(|_| unsupported("unsupported OpenPGP digest"))?;
+    let mut hasher: Box<dyn DynDigest> = match algorithm {
+        Algorithm::RsaSha256 | Algorithm::EcdsaP256Sha256 | Algorithm::Ed25519Sha256 => {
+            Box::<Sha256>::default()
+        }
+        Algorithm::RsaSha512 | Algorithm::Ed25519Sha512 => Box::<Sha512>::default(),
+        Algorithm::EcdsaP384Sha384 => Box::<Sha384>::default(),
+    };
     if let SignatureVersionSpecific::V6 { salt } = &config.version_specific {
         hasher.update(salt);
     }
