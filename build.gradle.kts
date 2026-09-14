@@ -112,8 +112,8 @@ val assembleArtifacts = tasks.register<Exec>("assembleArtifacts") {
         command.addAll(listOf("--package", "janex-launcher"))
     }
     if (target.endsWith("-musl")) {
-        // Keep allocation symbols available for artifact verification.
-        command.addAll(listOf("--config", "profile.release.strip='debuginfo'"))
+        // Preserve allocation symbols through Zig linking; stripArtifacts removes debug information.
+        command.addAll(listOf("--config", "profile.release.strip=false"))
     }
     if (target.endsWith("-windows-msvc")) {
         command.addAll(listOf("--config", "target.$target.rustflags=['-C','target-feature=+crt-static']"))

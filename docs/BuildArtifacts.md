@@ -39,8 +39,8 @@ Release builds use Cargo's `opt-level = "s"`, fat LTO, one code-generation unit,
 `assembleRelease` and `cargo build --release` builds. Size optimization retains loop
 vectorization; LTO increases link time. A release panic terminates the process without
 stack unwinding. Development builds retain their default panic and optimization settings.
-Linux musl artifact builds strip debug information while retaining the symbols needed
-to verify mimalloc's allocation overrides.
+Linux musl artifact builds disable stripping during linking and remove debug information
+afterward, retaining the symbols needed to verify mimalloc's allocation overrides.
 
 Mach-O native launcher prefixes are not implemented, so macOS artifacts contain
 only the CLI. The CLI supports bootstrap, direct, and standalone `java -jar` packages.
