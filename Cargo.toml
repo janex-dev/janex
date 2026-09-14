@@ -21,3 +21,10 @@ mimalloc = { version = "0.1.52", features = ["override"] }
 [workspace.lints.rust]
 missing_docs = "warn"
 unsafe_code = "forbid"
+
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

@@ -113,7 +113,7 @@ val assembleArtifacts = tasks.register<Exec>("assembleArtifacts") {
     }
     if (target.endsWith("-musl")) {
         // Keep allocation symbols available for artifact verification.
-        command.addAll(listOf("--config", "profile.release.strip='none'"))
+        command.addAll(listOf("--config", "profile.release.strip='debuginfo'"))
     }
     if (target.endsWith("-windows-msvc")) {
         command.addAll(listOf("--config", "target.$target.rustflags=['-C','target-feature=+crt-static']"))

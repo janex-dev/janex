@@ -34,6 +34,14 @@ libraries' default allocation functions. The Java process retains its own alloca
 FreeBSD binaries use the default allocator and dynamically link FreeBSD system
 libraries. Both architectures are cross-compiled on Linux with Zig.
 
+Release builds use Cargo's `opt-level = "s"`, fat LTO, one code-generation unit,
+`panic = "abort"`, and symbol stripping. These settings also apply to local
+`assembleRelease` and `cargo build --release` builds. Size optimization retains loop
+vectorization; LTO increases link time. A release panic terminates the process without
+stack unwinding. Development builds retain their default panic and optimization settings.
+Linux musl artifact builds strip debug information while retaining the symbols needed
+to verify mimalloc's allocation overrides.
+
 Mach-O native launcher prefixes are not implemented, so macOS artifacts contain
 only the CLI. The CLI supports bootstrap, direct, and standalone `java -jar` packages.
 
