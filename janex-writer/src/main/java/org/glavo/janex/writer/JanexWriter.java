@@ -15,9 +15,9 @@ import org.glavo.janex.reader.Checksum;
 
 import static org.glavo.janex.reader.internal.Input.require;
 
-/// Writes Janex 0.1 application packages with shared raw blobs and SHA-256 integrity coverage.
-/// File checksums use XXH3-64. This implementation emits no compression, CLASSFILE transforms,
-/// or publisher signatures. The optional JAR tail contains the bundled portable Java launcher.
+/// Writes Janex 0.1 application packages with shared blobs and SHA-256 integrity coverage.
+/// File checksums use XXH3-64. This implementation emits no CLASSFILE transforms or publisher
+/// signatures. The optional JAR tail contains the bundled portable Java launcher.
 public final class JanexWriter {
     /// Prevents instantiation.
     private JanexWriter() { }

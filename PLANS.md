@@ -314,8 +314,10 @@ placeholder interfaces do not constitute completion.
 - Bundle the generated bootstrap JAR as a build resource; never commit generated binaries.
 - Preserve JAR-tail and native-prefix packaging, with both bootstrap and direct invocation modes.
 - Validate Java output with the Rust Host and Rust output with the Java reader and launcher.
-- Start with uncompressed stored blobs. Add compression, CLASSFILE encoding, and publisher signing
-  as separate follow-up work, using the file-format specification as the shared contract.
+- Compress blobs and table pages with portable Zstandard when their encoded representation shrinks;
+  expose a default-enabled Gradle compression switch and verify both modes across readers and launchers.
+- Add CLASSFILE encoding and publisher signing as separate follow-up work, using the file-format
+  specification as the shared contract.
 
 ## Java Bootstrap Validation
 

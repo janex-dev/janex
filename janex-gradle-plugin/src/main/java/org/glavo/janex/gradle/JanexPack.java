@@ -41,6 +41,7 @@ public abstract class JanexPack extends DefaultTask {
         getJvmOptions().convention(List.of());
         getArguments().convention(List.of());
         getWithLauncher().convention(true);
+        getCompression().convention(true);
         getNativeLaunchMode().convention("bootstrap");
         getOutputs().upToDateWhen(task -> !((JanexPack) task).hasDirectoryInputs());
         getOutputs().doNotCacheIf("Directory permissions and native executable modes require filesystem metadata",
@@ -123,6 +124,12 @@ public abstract class JanexPack extends DefaultTask {
     @Optional
     public abstract Property<String> getJavaVersion();
 
+    /// Returns whether to compress blobs and table pages when their encoded representation shrinks.
+    ///
+    /// @return the compression property, defaulting to `true`
+    @Input
+    public abstract Property<Boolean> getCompression();
+
     /// Returns whether to append a `java -jar` launcher, defaulting to `true`.
     ///
     /// @return the JAR-launcher inclusion property
@@ -192,6 +199,7 @@ public abstract class JanexPack extends DefaultTask {
             options.jvmOptions.addAll(getJvmOptions().get());
             options.arguments.addAll(getArguments().get());
             options.withLauncher = getWithLauncher().get();
+            options.compression = getCompression().get();
             if (getNativeLauncher().isPresent()) {
                 options.nativeLauncher = getNativeLauncher().get().getAsFile().toPath();
                 options.nativeLaunchMode = getNativeLaunchMode().get();

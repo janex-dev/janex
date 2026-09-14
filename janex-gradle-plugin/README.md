@@ -60,13 +60,17 @@ janex {
     jvmOptions.add("-Xmx512m")
     arguments.addAll("", "two words", "\uD83D\uDE80")
     withLauncher = true
+    compression = true
     outputFile = layout.buildDirectory.file("distributions/application.janex")
 }
 ```
 
 `withLauncher = false` omits the appended JAR launcher; the result can still be launched with
 `janex run --allow-unsigned`. Arguments are passed as complete strings without shell splitting.
-The Java writer currently stores uncompressed blobs without CLASSFILE transforms or publisher
+Compression defaults to automatic Zstandard for blobs and table pages, including encoding overhead
+in the size comparison. Set `compression = false` to disable it.
+
+The Java writer currently writes blobs without CLASSFILE transforms or publisher
 signatures. Packages remain readable by both the Rust Host and Java launcher.
 
 For a native executable, supply a launcher built for the target platform:
@@ -115,7 +119,8 @@ Publish the implementation, Java libraries, sources, Javadoc, and plugin marker 
 
 The repository is generated under `janex-gradle-plugin/build/repository`. All binary outputs stay
 in ignored build directories. To consume a published plugin, add that repository under
-`pluginManagement.repositories` and use `id("org.glavo.janex") version "0.1.0"`.
+`pluginManagement.repositories` alongside `mavenCentral()` for the compression dependency, and use
+`id("org.glavo.janex") version "0.1.0"`.
 
 For a CNB Maven repository, pass its actual address using `-PjanexPublishUrl=...` and supply publishing
 credentials through `ORG_GRADLE_PROJECT_cnbUsername=cnb` and

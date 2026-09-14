@@ -38,6 +38,9 @@ public final class PackOptions {
     public final List<String> arguments = new ArrayList<>();
     /// Optional Java version requirement in `vers:jep322` syntax.
     public String javaVersion;
+    /// Whether to use Zstandard when stored bytes plus encoding overhead shrink; defaults to true.
+    /// Applies to blobs and table pages. False stores both without compression.
+    public boolean compression = true;
     /// Whether to append the bundled portable launcher for `java -jar` execution.
     public boolean withLauncher;
     /// Optional unsigned PE or ELF native launcher to prepend.

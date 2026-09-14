@@ -3,6 +3,10 @@
 
 rootProject.name = "janex"
 
+dependencyResolutionManagement {
+    repositories { mavenCentral() }
+}
+
 include("janex-bootstrap")
 include("janex-reader")
 include("janex-writer")

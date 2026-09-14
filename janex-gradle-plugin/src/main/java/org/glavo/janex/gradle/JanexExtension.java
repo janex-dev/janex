@@ -67,6 +67,11 @@ public abstract class JanexExtension {
     /// @return the optional Java version requirement property
     public abstract Property<String> getJavaVersion();
 
+    /// Returns whether to compress blobs and table pages when their encoded representation shrinks.
+    ///
+    /// @return the compression property, defaulting to `true`
+    public abstract Property<Boolean> getCompression();
+
     /// Returns whether to append the `java -jar` launcher, defaulting to `true`.
     ///
     /// @return the JAR-launcher inclusion property

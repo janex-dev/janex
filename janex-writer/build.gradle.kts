@@ -12,6 +12,7 @@ version = "0.1.0"
 
 dependencies {
     api(project(":janex-reader"))
+    implementation("io.airlift:aircompressor:2.0.3")
 }
 
 java {

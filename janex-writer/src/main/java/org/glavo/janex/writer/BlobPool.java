@@ -9,7 +9,7 @@ import java.util.*;
 
 import org.glavo.janex.reader.Checksum;
 
-/// Builds one pool with shared raw file blobs and independently indexed table pages.
+/// Builds one pool with shared file blobs and independently indexed table pages.
 final class BlobPool {
     /// Section identifier assigned by the container writer.
     private final long id;
@@ -28,7 +28,7 @@ final class BlobPool {
     /// Page-directory metadata stored in the section table.
     final Map<Integer, Object> info;
 
-    /// Builds a resource root, string pool, and raw blob table from imported layers.
+    /// Builds a resource root, string pool, and blob table from imported layers.
     BlobPool(long id, Resources resources, PackOptions options) throws IOException {
         this.id = id;
         this.options = options;
@@ -90,12 +90,12 @@ final class BlobPool {
         Encoding data = new Encoding();
         List<byte[]> descriptions = new ArrayList<>();
         for (byte[] blob : blobs) {
+            StoredBlob stored = StoredBlob.encode(blob, options.compression, data.size(), false);
             Encoding description = new Encoding();
             description.uint(data.size());
-            description.uint(blob.length);
-            description.uint(0);
+            description.writeBytes(stored.encoding());
             descriptions.add(description.toByteArray());
-            data.writeBytes(blob);
+            data.writeBytes(stored.bytes());
         }
         List<Object> pages = new ArrayList<>();
         for (int start = 0; start < blobs.size(); start += 256) {
@@ -105,11 +105,10 @@ final class BlobPool {
                 page.sized(descriptions.get(index));
             }
             options.limits.bytes(page.size());
-            Encoding encoding = new Encoding();
-            encoding.uint(page.size());
-            encoding.uint(0);
-            pages.add(List.of(data.size(), encoding.toByteArray(), JanexWriter.sha256(page.toByteArray())));
-            data.writeBytes(page.toByteArray());
+            byte[] decoded = page.toByteArray();
+            StoredBlob stored = StoredBlob.encode(decoded, options.compression, data.size(), true);
+            pages.add(List.of(data.size(), stored.encoding(), JanexWriter.sha256(decoded)));
+            data.writeBytes(stored.bytes());
         }
         Encoding section = new Encoding();
         section.little(0x4c4f4f50424f4c42L, 8);

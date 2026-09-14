@@ -11,6 +11,9 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 import org.glavo.janex.reader.*;
+import org.glavo.janex.reader.internal.Input;
+import org.glavo.janex.reader.internal.codec.ZstandardFrames;
+import org.glavo.janex.reader.internal.codec.zstd.Zstandard;
 
 /// Exercises portable writing, resource layers, integrity, bounds, and deterministic output.
 public final class WriterTest {
@@ -25,6 +28,7 @@ public final class WriterTest {
         try {
             jar(root);
             directory(root);
+            compression(root);
             external(root);
             failures(root);
             System.out.println("Java writer checks passed.");
@@ -149,8 +153,13 @@ public final class WriterTest {
         zip.closeEntry();
     }
 
-    /// Reads an untransformed selected resource from the reader's immutable source description.
+    /// Reads a selected text resource through the reader's source description and decoder.
     private static String text(ResourcePlan plan, String name) throws IOException {
+        return new String(content(plan, name), StandardCharsets.UTF_8);
+    }
+
+    /// Reads and decompresses a stored or inline resource using the independent reader decoder.
+    private static byte[] content(ResourcePlan plan, String name) throws IOException {
         var file = plan.roots().get(0).files().get(name);
         require(file != null, "Missing resource: " + name);
         var source = plan.sources().get(file.source());
@@ -162,7 +171,89 @@ public final class WriterTest {
                 input.readFully(bytes);
             }
         }
-        return new String(bytes, StandardCharsets.UTF_8);
+        for (int length : source.filters()) {
+            ZstandardFrames.validate(bytes, plan.limits());
+            byte[] decoded = new byte[length];
+            require(Zstandard.decompress(bytes, 0, bytes.length, decoded, 0, length) == length,
+                    "Wrong decoded resource length");
+            bytes = decoded;
+        }
+        return bytes;
+    }
+
+    /// Checks block boundaries, incompressible input, decoded page checksums, and reproducibility.
+    private static void compression(Path root) throws Exception {
+        Path directory = Files.createDirectory(root.resolve("compression"));
+        Map<String, byte[]> contents = new LinkedHashMap<>();
+        for (int size : new int[]{0, 1, 16, 127, 128, 255, 256, 1024, 131071, 131072, 131073, 524288}) {
+            byte[] bytes = new byte[size];
+            for (int i = 0; i < size; i++) bytes[i] = (byte) (i % 31);
+            contents.put("pattern-" + size, bytes);
+        }
+        byte[] noise = new byte[131073];
+        new Random(42).nextBytes(noise);
+        contents.put("random", noise);
+        contents.put("overhead-tie", new byte[24]);
+        contents.put("overhead-saving", new byte[25]);
+        for (int i = 0; i < 270; i++) {
+            contents.put("small-" + i, ("content-" + i).getBytes(StandardCharsets.UTF_8));
+        }
+        for (var entry : contents.entrySet()) Files.write(directory.resolve(entry.getKey()), entry.getValue());
+        for (boolean enabled : new boolean[]{true, false}) {
+            PackOptions options = new PackOptions(directory, root.resolve("compression-" + enabled + ".janex"));
+            options.mainClass = "demo.Main";
+            options.compression = enabled;
+            JanexWriter.write(options);
+            try (JanexReader reader = new JanexReader(options.output)) {
+                ResourcePlan plan = reader.launch("main").resources;
+                for (var entry : contents.entrySet()) {
+                    require(Arrays.equals(content(plan, entry.getKey()), entry.getValue()),
+                            "Compression changed " + entry.getKey());
+                    var file = plan.roots().get(0).files().get(entry.getKey());
+                    int filters = plan.sources().get(file.source()).filters().length;
+                    if (!enabled || entry.getKey().equals("random") || entry.getKey().equals("overhead-tie")
+                            || entry.getValue().length <= 16) {
+                        require(filters == 0, "Unprofitable or disabled compression was used");
+                    } else if (entry.getValue().length >= 1024 || entry.getKey().equals("overhead-saving")) {
+                        require(filters == 1, "Compressible resource was stored raw");
+                    }
+                }
+            }
+            PackOptions duplicate = new PackOptions(directory, root.resolve("compression-copy-" + enabled + ".janex"));
+            duplicate.mainClass = options.mainClass;
+            duplicate.compression = enabled;
+            JanexWriter.write(duplicate);
+            require(Arrays.equals(Files.readAllBytes(options.output), Files.readAllBytes(duplicate.output)),
+                    "Compression mode is not reproducible");
+
+            BlobPool pool = new BlobPool(1, new Resources(directory, options, new long[]{0}), options);
+            boolean compressedPage = false;
+            for (Object value : (List<?>) pool.info.get(2)) {
+                List<?> page = (List<?>) value;
+                int offset = (Integer) page.get(0) + 8;
+                Input encoding = new Input((byte[]) page.get(1));
+                int stored = Math.toIntExact(encoding.uint());
+                byte[] decoded = Arrays.copyOfRange(pool.bytes, offset, offset + stored);
+                int filters = Math.toIntExact(encoding.uint());
+                require(filters == 0 || enabled, "Disabled page compression was used");
+                if (filters != 0) {
+                    compressedPage = true;
+                    int length = Math.toIntExact(encoding.uint());
+                    require(filters == 1 && encoding.u8() == 1 && encoding.sized().length == 0,
+                            "Unexpected page filter or dictionary");
+                    ZstandardFrames.validate(decoded, options.limits);
+                    byte[] output = new byte[length];
+                    require(Zstandard.decompress(decoded, 0, decoded.length, output, 0, length) == length,
+                            "Wrong decoded page length");
+                    decoded = output;
+                }
+                encoding.end();
+                Checksum.decode((byte[]) page.get(2)).verify(decoded);
+            }
+            require(compressedPage == enabled, "Table page compression was not exercised");
+        }
+        require(Files.size(root.resolve("compression-true.janex")) < Files.size(root.resolve("compression-false.janex")),
+                "Compression did not reduce package size");
     }
 
     /// One fixture action expected to fail with an I/O error.

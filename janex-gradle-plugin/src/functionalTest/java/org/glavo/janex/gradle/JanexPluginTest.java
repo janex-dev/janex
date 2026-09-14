@@ -56,10 +56,21 @@ public final class JanexPluginTest {
                 "--class-path", project.resolve("dependency/build/libs/dependency.jar").toString(),
                 "--jvm-option=-Ddemo.flag=configured"));
         require(runJar(nativeWritten).contains("hello|resource|configured|0"), "Java could not launch the Rust-written package");
-        String java8 = System.getenv("JANEX_TEST_JAVA8_HOME");
+        String java8Home = System.getenv("JANEX_TEST_JAVA8_HOME");
+        String java8 = java8Home == null ? null : Path.of(java8Home, "bin",
+                System.getProperty("os.name").startsWith("Windows") ? "java.exe" : "java").toString();
         if (java8 != null) {
-            require(run(List.of(Path.of(java8, "bin", "java").toString(), "-jar", output.toString()))
+            require(run(List.of(java8, "-jar", output.toString()))
                     .contains("hello|resource|configured|4"), "Java 8 could not launch the Java-written package");
+        }
+        List<String> runtimes = new ArrayList<>(List.of(javaExecutable()));
+        if (java8 != null) runtimes.add(java8);
+        for (String runtime : runtimes) {
+            for (String mode : List.of("bootstrap", "direct")) {
+                String result = run(List.of(executable.toString(), "run", "--allow-unsigned", "--java", runtime,
+                        "--launch-mode", mode, output.toString()));
+                require(result.contains("hello|resource|configured|4"), result);
+            }
         }
 
         BuildResult second = build(project, executable, false, "assemble");
@@ -126,8 +137,14 @@ public final class JanexPluginTest {
         fixture(project, false);
         Path settings = project.resolve("settings.gradle.kts");
         String repository = System.getProperty("janex.test.repository");
-        Files.writeString(settings, "pluginManagement { repositories { maven { url = uri(\""
-                + repository + "\") } } }\n" + Files.readString(settings));
+        Files.writeString(settings, """
+                pluginManagement {
+                    repositories {
+                        maven { url = uri("%s") }
+                        mavenCentral()
+                    }
+                }
+                """.formatted(repository) + Files.readString(settings));
         Path script = project.resolve("build.gradle.kts");
         Files.writeString(script, Files.readString(script)
                 .replace("id(\"org.glavo.janex\")", "id(\"org.glavo.janex\") version \"0.1.0\""));
@@ -152,6 +169,18 @@ public final class JanexPluginTest {
         require(restored.task(":janexPack").getOutcome() == TaskOutcome.FROM_CACHE, restored.getOutput());
         require(Arrays.equals(original, Files.readAllBytes(output)), "Build cache changed the package");
         require(runJar(output).contains("hello|resource|configured|4"), "Java-only packaging failed");
+        String script = Files.readString(project.resolve("build.gradle.kts"));
+        write(project, "build.gradle.kts", script + "\njanex { compression.set(false) }\n");
+        BuildResult uncompressed = GradleRunner.create().withProjectDir(project.toFile()).withPluginClasspath()
+                .withArguments(arguments).build();
+        require(uncompressed.task(":janexPack").getOutcome() == TaskOutcome.SUCCESS, uncompressed.getOutput());
+        require(Files.size(output) > original.length, "Disabling compression did not change the package");
+        require(runJar(output).contains("hello|resource|configured|4"), "Uncompressed packaging failed");
+        write(project, "build.gradle.kts", script);
+        BuildResult recompressed = GradleRunner.create().withProjectDir(project.toFile()).withPluginClasspath()
+                .withArguments(arguments).build();
+        require(recompressed.task(":janexPack").getOutcome() == TaskOutcome.FROM_CACHE, recompressed.getOutput());
+        require(Arrays.equals(original, Files.readAllBytes(output)), "Compression cache key changed the package");
     }
 
     /// Writes a Kotlin DSL application with a project dependency and duplicate dependency resources.
@@ -203,6 +232,7 @@ public final class JanexPluginTest {
                 """);
         write(project, "dependency/src/main/resources/dependency.txt", "resource");
         write(project, "other/src/main/resources/dependency.txt", "other");
+        write(project, "src/main/resources/packed.txt", "compressible-resource\n".repeat(20000));
         write(project, "src/main/java/demo/Main.java", """
                 package demo;
                 import dependency.Greeting;
@@ -212,6 +242,16 @@ public final class JanexPluginTest {
                     public Main() { }
                     /// Prints launch state and Unicode code points for each argument.
                     public static void main(String[] args) throws Exception {
+                        String pattern = "compressible-resource\\n";
+                        int length = 0;
+                        try (java.io.InputStream input = Main.class.getResourceAsStream("/packed.txt")) {
+                            for (int ch; (ch = input.read()) >= 0; length++) {
+                                if (ch != pattern.charAt(length % pattern.length())) {
+                                    throw new AssertionError("Compressed resource changed");
+                                }
+                            }
+                        }
+                        if (length != pattern.length() * 20000) throw new AssertionError("Truncated resource");
                         System.out.println(Greeting.message() + "|" + Greeting.resource() + "|"
                                 + System.getProperty("demo.flag") + "|" + args.length);
                         for (String arg : args) {
