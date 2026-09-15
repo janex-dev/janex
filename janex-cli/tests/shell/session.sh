@@ -3,7 +3,10 @@
 
 set -eu
 original_java=$JAVA_HOME
-. "$JANEX_HOME/shell/init.sh"
+janex_home=$JANEX_HOME
+unset JANEX_HOME
+. "$janex_home/shell/init.sh"
+test "$JANEX_HOME" = "$janex_home"
 test "${JANEX_SHELL_STATE+x}" != x
 test "${GRADLE_HOME+x}" != x
 test "$JAVA_HOME" = "$original_java"

@@ -1231,6 +1231,7 @@ dependencies = [
  "janex-format",
  "janex-host",
  "janex-java",
+ "janex-platform",
  "janex-signature",
  "mimalloc",
  "pgp",

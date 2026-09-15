@@ -71,11 +71,9 @@ tasks.register("assembleRelease") {
 
 tasks.register<Copy>("installJanex") {
     group = "distribution"
-    description = "Installs native release binaries and shell scripts into JANEX_HOME."
+    description = "Installs native release binaries into an explicit executable directory."
     dependsOn(cargoBuildRelease)
-    val home = providers.gradleProperty("janexHome")
-        .orElse(providers.environmentVariable("JANEX_HOME"))
-        .getOrElse(System.getProperty("user.home") + "/.janex")
+    val installDirectory = providers.gradleProperty("janexInstallDir").getOrElse("")
     val cargoDirectory = providers.environmentVariable("CARGO_TARGET_DIR")
         .map { file(it) }.getOrElse(file("target"))
     val target = providers.environmentVariable("CARGO_BUILD_TARGET").getOrElse("")
@@ -85,20 +83,15 @@ tasks.register<Copy>("installJanex") {
         else if (System.getProperty("os.name").startsWith("Mac")) listOf("janex")
         else listOf("janex", "janex-launcher")
     doFirst {
-        require(home.isNotBlank() && java.io.File(home).isAbsolute) {
-            "janexHome or JANEX_HOME must be a nonempty absolute path"
+        require(installDirectory.isNotBlank() && java.io.File(installDirectory).isAbsolute) {
+            "Set -PjanexInstallDir to a nonempty absolute executable directory"
         }
         names.forEach { require(binaries.resolve(it).isFile) { "Missing release binary: $it" } }
     }
-    into(home)
+    into(installDirectory.ifEmpty { layout.buildDirectory.dir("install").get().asFile.path })
     from(binaries) {
         include(names)
-        into("bin")
         filePermissions { unix("rwxr-xr-x") }
-    }
-    from("shell") {
-        into("shell")
-        filePermissions { unix("rw-r--r--") }
     }
 }
 
@@ -192,11 +185,13 @@ artifactArchive.configure {
     destinationDirectory = layout.buildDirectory.dir("distributions")
     from(artifactDirectory) {
         include(artifactNames)
-        into("bin")
         filePermissions { unix("rwxr-xr-x") }
     }
-    from("shell") {
-        into("shell")
+    from("LICENSE") {
+        filePermissions { unix("rw-r--r--") }
+    }
+    from("docs/Distribution.md") {
+        rename { "README.md" }
         filePermissions { unix("rw-r--r--") }
     }
     isPreserveFileTimestamps = false

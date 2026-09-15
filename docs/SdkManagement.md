@@ -84,9 +84,10 @@ janex list --json
 
 ## Shell Integration
 
-Distributions include `bin/` and `shell/`; extract them into `JANEX_HOME` (default `~/.janex`).
-Load the corresponding script once, or add it to the shell startup file. For a custom installation,
-set `JANEX_HOME` to its absolute path before loading the script.
+Install the Janex executable anywhere, then run `janex init`. It writes all three initialization
+scripts into `JANEX_HOME/shell` (default `~/.janex/shell`) from embedded templates. Set `JANEX_HOME`
+to an absolute path before initialization to use a custom user directory. No SDK is required.
+Load the corresponding script once, or add its loading command to the shell startup file.
 
 ```sh
 source "$HOME/.janex/shell/init.sh"
@@ -98,13 +99,15 @@ source "$HOME/.janex/shell/init.sh"
 
 Bash and Zsh share `init.sh`; sh uses `. "$HOME/.janex/shell/init.sh"`.
 Fish uses `source "$HOME/.janex/shell/init.fish"`. PowerShell uses `init.ps1` on every platform.
-Initialization adds Janex's binary directory to PATH and defines a thin `janex` function without
+Loading the script adds Janex's binary directory to PATH and defines a thin `janex` function without
 selecting SDKs. Other commands pass through to the native executable. `activate`, `use`, and
 `deactivate` evaluate environment output only when the native command succeeds.
 
-Portable installations can generate the same integration with `janex init <shell>`:
-`eval "$(janex init bash)"`, `janex init fish | source`, or
-`janex init powershell | Out-String | Invoke-Expression`. Janex never edits startup files automatically.
+Scripts call the executable that generated them and use the initialized user directory when
+`JANEX_HOME` is unset. An explicitly set `JANEX_HOME` takes precedence. Run `janex init` again after
+moving the executable, then reload the script. Repeated initialization replaces only the three
+managed scripts; each file is replaced atomically. SDKs, caches, state, and other files are preserved.
+Janex never edits startup files automatically. The script-rendering protocol is internal.
 
 ```sh
 janex activate
@@ -127,8 +130,8 @@ do not block a later project change. `use --project <target>` only saves project
 Repeated switches remove previously inserted SDK bins from PATH. Manual PATH additions are retained
 across switches. `deactivate` restores the activation-time PATH and SDK home variables, including
 their absent/empty state, and retains the shell function and Janex's initialized PATH entry.
-That explicit restoration replaces later
-manual edits to these variables. Reinitialization retains the original snapshot. Internal session
+That explicit restoration replaces later manual edits to these variables. Reloading integration
+retains the original snapshot. Internal session
 state is carried by `JANEX_SHELL_STATE`; it does not modify global SDK defaults. No existing JVM is
 required to initialize integration. Automatic directory hooks are not installed; run `janex use`
 after changing projects.

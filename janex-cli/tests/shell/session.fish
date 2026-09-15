@@ -2,7 +2,10 @@
 # SPDX-License-Identifier: MPL-2.0
 
 set -l original_java $JAVA_HOME
-source "$JANEX_HOME/shell/init.fish"; or exit 40
+set -l janex_home $JANEX_HOME
+set -e JANEX_HOME
+source "$janex_home/shell/init.fish"; or exit 40
+test "$JANEX_HOME" = "$janex_home"; or exit 55
 set -q JANEX_SHELL_STATE; and exit 41
 set -q GRADLE_HOME; and exit 42
 test "$JAVA_HOME" = "$original_java"; or exit 43

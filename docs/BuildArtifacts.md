@@ -6,9 +6,9 @@ from the workflow run page. Artifacts expire after 14 days and contain a single
 archive. Windows uses ZIP; Unix uses tar.xz to preserve executable
 permissions.
 
-Archives contain `bin/` for executables and `shell/` for initialization scripts, without an extra
-enclosing directory. Extract into `JANEX_HOME` (default `~/.janex`), then load the appropriate
-[shell initialization script](SdkManagement.md#shell-integration).
+Archives contain executables, `README.md`, and `LICENSE` at the root. Install the executables
+anywhere and run `janex init` to generate all [shell initialization scripts](SdkManagement.md#shell-integration)
+inside `JANEX_HOME`. The user directory is independent of the executable's installation directory.
 
 Archives and GitHub artifacts use short platform names, such as
 `janex-windows-x86.zip`, `janex-windows-x86_64.zip`, and `janex-linux-arm64.tar.xz`.
@@ -79,10 +79,11 @@ use `assembleArtifacts`; they are written to `target/<target>/release/` unless
 
 ## Local Installation
 
-Build and install for the current host with `./gradlew installJanex` (`.\gradlew.bat installJanex`
-on Windows). The destination is `-PjanexHome=<absolute-path>`, then `JANEX_HOME`, then `~/.janex`.
-The task copies release binaries into `bin/` and initialization scripts into `shell/`, preserving
-SDKs, caches, state, and other files. It does not edit shell startup files.
+Build and install for the current host with
+`./gradlew installJanex -PjanexInstallDir=<absolute-directory>` (use `.\gradlew.bat` on Windows).
+The destination is required and receives only release executables. Add it to PATH or invoke Janex
+by its full path, then run `janex init`. The Gradle task does not initialize `JANEX_HOME` or edit
+shell startup files.
 
 ## Verification
 

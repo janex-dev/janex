@@ -13,7 +13,7 @@ use std::{ffi::OsString, path::PathBuf};
 /// SDK operations in the shared Janex command namespace.
 #[derive(Subcommand)]
 pub(super) enum SdkCommand {
-    /// Print shell initialization code to evaluate in the current shell.
+    /// Write initialization scripts for all supported shells into JANEX_HOME.
     Init(InitArgs),
     /// Activate SDK selections in the initialized shell.
     Activate(ActivateArgs),
@@ -252,9 +252,9 @@ impl ShellArg {
 /// Shell initialization request.
 #[derive(Args)]
 pub(super) struct InitArgs {
-    /// Shell whose integration script should be printed; bash and zsh also accept sh syntax.
-    #[arg(value_enum)]
-    shell: ShellArg,
+    /// Internal rendering protocol used by the installed initialization scripts.
+    #[arg(long, value_enum, hide = true)]
+    shell: Option<ShellArg>,
 }
 
 /// Shell activation request, normally supplied by the shell function.
@@ -309,16 +309,25 @@ pub(super) struct UseArgs {
 /// Executes SDK commands without embedding policy in argument parsing.
 pub(super) fn run(command: SdkCommand) -> Result<i32> {
     if let SdkCommand::Init(args) = command {
-        print!("{}", super::shell::init(args.shell.shell())?);
+        if let Some(shell) = args.shell {
+            print!("{}", super::shell::init(shell.shell())?);
+        } else {
+            super::shell::install()?;
+        }
         return Ok(0);
     }
     let manager = SdkManager::user()?;
     match command {
         SdkCommand::Init(_) => unreachable!(),
         SdkCommand::Activate(args) => {
-            let shell = args.shell.ok_or_else(|| Error::InvalidInput(
-                "load Janex shell integration before using activate; evaluate janex init <shell> first".into(),
-            ))?.shell();
+            let shell =
+                args.shell
+                    .ok_or_else(|| {
+                        Error::InvalidInput(
+                "run janex init and load the generated shell script before using activate".into(),
+            )
+                    })?
+                    .shell();
             let environment =
                 manager.shell_environment(&[], &std::env::current_dir()?, shell, false)?;
             print!("{environment}");

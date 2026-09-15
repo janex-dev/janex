@@ -3,7 +3,10 @@
 
 $ErrorActionPreference = 'Stop'
 $originalJava = $env:JAVA_HOME
-. "$env:JANEX_HOME/shell/init.ps1"
+$janexHome = $env:JANEX_HOME
+Remove-Item Env:JANEX_HOME
+. "$janexHome/shell/init.ps1"
+if ($env:JANEX_HOME -ne $janexHome) { throw 'Initialized home was not restored' }
 if (Test-Path Env:JANEX_SHELL_STATE) { throw 'Initialization activated SDKs' }
 if ($env:JAVA_HOME -ne $originalJava -or (Test-Path Env:GRADLE_HOME)) { throw 'Initialization changed SDK homes' }
 $originalPath = $env:PATH

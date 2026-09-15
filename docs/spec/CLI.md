@@ -407,7 +407,7 @@ janex default <TARGET_OR_ID>
 janex default --clear [--family java|gradle|maven]
 janex current [--json]
 janex home <TARGET_OR_ID>
-janex init <bash|zsh|sh|fish|powershell>
+janex init
 janex activate
 janex deactivate
 janex use [TARGET_OR_ID...]
@@ -443,9 +443,12 @@ explicit selection, shell home variable, project selection, and global default, 
 Java additionally falls back to system discovery. `env` prints assignments for
 the caller to evaluate; it cannot modify its parent shell.
 
-`init <shell>` prints initialization code that adds Janex's binary directory to PATH and defines a
-shell function without selecting SDKs. Installed `shell/init.sh`, `init.fish`, and `init.ps1` load
-this code from `JANEX_HOME/bin`. With integration loaded, `activate` applies SDK selections and
+`init` writes `shell/init.sh`, `shell/init.fish`, and `shell/init.ps1` into `JANEX_HOME` and prints
+loading commands. These scripts bind the current executable path and use the initialized user
+directory when `JANEX_HOME` is unset. Repeated initialization updates only those scripts, preserving
+SDKs, caches, state, and other files; it never edits shell profiles. Each script is replaced atomically,
+but a failure may leave earlier scripts updated. Loading a script adds the executable's directory to
+PATH and defines a shell function without selecting SDKs. With integration loaded, `activate` applies SDK selections and
 `use <targets...>` selects SDKs in the current terminal; `use` without targets
 clears manual selections and applies the current project's configuration and defaults. Native
 `use` without integration reports an error instead of silently writing project configuration.

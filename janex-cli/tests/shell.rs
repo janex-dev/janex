@@ -68,19 +68,17 @@ fn exercise(shell: &str, script: &str, extension: &str) {
     let second = temp.path().join("SDK's second $value");
     register(&first, &home, "8.14.2");
     register(&second, &home, "8.14.3");
-    fs::create_dir_all(home.join("bin")).unwrap();
-    fs::create_dir_all(home.join("shell")).unwrap();
-    let executable = home
-        .join("bin")
-        .join(if cfg!(windows) { "janex.exe" } else { "janex" });
+    let binaries = temp.path().join("Program's $value @JANEX_BIN@ @JANEX_EXE@");
+    fs::create_dir_all(&binaries).unwrap();
+    let executable = binaries.join(if cfg!(windows) { "janex.exe" } else { "janex" });
     fs::copy(env!("CARGO_BIN_EXE_janex"), &executable).unwrap();
-    for (name, content) in [
-        ("init.sh", include_str!("../../shell/init.sh")),
-        ("init.ps1", include_str!("../../shell/init.ps1")),
-        ("init.fish", include_str!("../../shell/init.fish")),
-    ] {
-        fs::write(home.join("shell").join(name), content).unwrap();
-    }
+    success(
+        Command::new(&executable)
+            .env("JANEX_HOME", &home)
+            .arg("init")
+            .output()
+            .unwrap(),
+    );
     let project = temp.path().join("project");
     let other = temp.path().join("other");
     fs::create_dir(&project).unwrap();
@@ -132,20 +130,52 @@ fn exercise(shell: &str, script: &str, extension: &str) {
 
 /// Keeps initialization available even when project configuration or inherited SDK state is invalid.
 #[test]
-fn initialization_does_not_resolve_sdks_or_create_a_home() {
+fn initialization_updates_only_managed_scripts_without_resolving_sdks() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     fs::write(temp.path().join(".janex-toolchains.toml"), "invalid [").unwrap();
-    for shell in ["sh", "fish", "powershell"] {
+    fs::create_dir_all(home.join("cache")).unwrap();
+    fs::write(home.join("cache/keep"), b"cache").unwrap();
+    for _ in 0..2 {
         let output = Command::new(env!("CARGO_BIN_EXE_janex"))
             .env("JANEX_HOME", &home)
             .env("JANEX_SHELL_STATE", "invalid state")
             .current_dir(temp.path())
-            .args(["init", shell])
+            .arg("init")
             .output()
             .unwrap();
         assert!(!output.stdout.is_empty());
         success(output);
+        for name in ["init.sh", "init.fish", "init.ps1"] {
+            let path = home.join("shell").join(name);
+            assert!(fs::read_to_string(&path).unwrap().contains("init --shell"));
+            fs::write(path, "outdated").unwrap();
+        }
+        assert_eq!(fs::read(home.join("cache/keep")).unwrap(), b"cache");
+        assert!(!home.join("state").exists());
+        assert!(!home.join("sdks").exists());
+        fs::write(home.join("shell/custom.sh"), b"custom").unwrap();
+    }
+    assert_eq!(fs::read(home.join("shell/custom.sh")).unwrap(), b"custom");
+}
+
+/// Keeps help, version, and internal rendering free of user-directory initialization.
+#[test]
+fn read_only_commands_do_not_initialize_home() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    for args in [
+        vec!["--help"],
+        vec!["--version"],
+        vec!["init", "--shell", "sh"],
+    ] {
+        success(
+            Command::new(env!("CARGO_BIN_EXE_janex"))
+                .env("JANEX_HOME", &home)
+                .args(args)
+                .output()
+                .unwrap(),
+        );
         assert!(!home.exists());
     }
 }

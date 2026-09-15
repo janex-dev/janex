@@ -3,7 +3,10 @@
 
 _janex_init() {
     local _janex_code
-    _janex_code=$("${JANEX_HOME-$HOME/.janex}/bin/janex" init sh) || return $?
+    _janex_code=$(@JANEX_EXE@ init --shell sh) || return $?
+    if [ "${JANEX_HOME+x}" != x ]; then
+        export JANEX_HOME=@JANEX_HOME@
+    fi
     eval "$_janex_code"
 }
 if _janex_init; then
