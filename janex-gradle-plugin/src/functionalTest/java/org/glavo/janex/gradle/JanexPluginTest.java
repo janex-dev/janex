@@ -51,11 +51,11 @@ public final class JanexPluginTest {
         System.out.println("Janex Gradle plugin functional checks passed.");
     }
 
-    /// Verifies integer and Provider assignments, equivalent VERS output, and invalid-value rejection.
+    /// Verifies minimum-version methods, string properties, equivalent VERS output, and invalid-value rejection.
     private static void javaVersionPackaging(Path project, Path executable) throws Exception {
         fixture(project, false);
         String script = Files.readString(project.resolve("build.gradle.kts"));
-        write(project, "build.gradle.kts", script + "\njanex { javaVersion = 17 }\n");
+        write(project, "build.gradle.kts", script + "\njanex { javaVersion(17) }\n");
         build(project, executable, false, "janexPack");
         Path output = project.resolve("build/distributions/fixture.janex");
         byte[] original = Files.readAllBytes(output);
@@ -66,17 +66,28 @@ public final class JanexPluginTest {
 
         for (String configuration : List.of(
                 "janex { javaVersion = \"vers:jep322/>=17\" }",
-                "janex { javaVersion = providers.provider { 17 } }",
+                "janex { javaVersion.set(\"vers:jep322/>=17\") }",
                 "janex { javaVersion = providers.provider { \"vers:jep322/>=17\" } }",
-                "tasks.named<org.glavo.janex.gradle.JanexPack>(\"janexPack\") { javaVersion = 17 }")) {
+                "tasks.named<org.glavo.janex.gradle.JanexPack>(\"janexPack\") { javaVersion(17) }",
+                "tasks.named<org.glavo.janex.gradle.JanexPack>(\"janexPack\") { javaVersion = providers.provider { \"vers:jep322/>=17\" } }")) {
             write(project, "build.gradle.kts", script + "\n" + configuration + "\n");
             build(project, executable, false, "janexPack");
             require(Arrays.equals(original, Files.readAllBytes(output)), "Equivalent Java requirements changed the package");
         }
-        for (String value : List.of("7", "0", "17.0")) {
-            write(project, "build.gradle.kts", script + "\njanex { javaVersion = " + value + " }\n");
+        for (String configuration : List.of(
+                "janex { javaVersion(7) }",
+                "janex { javaVersion(0) }",
+                "tasks.named<org.glavo.janex.gradle.JanexPack>(\"janexPack\") { javaVersion(-1) }")) {
+            write(project, "build.gradle.kts", script + "\n" + configuration + "\n");
             BuildResult failed = build(project, executable, true, "janexPack");
-            require(failed.getOutput().contains("javaVersion must be"), failed.getOutput());
+            require(failed.getOutput().contains("javaVersion must be at least 8"), failed.getOutput());
+            require(failed.task(":janexPack") == null, "Invalid minimum version was not rejected during configuration");
+            require(Arrays.equals(original, Files.readAllBytes(output)), "Invalid Java requirement replaced the package");
+        }
+        for (String configuration : List.of("janex { javaVersion = 17 }", "janex { javaVersion(17.0) }")) {
+            write(project, "build.gradle.kts", script + "\n" + configuration + "\n");
+            BuildResult failed = build(project, executable, true, "janexPack");
+            require(failed.getOutput().contains("Script compilation error"), failed.getOutput());
             require(Arrays.equals(original, Files.readAllBytes(output)), "Invalid Java requirement replaced the package");
         }
     }

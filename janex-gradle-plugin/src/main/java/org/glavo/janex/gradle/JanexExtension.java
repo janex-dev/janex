@@ -3,7 +3,6 @@
 
 package org.glavo.janex.gradle;
 
-import java.io.Serializable;
 import javax.inject.Inject;
 import org.gradle.api.Action;
 import org.gradle.api.model.ObjectFactory;
@@ -80,13 +79,23 @@ public abstract class JanexExtension {
     /// @return the ordered preset-argument property
     public abstract ListProperty<String> getArguments();
 
-    /// Returns the optional Java runtime requirement.
-    /// Values must be an [Integer] of at least 8 or a [String] in `vers:jep322` syntax.
-    /// Integer `N` means `vers:jep322/>=N`. Providers may supply either type.
+    /// Returns the optional Java runtime requirement in `vers:jep322` syntax.
     /// This setting does not configure the Java toolchain or compilation target.
     ///
     /// @return the optional Java version requirement property
-    public abstract Property<Serializable> getJavaVersion();
+    public abstract Property<String> getJavaVersion();
+
+    /// Sets the Java runtime requirement to `vers:jep322/>=minimumVersion`.
+    /// This setting does not configure the Java toolchain or compilation target.
+    ///
+    /// @param minimumVersion minimum Java feature version, at least 8
+    /// @throws IllegalArgumentException if `minimumVersion` is below 8
+    public void javaVersion(int minimumVersion) {
+        if (minimumVersion < 8) {
+            throw new IllegalArgumentException("javaVersion must be at least 8");
+        }
+        getJavaVersion().set("vers:jep322/>=" + minimumVersion);
+    }
 
     /// Returns whether to compress blobs and table pages when their encoded representation shrinks.
     ///
