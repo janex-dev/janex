@@ -21,7 +21,7 @@ use janex_format::{
 pub use janex_java::launch::LaunchMode;
 use janex_java::{
     launch::{EntryPoint, LaunchRequest},
-    runtime::{self as java, JavaOptions, JavaRuntime},
+    runtime::{JavaOptions, JavaRuntime},
 };
 use janex_signature::{cms::CmsSignature, openpgp::OpenPgpSignature};
 use std::{
@@ -44,7 +44,7 @@ pub struct RunOptions {
     pub application: Option<String>,
     /// Condition channel, normally `run`, `open`, or `command`.
     pub invocation: String,
-    /// Java executable or home override, otherwise native-preferred JAVA_HOME and PATH candidates.
+    /// Java executable or home override, otherwise environment, managed SDK, and PATH candidates.
     pub java: JavaOptions,
     /// Entry-point invocation strategy; defaults to lossless bootstrap argument transport.
     pub launch_mode: LaunchMode,
@@ -113,6 +113,8 @@ pub struct ExecutionPlan {
     windowed: bool,
     /// Lifetime owner of every generated Java path entry.
     directory: TempDir,
+    /// Prevents uninstall of the selected managed SDK while this plan exists.
+    sdk_lease: Option<fs::File>,
 }
 
 impl ExecutionPlan {
@@ -151,7 +153,7 @@ impl ExecutionPlan {
     /// Creates a direct Java command inheriting the current environment, directory, and streams.
     ///
     /// The caller may customize its I/O. Keep this plan alive until the child process exits;
-    /// dropping it removes files that the child may still need to load.
+    /// dropping it removes files that the child may still need to load and releases its SDK lease.
     pub fn command(&self) -> Command {
         let mut command = Command::new(&self.runtime.executable);
         command
@@ -266,7 +268,7 @@ pub fn prepare_snapshot(options: &RunOptions, bytes: Vec<u8>) -> Result<Executio
     let mut blobs = BlobStore::new(reader);
     let mut roots = Roots::default();
     let mut failures = Vec::new();
-    for runtime in java::runtimes(&options.java)? {
+    for (runtime, sdk_lease) in crate::sdk::application_runtimes(&options.java)? {
         let executable = runtime.executable.clone();
         let result = prepare_runtime(
             options,
@@ -278,7 +280,10 @@ pub fn prepare_snapshot(options: &RunOptions, bytes: Vec<u8>) -> Result<Executio
             authentication.clone(),
         );
         match result {
-            Ok(plan) => return Ok(plan),
+            Ok(mut plan) => {
+                plan.sdk_lease = sdk_lease;
+                return Ok(plan);
+            }
             Err(error) if options.java.is_explicit() => return Err(error),
             Err(error) => failures.push(format!("{}: {error}", executable.display())),
         }
@@ -437,6 +442,7 @@ fn prepare_runtime(
         authentication,
         windowed: application.windowed(),
         directory,
+        sdk_lease: None,
     })
 }
 

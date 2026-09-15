@@ -3,6 +3,8 @@
 
 //! Janex command-line entry point.
 
+mod sdk;
+
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use janex_host::pack::{PackOptions, PackSigner, pack};
 use janex_host::{
@@ -29,7 +31,7 @@ static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[command(
     name = "janex",
     version,
-    about = "Package and launch Java applications with Janex"
+    about = "Manage Java SDKs, package and launch applications with Janex"
 )]
 struct Cli {
     /// Operation to perform.
@@ -40,6 +42,9 @@ struct Cli {
 /// Supported command implementations.
 #[derive(Subcommand)]
 enum Command {
+    /// Manage installed SDK versions and execution environments.
+    #[command(flatten)]
+    Sdk(sdk::SdkCommand),
     /// Package a directory or JAR as a Janex application.
     Pack(Box<PackArgs>),
     /// Run an application from a local Janex file.
@@ -249,6 +254,7 @@ fn main() {
 /// Executes a parsed command without interpreting argument contents as shell text.
 fn run(cli: Cli) -> janex_host::Result<i32> {
     match cli.command {
+        Command::Sdk(command) => return sdk::run(command),
         Command::Pack(args) => {
             let args = *args;
             let mut options = PackOptions::new(args.source, args.output);

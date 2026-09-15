@@ -17,6 +17,8 @@ janex-java.workspace = true
 janex-format.workspace = true
 rpassword = "7"
 zeroize = "1"
+serde_json = "1"
+serde = "1"
 
 [target.'cfg(all(target_os = "linux", target_env = "musl"))'.dependencies]
 mimalloc.workspace = true

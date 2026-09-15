@@ -14,5 +14,6 @@ pub mod native_launcher;
 pub mod pack;
 mod roots;
 pub mod run;
+pub mod sdk;
 
 pub use error::{Error, Result};

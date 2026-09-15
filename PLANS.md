@@ -1,12 +1,28 @@
 # Janex Implementation: Packaging, Dependencies, Signing, and Java Launching
 
+## SDK Management
+
+- Add shared `available`, `install`, `list`, `update`, `uninstall`, `default`, `current`, `home`,
+  `use`, `pin`, `unpin`, `exec`, and `env` commands, initially backed by Java distributions from Foojay Disco.
+- Preserve all installed versions. Record requirements separately from concrete releases, platform
+  variants, and SHA-256 identities. Support fixed builds and pinned request bindings.
+- Download over HTTPS and require a secure archive checksum; obtain GitHub asset SHA-256 metadata
+  when a Disco record only advertises SHA-1. Stream downloads and bound extraction.
+- Commit SDK trees before atomically replacing the CBOR registry. Serialize registry writes and
+  protect selected SDKs with shared leases during prepared and running Janex executions.
+- Support read-only external registration, global defaults, declarative project selection, shell
+  environment output, child execution, and managed-Java discovery in both application launch modes.
+- Validate archive traversal, links, limits, corrupt metadata, multiple versions, pinned updates,
+  default protection, active leases, external ownership, and Windows/Linux command integration.
+- Keep Maven application installation and non-Java SDK providers as separate subsequent work.
+
 ## Goals and Boundaries
 
 Implement the complete directory or JAR -> `.janex` -> Java process workflow, supporting classpath
 and module-path applications, together with OpenPGP and CMS signature generation and verification.
 
-Use an existing Java runtime. Defer installation, SDK management,
-global trust stores, and persistent verification caches. Keep the file format at version **0.1**.
+Support existing and managed Java runtimes. Keep global trust stores and persistent verification
+caches separate from SDK management. Keep the file format at version **0.1**.
 
 ## Specification and Module Boundaries
 
