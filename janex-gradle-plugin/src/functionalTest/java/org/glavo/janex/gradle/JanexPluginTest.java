@@ -42,12 +42,43 @@ public final class JanexPluginTest {
         require(Files.isRegularFile(executable), "Build the Janex CLI first: " + executable);
         Path directory = Path.of(System.getProperty("janex.test.directory"));
         Files.createDirectories(directory);
+        javaVersionPackaging(Files.createTempDirectory(directory, "java-version-"), executable);
         classpathPackaging(Files.createTempDirectory(directory, "classpath-"), executable);
         modularPackaging(Files.createTempDirectory(directory, "modules-"), executable);
         publishedPlugin(Files.createTempDirectory(directory, "published-"), executable);
         javaOnlyPackaging(Files.createTempDirectory(directory, "java-only-"));
         signingPackaging(Files.createTempDirectory(directory, "signing-"), executable);
         System.out.println("Janex Gradle plugin functional checks passed.");
+    }
+
+    /// Verifies integer and Provider assignments, equivalent VERS output, and invalid-value rejection.
+    private static void javaVersionPackaging(Path project, Path executable) throws Exception {
+        fixture(project, false);
+        String script = Files.readString(project.resolve("build.gradle.kts"));
+        write(project, "build.gradle.kts", script + "\njanex { javaVersion = 17 }\n");
+        build(project, executable, false, "janexPack");
+        Path output = project.resolve("build/distributions/fixture.janex");
+        byte[] original = Files.readAllBytes(output);
+        require(runJar(output).contains("hello|resource|configured|4"), "Minimum Java version rejected a newer runtime");
+        BuildResult repeated = build(project, executable, false, "janexPack");
+        require(repeated.getOutput().contains("Reusing configuration cache"), repeated.getOutput());
+        require(repeated.task(":janexPack").getOutcome() == TaskOutcome.UP_TO_DATE, repeated.getOutput());
+
+        for (String configuration : List.of(
+                "janex { javaVersion = \"vers:jep322/>=17\" }",
+                "janex { javaVersion = providers.provider { 17 } }",
+                "janex { javaVersion = providers.provider { \"vers:jep322/>=17\" } }",
+                "tasks.named<org.glavo.janex.gradle.JanexPack>(\"janexPack\") { javaVersion = 17 }")) {
+            write(project, "build.gradle.kts", script + "\n" + configuration + "\n");
+            build(project, executable, false, "janexPack");
+            require(Arrays.equals(original, Files.readAllBytes(output)), "Equivalent Java requirements changed the package");
+        }
+        for (String value : List.of("7", "0", "17.0")) {
+            write(project, "build.gradle.kts", script + "\njanex { javaVersion = " + value + " }\n");
+            BuildResult failed = build(project, executable, true, "janexPack");
+            require(failed.getOutput().contains("javaVersion must be"), failed.getOutput());
+            require(Arrays.equals(original, Files.readAllBytes(output)), "Invalid Java requirement replaced the package");
+        }
     }
 
     /// Verifies dependencies, resources, argument boundaries, incremental builds, and failed repacks.

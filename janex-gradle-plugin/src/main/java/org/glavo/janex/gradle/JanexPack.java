@@ -5,6 +5,7 @@ package org.glavo.janex.gradle;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.Serializable;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -138,12 +139,16 @@ public abstract class JanexPack extends DefaultTask {
     @Input
     public abstract ListProperty<String> getArguments();
 
-    /// Returns the optional Java version requirement in `vers:jep322` syntax.
+    /// Returns the optional Java runtime requirement.
+    /// Values must be an [Integer] of at least 8 or a [String] in `vers:jep322` syntax.
+    /// Integer `N` means `vers:jep322/>=N`. Providers may supply either type.
+    /// Invalid types and integer values are rejected when the task executes.
+    /// This setting does not configure the Java toolchain or compilation target.
     ///
     /// @return the optional Java version requirement property
     @Input
     @Optional
-    public abstract Property<String> getJavaVersion();
+    public abstract Property<Serializable> getJavaVersion();
 
     /// Returns whether to compress blobs and table pages when their encoded representation shrinks.
     ///
@@ -194,9 +199,11 @@ public abstract class JanexPack extends DefaultTask {
     /// Temporary files are removed after execution. The destination must not name an input.
     ///
     /// @throws IOException if creating, moving, or removing output files fails
-    /// @throws GradleException if the destination aliases an input
+    /// @throws GradleException if the destination aliases an input or the Java requirement has an
+    /// unsupported value type or an integer below 8
     @TaskAction
     public void pack() throws IOException {
+        String javaVersion = javaVersion(getJavaVersion().getOrNull());
         Path output = getOutputFile().get().getAsFile().toPath().toAbsolutePath().normalize();
         List<File> inputs = new ArrayList<>();
         inputs.add(getSource().get().getAsFile());
@@ -223,7 +230,7 @@ public abstract class JanexPack extends DefaultTask {
             options.applicationId = getApplicationId().get();
             options.mainClass = getMainClass().getOrNull();
             options.mainModule = getMainModule().getOrNull();
-            options.javaVersion = getJavaVersion().getOrNull();
+            options.javaVersion = javaVersion;
             for (File file : getClassPath()) options.classPath.add(file.toPath());
             for (File file : getModulePath()) options.modulePath.add(file.toPath());
             options.jvmOptions.addAll(getJvmOptions().get());
@@ -248,5 +255,17 @@ public abstract class JanexPack extends DefaultTask {
             Files.deleteIfExists(temporaryOutput);
             Files.deleteIfExists(temporaryDirectory);
         }
+    }
+
+    /// Converts an absent, integer, or textual runtime requirement to the writer's VERS input.
+    /// String syntax is validated by the writer before the existing output is replaced.
+    private static String javaVersion(Object value) {
+        if (value == null) return null;
+        if (value instanceof String text) return text;
+        if (value instanceof Integer feature) {
+            if (feature < 8) throw new GradleException("javaVersion must be at least 8");
+            return "vers:jep322/>=" + feature;
+        }
+        throw new GradleException("javaVersion must be an Integer of at least 8 or a VERS String");
     }
 }

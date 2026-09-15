@@ -56,7 +56,7 @@ janex {
     applicationId = "main"
     mainClass = "example.Main"
     // mainModule = "example.app"
-    // javaVersion = "vers:jep322/>=17"
+    javaVersion = 17
     jvmOptions.add("-Xmx512m")
     arguments.addAll("", "two words", "\uD83D\uDE80")
     withLauncher = true
@@ -65,6 +65,11 @@ janex {
     outputFile = layout.buildDirectory.file("distributions/application.janex")
 }
 ```
+
+`javaVersion = 17` requires Java 17 or later and is encoded as `vers:jep322/>=17`.
+Integers must be at least 8. Strings retain the full VERS syntax, for example
+`javaVersion = "vers:jep322/>=17|<22"`. Both forms accept Gradle Providers and can also be set
+on `JanexPack` tasks. This requirement does not change the Java toolchain or compilation target.
 
 `withLauncher = false` omits the appended JAR launcher; the result can still be launched with
 `janex run --allow-unsigned`. Arguments are passed as complete strings without shell splitting.
