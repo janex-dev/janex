@@ -6,14 +6,14 @@
 use clap::{Args, Subcommand, ValueEnum};
 use janex_host::{
     Error, Result,
-    sdk::{CatalogOptions, Installation, JavaRequest, SdkManager, Shell},
+    sdk::{CatalogOptions, Installation, SdkManager, SdkRequest, Shell},
 };
 use std::{ffi::OsString, path::PathBuf};
 
 /// SDK operations in the shared Janex command namespace.
 #[derive(Subcommand)]
 pub(super) enum SdkCommand {
-    /// List downloadable Java SDK versions without installing them.
+    /// List downloadable SDK versions without installing them.
     Available(AvailableArgs),
     /// Install SDK versions while retaining all existing versions.
     Install(InstallArgs),
@@ -25,15 +25,15 @@ pub(super) enum SdkCommand {
     Uninstall(TargetArgs),
     /// Set or clear the global SDK default without downloading.
     Default(DefaultArgs),
-    /// Show the Java home selected by the shell, project, or global default.
+    /// Show SDK homes selected by the shell, project, or global defaults.
     Current(CurrentArgs),
-    /// Print the Java home for an installed SDK target.
+    /// Print the home for an installed SDK target.
     Home(TargetArgs),
-    /// Execute a command with a selected SDK's JAVA_HOME and PATH.
+    /// Execute a command with selected SDK homes and tools on PATH.
     Exec(ExecArgs),
     /// Print shell environment assignments for an installed SDK.
     Env(EnvArgs),
-    /// Save an installed Java selection in the current project's toolchain file.
+    /// Save an installed SDK selection in the current project's toolchain file.
     Use(UseArgs),
     /// Prevent updates from changing a saved SDK requirement's selected build.
     Pin(PinArgs),
@@ -58,8 +58,8 @@ pub(super) struct VariantArgs {
     #[arg(long, value_name = "ARCH")]
     arch: Option<String>,
     /// Install development tools or only the runtime.
-    #[arg(long, value_parser = ["jdk", "jre"], default_value = "jdk")]
-    kind: String,
+    #[arg(long, value_parser = ["jdk", "jre"])]
+    kind: Option<String>,
     /// Select a JavaFX-bundled distribution.
     #[arg(long)]
     javafx: bool,
@@ -70,8 +70,16 @@ pub(super) struct VariantArgs {
 
 impl VariantArgs {
     /// Applies explicit CLI variant values to a parsed request.
-    fn request(&self, target: &str) -> Result<JavaRequest> {
-        let mut request = JavaRequest::parse(target)?;
+    fn request(&self, target: &str) -> Result<SdkRequest> {
+        let mut sdk = SdkRequest::parse(target)?;
+        let SdkRequest::Java(request) = &mut sdk else {
+            if self.arch.is_some() || self.kind.is_some() || self.javafx || self.libc.is_some() {
+                return Err(Error::InvalidInput(
+                    "Java variant options do not apply to portable SDKs".into(),
+                ));
+            }
+            return Ok(sdk);
+        };
         if let Some(arch) = &self.arch {
             request.architecture = match arch.as_str() {
                 "amd64" | "x64" | "x86_64" => "x86-64",
@@ -80,20 +88,22 @@ impl VariantArgs {
             }
             .into();
         }
-        request.kind = self.kind.clone();
+        if let Some(kind) = &self.kind {
+            request.kind = kind.clone();
+        }
         request.javafx = self.javafx;
         if let Some(libc) = &self.libc {
             request.libc = libc.clone();
         }
         request.validate()?;
-        Ok(request)
+        Ok(sdk)
     }
 }
 
 /// Catalog listing request.
 #[derive(Args)]
 pub(super) struct AvailableArgs {
-    /// Java vendor and version requirement, for example bellsoft@21.
+    /// SDK version requirement, for example bellsoft@21 or gradle@8.
     #[arg(default_value = "bellsoft@latest")]
     target: String,
     /// Archive variant filters.
@@ -122,7 +132,7 @@ pub(super) struct InstallArgs {
     /// Fix the selected build against subsequent update commands.
     #[arg(long)]
     pin: bool,
-    /// Register an existing Java home without copying or owning it; requires one target.
+    /// Register an existing SDK home without copying or owning it; requires one target.
     #[arg(long, value_name = "JAVA_HOME")]
     path: Option<PathBuf>,
     /// Reuse installed SDKs without network access.
@@ -167,19 +177,22 @@ pub(super) struct UpdateArgs {
 /// An exact installed target.
 #[derive(Args)]
 pub(super) struct TargetArgs {
-    /// Installed Java target or full installation ID.
+    /// Installed SDK target or full installation ID.
     target: String,
 }
 
 /// Global default selection request.
 #[derive(Args)]
 pub(super) struct DefaultArgs {
-    /// Installed Java target or full installation ID.
+    /// Installed SDK target or full installation ID.
     #[arg(required_unless_present = "clear", conflicts_with = "clear")]
     target: Option<String>,
     /// Remove the global default without uninstalling SDKs.
     #[arg(long)]
     clear: bool,
+    /// SDK family whose default is cleared; setting a target infers its family.
+    #[arg(long, value_parser = ["java", "gradle", "maven"], default_value = "java", requires = "clear")]
+    family: String,
 }
 
 /// Current SDK selection query.
@@ -196,6 +209,12 @@ pub(super) struct ExecArgs {
     /// Explicit installed Java target or installation ID.
     #[arg(long, value_name = "TARGET")]
     java: Option<String>,
+    /// Explicit installed Gradle target or installation ID.
+    #[arg(long, value_name = "TARGET")]
+    gradle: Option<String>,
+    /// Explicit installed Maven target or installation ID.
+    #[arg(long, value_name = "TARGET")]
+    maven: Option<String>,
     /// Child executable and uninterpreted arguments.
     #[arg(required = true, num_args = 1.., trailing_var_arg = true, allow_hyphen_values = true)]
     command: Vec<OsString>,
@@ -218,6 +237,12 @@ pub(super) struct EnvArgs {
     /// Explicit installed Java target or installation ID.
     #[arg(long, value_name = "TARGET")]
     java: Option<String>,
+    /// Explicit installed Gradle target or installation ID.
+    #[arg(long, value_name = "TARGET")]
+    gradle: Option<String>,
+    /// Explicit installed Maven target or installation ID.
+    #[arg(long, value_name = "TARGET")]
+    maven: Option<String>,
     /// Shell whose assignments should be emitted for evaluation by the caller.
     #[arg(long, value_enum)]
     shell: ShellArg,
@@ -226,7 +251,7 @@ pub(super) struct EnvArgs {
 /// Project-local selection request.
 #[derive(Args)]
 pub(super) struct UseArgs {
-    /// Installed Java target or installation ID.
+    /// Installed SDK target or installation ID.
     target: String,
     /// Save the exact installation ID instead of its version requirement.
     #[arg(long)]
@@ -260,10 +285,9 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
             } else {
                 for package in packages {
                     println!(
-                        "{}  {}  {}  {}",
+                        "{}  {}  {}",
                         package.version,
-                        package.request.architecture,
-                        package.request.kind,
+                        package.request.family(),
                         package.filename
                     );
                 }
@@ -279,12 +303,7 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
             for target in args.targets {
                 let request = args.variant.request(&target)?;
                 if !args.json {
-                    eprintln!(
-                        "Installing {} ({}, {})",
-                        request.target(),
-                        request.architecture,
-                        request.kind
-                    );
+                    eprintln!("Installing {}", request.target());
                 }
                 let installation = if let Some(path) = &args.path {
                     manager.register(&request, path)?
@@ -356,12 +375,12 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
         }
         SdkCommand::Uninstall(args) => {
             let removed = manager.uninstall(&args.target)?;
-            println!("Uninstalled {} ({})", removed.java.target(), removed.id);
+            println!("Uninstalled {} ({})", removed.sdk.target(), removed.id);
         }
         SdkCommand::Default(args) => {
             if args.clear {
-                manager.clear_default()?;
-                println!("Cleared the default Java selection");
+                manager.clear_default(&args.family)?;
+                println!("Cleared the default {} selection", args.family);
             } else {
                 show(
                     &manager,
@@ -378,21 +397,33 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
         SdkCommand::Current(args) => {
             let execution = manager.execution(None, Some(&std::env::current_dir()?))?;
             if args.json {
-                json(&serde_json::json!({"java_home": execution.home()}))?;
+                json(
+                    &serde_json::json!({"java_home": execution.home(), "homes": execution.homes()}),
+                )?;
             } else {
-                println!("{}", execution.home().display());
+                for (family, home) in execution.homes() {
+                    println!("{family}  {}", home.display());
+                }
             }
         }
         SdkCommand::Exec(args) => {
-            let execution =
-                manager.execution(args.java.as_deref(), Some(&std::env::current_dir()?))?;
+            let execution = manager.execution_with(
+                args.java.as_deref(),
+                args.gradle.as_deref(),
+                args.maven.as_deref(),
+                Some(&std::env::current_dir()?),
+            )?;
             return execution
                 .execute(&args.command[0], &args.command[1..])
                 .map(super::exit_code);
         }
         SdkCommand::Env(args) => {
-            let execution =
-                manager.execution(args.java.as_deref(), Some(&std::env::current_dir()?))?;
+            let execution = manager.execution_with(
+                args.java.as_deref(),
+                args.gradle.as_deref(),
+                args.maven.as_deref(),
+                Some(&std::env::current_dir()?),
+            )?;
             let shell = match args.shell {
                 ShellArg::Sh => Shell::Sh,
                 ShellArg::Powershell => Shell::PowerShell,
@@ -416,8 +447,12 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
 fn show(manager: &SdkManager, installed: &Installation) -> Result<()> {
     println!(
         "{}  {}  {}\n  {}\n  {}",
-        installed.java.target(),
-        installed.java.architecture,
+        installed.sdk.target(),
+        installed
+            .sdk
+            .java()
+            .map(|java| java.architecture.as_str())
+            .unwrap_or("portable"),
         if installed.managed {
             "managed"
         } else {

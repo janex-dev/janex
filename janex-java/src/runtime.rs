@@ -209,8 +209,9 @@ pub fn join_path(paths: &[PathBuf]) -> Result<OsString> {
         .map_err(|error| invalid(format!("invalid Java path: {error}")))
 }
 
-/// Converts Windows filesystem prefixes that older Java runtimes reject.
-fn java_path(path: &Path) -> PathBuf {
+/// Converts Windows verbatim disk and UNC prefixes to ordinary absolute paths for Java and
+/// launcher scripts. Other paths are returned unchanged; no filesystem access is performed.
+pub fn java_path(path: &Path) -> PathBuf {
     #[cfg(windows)]
     {
         use std::path::{Component, Prefix};

@@ -3,7 +3,7 @@
 
 //! Atomic SDK registration and persistent installation ownership.
 
-use super::{AvailableSdk, CatalogOptions, JavaRequest, archive, catalog, hex, version_order};
+use super::{AvailableSdk, CatalogOptions, SdkRequest, archive, catalog, hex};
 use crate::{Result, error::invalid};
 use janex_format::{
     binary::Limits,
@@ -12,18 +12,19 @@ use janex_format::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::BTreeMap,
     fs,
     io::{Read, Write},
     path::{Component, Path, PathBuf},
 };
 
-/// One complete managed SDK or a registered external Java home.
+/// One complete managed SDK or a registered external SDK home.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Installation {
     /// Stable content and variant identity; usable as an exact command target.
     pub id: String,
     /// Complete release and platform variant of this installation.
-    pub java: JavaRequest,
+    pub sdk: SdkRequest,
     /// Home relative to the managed tree, or an absolute external home.
     pub home: PathBuf,
     /// Whether Janex owns and may remove the SDK tree.
@@ -38,7 +39,7 @@ pub struct Installation {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Selection {
     /// Requested version series or exact release and platform variant.
-    pub request: JavaRequest,
+    pub request: SdkRequest,
     /// Installation currently satisfying this request.
     pub installation: String,
     /// Prevents update from resolving a different build for this request.
@@ -52,8 +53,17 @@ pub struct SdkStatus {
     pub installations: Vec<Installation>,
     /// Persisted version requirements and update policies.
     pub selections: Vec<Selection>,
-    /// Resolved global default, if configured.
-    pub default: Option<Installation>,
+    /// Resolved global defaults keyed by SDK family.
+    pub defaults: BTreeMap<String, Installation>,
+}
+
+/// An independent default selection for one SDK family.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(super) struct DefaultSelection {
+    /// Requirement whose saved binding may advance on update.
+    request: SdkRequest,
+    /// Exact installation when selected by ID.
+    id: Option<String>,
 }
 
 /// Persistent registry, atomically replaced as a single bounded CBOR value.
@@ -65,11 +75,8 @@ pub(super) struct Registry {
     pub(super) installations: Vec<Installation>,
     /// Persisted requests and their current resolutions.
     pub(super) selections: Vec<Selection>,
-    /// Global requirement; resolving it does not contact the network.
-    pub(super) default: Option<JavaRequest>,
-    /// Exact installation selected by ID, rather than a movable requirement.
-    #[serde(default)]
-    pub(super) default_id: Option<String>,
+    /// Independent global defaults; resolving them never contacts the network.
+    pub(super) defaults: BTreeMap<String, DefaultSelection>,
 }
 
 impl Default for Registry {
@@ -78,8 +85,7 @@ impl Default for Registry {
             schema: 1,
             installations: Vec::new(),
             selections: Vec::new(),
-            default: None,
-            default_id: None,
+            defaults: BTreeMap::new(),
         }
     }
 }
@@ -113,11 +119,15 @@ impl SdkManager {
     /// Returns installations, requirements, and the default from the same registry snapshot.
     pub fn status(&self) -> Result<SdkStatus> {
         let state = self.read()?;
-        let default = self.default_in(&state)?;
+        let defaults = state
+            .defaults
+            .keys()
+            .map(|family| Ok((family.clone(), self.default_in(&state, family)?.unwrap())))
+            .collect::<Result<_>>()?;
         Ok(SdkStatus {
             installations: state.installations,
             selections: state.selections,
-            default,
+            defaults,
         })
     }
 
@@ -127,7 +137,7 @@ impl SdkManager {
     }
 
     /// Changes whether update may move a saved requirement to a different installation.
-    pub fn set_pin(&self, request: &JavaRequest, pinned: bool) -> Result<()> {
+    pub fn set_pin(&self, request: &SdkRequest, pinned: bool) -> Result<()> {
         request.validate()?;
         let _lock = self.lock(true)?;
         let mut state = self.read()?;
@@ -143,7 +153,7 @@ impl SdkManager {
     /// Queries matching GA packages for the requested native or explicit platform variant.
     pub fn available(
         &self,
-        request: &JavaRequest,
+        request: &SdkRequest,
         options: &CatalogOptions,
     ) -> Result<Vec<AvailableSdk>> {
         catalog::available(&self.root, request, options)
@@ -153,7 +163,7 @@ impl SdkManager {
     /// Does not change the default selection. A failed download or extraction publishes no record.
     pub fn install(
         &self,
-        request: &JavaRequest,
+        request: &SdkRequest,
         pin: bool,
         options: &CatalogOptions,
     ) -> Result<Installation> {
@@ -175,7 +185,7 @@ impl SdkManager {
                 if !self
                     .home(&installed)?
                     .join("bin")
-                    .join(super::java_name())
+                    .join(request.executable())
                     .is_file()
                 {
                     return Err(invalid(
@@ -209,7 +219,7 @@ impl SdkManager {
             if !self
                 .home(&installed)?
                 .join("bin")
-                .join(super::java_name())
+                .join(request.executable())
                 .is_file()
             {
                 return Err(invalid("installed SDK home is missing"));
@@ -221,10 +231,9 @@ impl SdkManager {
         let packages = self.available(request, options)?;
         let package = packages
             .first()
-            .ok_or_else(|| invalid("no matching Java SDK archive is available"))?;
+            .ok_or_else(|| invalid("no matching SDK archive is available"))?;
         let artifact = catalog::artifact(&self.root, package, options)?;
-        let mut exact = request.clone();
-        exact.version = package.version.clone();
+        let exact = request.with_version(&package.version);
         if artifact.checksum.algorithm() == Algorithm::Sha256 {
             let _lock = self.lock(true)?;
             let mut state = self.read()?;
@@ -232,13 +241,13 @@ impl SdkManager {
             if let Some(existing) = state
                 .installations
                 .iter()
-                .find(|i| i.java == exact && i.sha256.as_ref() == Some(&digest))
+                .find(|i| i.sdk == exact && i.sha256.as_ref() == Some(&digest))
                 .cloned()
             {
                 if !self
                     .home(&existing)?
                     .join("bin")
-                    .join(super::java_name())
+                    .join(request.executable())
                     .is_file()
                 {
                     return Err(invalid("installed SDK home is missing"));
@@ -280,8 +289,8 @@ impl SdkManager {
         &self,
         file: fs::File,
         format: &str,
-        exact: JavaRequest,
-        requested: &JavaRequest,
+        exact: SdkRequest,
+        requested: &SdkRequest,
         pin: bool,
         source: &str,
         digest: &str,
@@ -303,7 +312,7 @@ impl SdkManager {
             .to_owned();
         let installation = Installation {
             id,
-            java: exact,
+            sdk: exact,
             home,
             managed: true,
             source: source.into(),
@@ -315,13 +324,13 @@ impl SdkManager {
             if !self
                 .home(existing)?
                 .join("bin")
-                .join(super::java_name())
+                .join(existing.sdk.executable())
                 .is_file()
             {
                 return Err(invalid("existing SDK tree is missing"));
             }
         } else {
-            let directory = self.root.join("sdks/java");
+            let directory = self.root.join("sdks").join(installation.sdk.family());
             fs::create_dir_all(&directory)?;
             let destination = directory.join(&installation.id);
             if destination.exists() {
@@ -338,7 +347,7 @@ impl SdkManager {
     }
 
     /// Re-resolves a saved requirement, retaining the old tree and respecting its pin.
-    pub fn update(&self, request: &JavaRequest, options: &CatalogOptions) -> Result<Installation> {
+    pub fn update(&self, request: &SdkRequest, options: &CatalogOptions) -> Result<Installation> {
         let state = self.read()?;
         let selected = state
             .selections
@@ -357,25 +366,37 @@ impl SdkManager {
         self.install(request, false, &options)
     }
 
-    /// Registers an existing Java home without copying it or taking ownership of its contents.
-    pub fn register(&self, request: &JavaRequest, path: &Path) -> Result<Installation> {
+    /// Registers an existing SDK home without copying or owning its contents. Java registration
+    /// probes the runtime; portable tools are identified from their versioned core library.
+    pub fn register(&self, request: &SdkRequest, path: &Path) -> Result<Installation> {
         request.validate()?;
         let path = path.canonicalize()?;
-        let home = archive::find_home(&path, request)?;
-        let runtime =
-            janex_java::runtime::JavaRuntime::probe(&home.join("bin").join(super::java_name()))?;
-        let mut java = request.clone();
-        java.version = if let Some(update) = runtime.version_text.strip_prefix("1.8.0_") {
-            format!("8.0.{update}")
+        let (home, sdk) = if let Some(java_request) = request.java() {
+            let home = archive::find_home(&path, request)?;
+            let runtime = janex_java::runtime::JavaRuntime::probe(
+                &home.join("bin").join(request.executable()),
+            )?;
+            let mut java = java_request.clone();
+            java.version = if let Some(update) = runtime.version_text.strip_prefix("1.8.0_") {
+                format!("8.0.{update}")
+            } else {
+                runtime.version_text
+            };
+            java.validate()?;
+            (home, SdkRequest::Java(java))
         } else {
-            runtime.version_text
+            super::tools::external_home(&path, request)?
         };
-        java.validate()?;
-        let identity = serde_json::to_vec(&(&home, &java)).map_err(|e| invalid(e.to_string()))?;
+        if !request.accepts(&sdk) {
+            return Err(invalid(
+                "external SDK does not establish the requested release or build",
+            ));
+        }
+        let identity = serde_json::to_vec(&(&home, &sdk)).map_err(|e| invalid(e.to_string()))?;
         let id = hex(Checksum::compute(Algorithm::Sha256, identity.as_slice())?.digest());
         let installation = Installation {
             id,
-            java,
+            sdk,
             home,
             managed: false,
             source: path
@@ -400,43 +421,55 @@ impl SdkManager {
         let _lock = self.lock(true)?;
         let mut state = self.read()?;
         let (installation, request) = self.resolve_in(&state, target)?;
-        state.default = Some(request);
-        state.default_id = (target == installation.id).then(|| installation.id.clone());
+        state.defaults.insert(
+            request.family().into(),
+            DefaultSelection {
+                request,
+                id: (target == installation.id).then(|| installation.id.clone()),
+            },
+        );
         self.save(&state)?;
         Ok(installation)
     }
 
-    /// Clears the global default while retaining all installed SDKs.
-    pub fn clear_default(&self) -> Result<()> {
+    /// Clears one family's global default while retaining all installed SDKs.
+    pub fn clear_default(&self, family: &str) -> Result<()> {
+        validate_family(family)?;
         let _lock = self.lock(true)?;
         let mut state = self.read()?;
-        state.default = None;
-        state.default_id = None;
+        state.defaults.remove(family);
         self.save(&state)
     }
 
     /// Returns the global default installation, if configured, without inspecting project files.
-    pub fn default_installation(&self) -> Result<Option<Installation>> {
+    pub fn default_installation(&self, family: &str) -> Result<Option<Installation>> {
+        validate_family(family)?;
         let state = self.read()?;
-        self.default_in(&state)
+        self.default_in(&state, family)
     }
 
     /// Resolves an exact default ID or the configured movable requirement.
-    pub(super) fn default_in(&self, state: &Registry) -> Result<Option<Installation>> {
-        if let Some(id) = &state.default_id {
+    pub(super) fn default_in(
+        &self,
+        state: &Registry,
+        family: &str,
+    ) -> Result<Option<Installation>> {
+        let Some(default) = state.defaults.get(family) else {
+            return Ok(None);
+        };
+        if default.request.family() != family {
+            return Err(invalid("default SDK family mismatch"));
+        }
+        if let Some(id) = &default.id {
             return state
                 .installations
                 .iter()
-                .find(|i| i.id == *id)
+                .find(|i| i.id == *id && default.request.accepts(&i.sdk))
                 .cloned()
                 .map(Some)
                 .ok_or_else(|| invalid("default SDK installation is missing"));
         }
-        state
-            .default
-            .as_ref()
-            .map(|r| self.resolve_request(state, r))
-            .transpose()
+        self.resolve_request(state, &default.request).map(Some)
     }
 
     /// Resolves an installed target. Multiple matching concrete builds require an exact ID for removal.
@@ -444,12 +477,13 @@ impl SdkManager {
         Ok(self.resolve_in(&self.read()?, target)?.0)
     }
 
-    /// Returns the absolute usable Java home for an installation record.
+    /// Returns the absolute usable SDK home for an installation record.
     pub fn home(&self, installation: &Installation) -> Result<PathBuf> {
         validate_installation(installation)?;
         Ok(if installation.managed {
             self.root
-                .join("sdks/java")
+                .join("sdks")
+                .join(installation.sdk.family())
                 .join(&installation.id)
                 .join(&installation.home)
         } else {
@@ -466,8 +500,8 @@ impl SdkManager {
         let installation = if let Some(i) = state.installations.iter().find(|i| i.id == target) {
             i.clone()
         } else {
-            let request = JavaRequest::parse(target)?;
-            if !request.version.contains('.') && !request.version.contains('+') {
+            let request = SdkRequest::parse(target)?;
+            if !request.version().contains('.') && !request.version().contains('+') {
                 return Err(invalid(
                     "uninstall requires an exact version or installation ID",
                 ));
@@ -475,7 +509,10 @@ impl SdkManager {
             let matches: Vec<_> = state
                 .installations
                 .iter()
-                .filter(|i| matches_request(&i.java, &request))
+                .filter(|i| {
+                    matches_request(&i.sdk, &request)
+                        && (request.java().is_some() || request.version() == i.sdk.version())
+                })
                 .collect();
             if matches.len() != 1 {
                 return Err(invalid(
@@ -484,7 +521,7 @@ impl SdkManager {
             }
             matches[0].clone()
         };
-        if let Some(default) = self.default_in(&state)?
+        if let Some(default) = self.default_in(&state, installation.sdk.family())?
             && default.id == installation.id
         {
             return Err(invalid(
@@ -503,7 +540,11 @@ impl SdkManager {
         state.installations.retain(|i| i.id != installation.id);
         self.save(&state)?;
         if installation.managed {
-            let parent = self.root.join("sdks/java").canonicalize()?;
+            let parent = self
+                .root
+                .join("sdks")
+                .join(installation.sdk.family())
+                .canonicalize()?;
             let tree = parent.join(&installation.id);
             let metadata = fs::symlink_metadata(&tree)?;
             if metadata.file_type().is_symlink() || !tree.canonicalize()?.starts_with(&parent) {
@@ -519,11 +560,11 @@ impl SdkManager {
         &self,
         state: &Registry,
         target: &str,
-    ) -> Result<(Installation, JavaRequest)> {
+    ) -> Result<(Installation, SdkRequest)> {
         if let Some(i) = state.installations.iter().find(|i| i.id == target) {
-            return Ok((i.clone(), i.java.clone()));
+            return Ok((i.clone(), i.sdk.clone()));
         }
-        let request = JavaRequest::parse(target)?;
+        let request = SdkRequest::parse(target)?;
         Ok((self.resolve_request(state, &request)?, request))
     }
 
@@ -531,7 +572,7 @@ impl SdkManager {
     pub(super) fn resolve_request(
         &self,
         state: &Registry,
-        request: &JavaRequest,
+        request: &SdkRequest,
     ) -> Result<Installation> {
         if let Some(selection) = state.selections.iter().find(|s| s.request == *request) {
             return Ok(state
@@ -544,8 +585,8 @@ impl SdkManager {
         state
             .installations
             .iter()
-            .filter(|i| matches_request(&i.java, request))
-            .max_by(|a, b| version_order(&a.java.version, &b.java.version).then(a.id.cmp(&b.id)))
+            .filter(|i| matches_request(&i.sdk, request))
+            .max_by(|a, b| a.sdk.compare(&b.sdk).then(a.id.cmp(&b.id)))
             .cloned()
             .ok_or_else(|| invalid(format!("SDK is not installed: {}", request.target())))
     }
@@ -586,7 +627,7 @@ impl SdkManager {
                 .iter()
                 .find(|i| i.id == s.installation)
                 .ok_or_else(|| invalid("dangling SDK selection"))?;
-            if !matches_request(&installed.java, &s.request)
+            if !matches_request(&installed.sdk, &s.request)
                 || state.selections[..index]
                     .iter()
                     .any(|other| other.request == s.request)
@@ -594,10 +635,11 @@ impl SdkManager {
                 return Err(invalid("invalid SDK selection binding"));
             }
         }
-        if let Some(default) = &state.default {
-            default.validate()?;
+        for (family, default) in &state.defaults {
+            validate_family(family)?;
+            default.request.validate()?;
+            self.default_in(&state, family)?;
         }
-        self.default_in(&state)?;
         Ok(state)
     }
 
@@ -665,17 +707,21 @@ impl SdkManager {
 }
 
 /// Tests both the numeric requirement and every explicitly selected variant.
-fn matches_request(actual: &JavaRequest, requested: &JavaRequest) -> bool {
-    actual.vendor == requested.vendor
-        && actual.architecture == requested.architecture
-        && actual.kind == requested.kind
-        && actual.javafx == requested.javafx
-        && actual.libc == requested.libc
-        && requested.matches(&actual.version)
+fn matches_request(actual: &SdkRequest, requested: &SdkRequest) -> bool {
+    requested.accepts(actual)
+}
+
+/// Rejects unknown families before consulting or modifying defaults.
+fn validate_family(family: &str) -> Result<()> {
+    if matches!(family, "java" | "gradle" | "maven") {
+        Ok(())
+    } else {
+        Err(invalid("unknown SDK family"))
+    }
 }
 
 /// Inserts or replaces the resolution for one requirement without changing the global default.
-fn bind(state: &mut Registry, request: JavaRequest, id: &str, pinned: bool) {
+fn bind(state: &mut Registry, request: SdkRequest, id: &str, pinned: bool) {
     state.selections.retain(|s| s.request != request);
     state.selections.push(Selection {
         request,
@@ -686,8 +732,12 @@ fn bind(state: &mut Registry, request: JavaRequest, id: &str, pinned: bool) {
 
 /// Validates path confinement before consuming registry data.
 fn validate_installation(i: &Installation) -> Result<()> {
-    i.java.validate()?;
-    super::numeric_version(&i.java.version)?;
+    i.sdk.validate()?;
+    if let Some(java) = i.sdk.java() {
+        super::numeric_version(&java.version)?;
+    } else {
+        super::request::tool_version(i.sdk.version())?;
+    }
     if i.id.len() != 64
         || !i
             .id
@@ -790,7 +840,7 @@ mod tests {
     /// Creates a small, structurally valid SDK archive without executable test code.
     fn fixture(
         manager: &SdkManager,
-        requested: &JavaRequest,
+        requested: &SdkRequest,
         version: &str,
         pin: bool,
     ) -> Installation {
@@ -804,29 +854,49 @@ mod tests {
             .unwrap();
         let mut writer = ZipWriter::new(&mut file);
         let options = SimpleFileOptions::default();
-        writer.start_file("jdk/release", options).unwrap();
-        write!(
-            writer,
-            "JAVA_VERSION=\"{}\"\nOS_ARCH=\"{}\"\n",
-            version.split('+').next().unwrap(),
-            requested.architecture
-        )
-        .unwrap();
-        for name in [
-            super::super::java_name(),
-            if cfg!(windows) { "javac.exe" } else { "javac" },
-        ] {
-            writer
-                .start_file(format!("jdk/bin/{name}"), options)
-                .unwrap();
-            writer.write_all(b"fixture").unwrap();
+        if requested.java().is_none() {
+            let (directory, core) = if requested.family() == "gradle" {
+                (
+                    format!("gradle-{version}"),
+                    format!("gradle-core-{version}.jar"),
+                )
+            } else {
+                (
+                    format!("apache-maven-{version}"),
+                    format!("maven-core-{version}.jar"),
+                )
+            };
+            for path in [
+                format!("{directory}/bin/{}", requested.executable()),
+                format!("{directory}/lib/{core}"),
+            ] {
+                writer.start_file(path, options).unwrap();
+                writer.write_all(b"fixture").unwrap();
+            }
+        } else {
+            writer.start_file("jdk/release", options).unwrap();
+            write!(
+                writer,
+                "JAVA_VERSION=\"{}\"\nOS_ARCH=\"{}\"\n",
+                version.split('+').next().unwrap(),
+                requested.java().unwrap().architecture
+            )
+            .unwrap();
+            for name in [
+                super::super::java_name(),
+                if cfg!(windows) { "javac.exe" } else { "javac" },
+            ] {
+                writer
+                    .start_file(format!("jdk/bin/{name}"), options)
+                    .unwrap();
+                writer.write_all(b"fixture").unwrap();
+            }
         }
         writer.finish().unwrap();
         file.rewind().unwrap();
         let expected = Checksum::compute(Algorithm::Sha256, &mut file).unwrap();
         let digest = archive::verify(&mut file, &expected).unwrap();
-        let mut exact = requested.clone();
-        exact.version = version.into();
+        let exact = requested.with_version(version);
         manager
             .commit_archive(
                 file,
@@ -848,13 +918,16 @@ mod tests {
         let manager = SdkManager::new(temp.path().join("home")).unwrap();
         assert!(manager.list().unwrap().is_empty());
         assert!(!manager.root.exists());
-        let request = JavaRequest::parse("bellsoft@21").unwrap();
+        let request = SdkRequest::parse("bellsoft@21").unwrap();
         let old = fixture(&manager, &request, "21.0.8+12", false);
-        assert!(manager.default_installation().unwrap().is_none());
+        assert!(manager.default_installation("java").unwrap().is_none());
         manager.set_default("bellsoft@21").unwrap();
         let new = fixture(&manager, &request, "21.0.9+10", false);
         assert_eq!(manager.list().unwrap().len(), 2);
-        assert_eq!(manager.default_installation().unwrap().unwrap().id, new.id);
+        assert_eq!(
+            manager.default_installation("java").unwrap().unwrap().id,
+            new.id
+        );
         assert!(manager.home(&old).unwrap().exists());
         assert!(
             manager
@@ -865,10 +938,13 @@ mod tests {
         );
         assert!(manager.uninstall("bellsoft@21").is_err());
         manager.set_default(&old.id).unwrap();
-        assert_eq!(manager.default_installation().unwrap().unwrap().id, old.id);
+        assert_eq!(
+            manager.default_installation("java").unwrap().unwrap().id,
+            old.id
+        );
         manager.uninstall(&new.id).unwrap();
         assert!(manager.home(&old).unwrap().exists());
-        manager.clear_default().unwrap();
+        manager.clear_default("java").unwrap();
         manager.uninstall(&old.id).unwrap();
         assert!(manager.list().unwrap().is_empty());
     }
@@ -877,7 +953,7 @@ mod tests {
     fn running_lease_blocks_removal_and_pin_prevents_network_updates() {
         let temp = tempfile::tempdir().unwrap();
         let manager = SdkManager::new(temp.path().to_owned()).unwrap();
-        let request = JavaRequest::parse("bellsoft@21").unwrap();
+        let request = SdkRequest::parse("bellsoft@21").unwrap();
         let installed = fixture(&manager, &request, "21.0.8+12", true);
         let offline = CatalogOptions {
             offline: true,
@@ -904,7 +980,7 @@ mod tests {
     fn external_unregister_preserves_files_and_project_pins_exact_id() {
         let temp = tempfile::tempdir().unwrap();
         let manager = SdkManager::new(temp.path().join("home")).unwrap();
-        let request = JavaRequest::parse("bellsoft@21").unwrap();
+        let request = SdkRequest::parse("bellsoft@21").unwrap();
         let installed = fixture(&manager, &request, "21.0.8+12", true);
         let project = temp.path().join("project");
         fs::create_dir(&project).unwrap();
@@ -927,7 +1003,7 @@ mod tests {
     fn corrupt_or_escaping_registry_is_rejected() {
         let temp = tempfile::tempdir().unwrap();
         let manager = SdkManager::new(temp.path().to_owned()).unwrap();
-        let request = JavaRequest::parse("bellsoft@21").unwrap();
+        let request = SdkRequest::parse("bellsoft@21").unwrap();
         fixture(&manager, &request, "21.0.8+12", true);
         let mut state = manager.read().unwrap();
         state.installations[0].home = "../outside".into();
@@ -935,5 +1011,73 @@ mod tests {
         assert!(manager.list().is_err());
         fs::write(manager.root.join("state/sdks.cbor"), [0xff]).unwrap();
         assert!(manager.list().is_err());
+    }
+
+    #[test]
+    fn tool_defaults_updates_and_leases_are_independent() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = SdkManager::new(temp.path().join("home")).unwrap();
+        let java = fixture(
+            &manager,
+            &SdkRequest::parse("bellsoft@21").unwrap(),
+            "21.0.8+12",
+            true,
+        );
+        let gradle_request = SdkRequest::parse("gradle@8").unwrap();
+        let old = fixture(&manager, &gradle_request, "8.14.2", false);
+        let maven_request = SdkRequest::parse("maven@3.9").unwrap();
+        let maven = fixture(&manager, &maven_request, "3.9.9", true);
+        manager.set_default(&java.id).unwrap();
+        manager.set_default("gradle@8").unwrap();
+        manager.set_default("maven@3.9").unwrap();
+        let new = fixture(&manager, &gradle_request, "8.14.3", false);
+        let status = manager.status().unwrap();
+        assert_eq!(status.defaults["java"].id, java.id);
+        assert_eq!(status.defaults["maven"].id, maven.id);
+        assert_eq!(status.defaults["gradle"].id, new.id);
+        assert_eq!(status.installations.len(), 4);
+        assert!(manager.home(&old).unwrap().exists());
+        assert!(manager.uninstall("maven@3.9").is_err());
+        let offline = CatalogOptions {
+            offline: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            manager.update(&maven_request, &offline).unwrap().id,
+            maven.id
+        );
+        let project = temp.path().join("project");
+        fs::create_dir(&project).unwrap();
+        manager.use_project(&java.id, &project, true).unwrap();
+        manager.use_project("gradle@8", &project, false).unwrap();
+        let path = manager.use_project(&maven.id, &project, true).unwrap();
+        let content = fs::read_to_string(path).unwrap();
+        assert!(
+            content.contains(&java.id)
+                && content.contains(&maven.id)
+                && content.contains("gradle@8")
+        );
+        let execution = manager
+            .execution_with(
+                Some(&java.id),
+                Some(&new.id),
+                Some(&maven.id),
+                Some(&project),
+            )
+            .unwrap();
+        assert_eq!(execution.homes().len(), 3);
+        manager.clear_default("gradle").unwrap();
+        assert!(
+            manager
+                .uninstall(&new.id)
+                .unwrap_err()
+                .to_string()
+                .contains("in use")
+        );
+        assert!(manager.default_installation("java").unwrap().is_some());
+        assert!(manager.default_installation("maven").unwrap().is_some());
+        drop(execution);
+        manager.uninstall(&new.id).unwrap();
+        assert!(manager.home(&old).unwrap().is_dir());
     }
 }

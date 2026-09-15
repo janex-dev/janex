@@ -15,6 +15,8 @@ fn invoke(home: &Path, project: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_janex"))
         .env("JANEX_HOME", home)
         .env_remove("JAVA_HOME")
+        .env_remove("GRADLE_HOME")
+        .env_remove("MAVEN_HOME")
         .current_dir(project)
         .args(args)
         .output()
@@ -151,4 +153,121 @@ fn empty_list_is_read_only_and_malformed_requests_do_not_create_installations() 
         );
     }
     assert!(!home.exists());
+}
+
+/// Creates an external tool with a versioned core library and a platform launcher.
+fn tool_fixture(root: &Path, family: &str, version: &str) {
+    fs::create_dir_all(root.join("bin")).unwrap();
+    fs::create_dir_all(root.join("lib")).unwrap();
+    fs::write(
+        root.join("lib")
+            .join(format!("{family}-core-{version}.jar")),
+        b"fixture",
+    )
+    .unwrap();
+    let name = match (family, cfg!(windows)) {
+        ("gradle", true) => "gradle.bat",
+        ("gradle", false) => "gradle",
+        (_, true) => "mvn.cmd",
+        (_, false) => "mvn",
+    };
+    let script = if cfg!(windows) {
+        "@echo off\r\necho %GRADLE_HOME%\r\necho %MAVEN_HOME%\r\necho %JAVA_HOME%\r\necho %~1\r\n"
+    } else {
+        "#!/bin/sh\nprintf '%s\\n' \"$GRADLE_HOME\" \"$MAVEN_HOME\" \"$JAVA_HOME\" \"$@\"\n"
+    };
+    let path = root.join("bin").join(name);
+    fs::write(&path, script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+#[test]
+fn portable_tools_share_commands_and_preserve_independent_selections() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let project = temp.path().join("project");
+    fs::create_dir(&project).unwrap();
+    let gradle = temp.path().join("Gradle's home");
+    let maven = temp.path().join("Maven home");
+    tool_fixture(&gradle, "gradle", "8.14.3");
+    tool_fixture(&maven, "maven", "3.9.9");
+    for (target, path) in [("gradle@8", &gradle), ("maven@3.9", &maven)] {
+        success(invoke(
+            &home,
+            &project,
+            &["install", target, "--path", path.to_str().unwrap()],
+        ));
+        success(invoke(&home, &project, &["default", target]));
+        success(invoke(&home, &project, &["use", target]));
+        success(invoke(&home, &project, &["update", target]));
+    }
+    let text = fs::read_to_string(project.join(".janex-toolchains.toml")).unwrap();
+    assert!(text.contains("gradle@8") && text.contains("maven@3.9"));
+    for command in ["gradle", "mvn"] {
+        let output = success(invoke(
+            &home,
+            &project,
+            &["exec", "--", command, "two words"],
+        ));
+        assert!(
+            output.contains("Gradle's home")
+                && output.contains("Maven home")
+                && output.contains("two words")
+        );
+        assert!(
+            !output.contains(r"\\?\"),
+            "script environment must use ordinary Windows paths"
+        );
+    }
+    let env = success(invoke(&home, &project, &["env", "--shell", "powershell"]));
+    assert!(
+        env.contains("$env:GRADLE_HOME")
+            && env.contains("$env:MAVEN_HOME")
+            && env.contains("$env:JAVA_HOME")
+    );
+    success(invoke(
+        &home,
+        &project,
+        &["default", "--clear", "--family", "gradle"],
+    ));
+    let status: serde_json::Value =
+        serde_json::from_str(&success(invoke(&home, &project, &["list", "--json"]))).unwrap();
+    assert!(status["defaults"].get("gradle").is_none());
+    assert!(status["defaults"].get("maven").is_some());
+    assert!(
+        !invoke(
+            &home,
+            &project,
+            &["install", "gradle@8", "--arch", "x86", "--offline"]
+        )
+        .status
+        .success()
+    );
+    assert!(
+        !invoke(
+            &home,
+            &project,
+            &["exec", "--java", "gradle@8", "--", "java", "-version"]
+        )
+        .status
+        .success()
+    );
+    success(invoke(&home, &project, &["uninstall", "gradle@8.14.3"]));
+    assert!(gradle.is_dir());
+    assert!(
+        !invoke(&home, &project, &["uninstall", "maven@3.9.9"])
+            .status
+            .success()
+    );
+    success(invoke(
+        &home,
+        &project,
+        &["default", "--clear", "--family", "maven"],
+    ));
+    success(invoke(&home, &project, &["uninstall", "maven@3.9.9"]));
+    assert!(maven.is_dir());
 }

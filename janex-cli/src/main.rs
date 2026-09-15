@@ -31,7 +31,7 @@ static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[command(
     name = "janex",
     version,
-    about = "Manage Java SDKs, package and launch applications with Janex"
+    about = "Manage SDKs, package and launch applications with Janex"
 )]
 struct Cli {
     /// Operation to perform.

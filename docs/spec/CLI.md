@@ -390,34 +390,39 @@ janex run --trust-cms-certificate signer.pem ./app.janex
 ## SDK Management
 
 SDKs use the shared command namespace. They do not have a separate `java` or `sdk` command group.
-The current provider supports Java distributions; application installation from Maven is planned
+Providers support Java distributions, Gradle, and Apache Maven; application installation from Maven is planned
 separately. See [SDK Management](../SdkManagement.md) for storage, acquisition, and selection rules.
 
 ```text
 janex available bellsoft@21 [--refresh] [--offline] [--json]
 janex install bellsoft@21 bellsoft@25 [--pin] [--offline] [--json]
 janex install bellsoft@21 --path <JAVA_HOME>
+janex install gradle@8 maven@3.9 [--pin]
+janex install gradle@8 --path <GRADLE_HOME>
 janex list [--json]
 janex update bellsoft@21 [--json]
 janex update --all [--json]
 janex uninstall <EXACT_VERSION_OR_ID>
 janex default <TARGET_OR_ID>
-janex default --clear
+janex default --clear [--family java|gradle|maven]
 janex current [--json]
 janex home <TARGET_OR_ID>
 janex use <TARGET_OR_ID> [--pin]
 janex pin <SAVED_REQUIREMENT>
 janex unpin <SAVED_REQUIREMENT>
-janex exec [--java <TARGET_OR_ID>] -- <COMMAND> [ARGS...]
-janex env [--java <TARGET_OR_ID>] --shell <sh|powershell|fish>
+janex exec [--java <TARGET_OR_ID>] [--gradle <TARGET_OR_ID>] [--maven <TARGET_OR_ID>] -- <COMMAND> [ARGS...]
+janex env [--java <TARGET_OR_ID>] [--gradle <TARGET_OR_ID>] [--maven <TARGET_OR_ID>] --shell <sh|powershell|fish>
 ```
 
 `available`, `install`, `pin`, `unpin`, and explicit `update` requests support `--arch`, `--kind jdk|jre`,
 `--javafx`, and `--libc glibc|musl`. `java:<vendor>@<version>` is the full target syntax;
 recognized vendors such as `bellsoft`, `temurin`, and `zulu` may omit `java:`.
 Installation IDs select exact platform variants without repeating variant options.
+Gradle and Maven requests use `gradle@<version>` and `maven@<version>` and reject Java variant options.
+One or two numeric components select a tool series; three select an exact release. `latest` selects
+the newest stable release. Pinning freezes the resolved release for any requirement.
 
-Installing retains every previous version and does not change the global default. A feature
+Installing retains every previous version and does not change any family's global default. A Java feature
 request such as `21` may advance within that series on `update`; a numeric release such as
 `21.0.8` does not advance to another release. `--pin` prevents subsequent updates of that saved
 request. Fixed build requests are also supported. `update --all` updates requests independently;
@@ -428,9 +433,10 @@ rejects the current global default and SDKs protected by live Janex execution le
 unregistration leaves files untouched. Project files outside Janex's registry are not tracked as
 persistent roots; an explicit project reference to an uninstalled SDK subsequently fails.
 
-`use` writes `.janex-toolchains.toml` in the current directory. `--pin` stores an exact local
-installation ID. `exec`, `current`, and `env` resolve explicit selection, shell `JAVA_HOME`,
-project selection, global default, and system Java, in that order. `env` prints assignments for
+`use` updates one of `java`, `gradle`, or `maven` in `.janex-toolchains.toml`, preserving other families.
+`--pin` stores an exact local installation ID. `exec`, `current`, and `env` resolve each family's
+explicit selection, shell home variable, project selection, and global default, in that order.
+Java additionally falls back to system discovery. `env` prints assignments for
 the caller to evaluate; it cannot modify its parent shell.
 
 `run` and native application launchers ignore project toolchain files. They include managed SDKs

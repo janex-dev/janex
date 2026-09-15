@@ -3,7 +3,7 @@
 
 //! Bounded catalog queries and authenticated HTTPS artifact transport.
 
-use super::{JavaRequest, hex, operating_system, version_order};
+use super::{JavaRequest, SdkRequest, hex, operating_system, version_order};
 use crate::{Result, error::invalid};
 use janex_format::checksum::{Algorithm, Checksum};
 use serde::Serialize;
@@ -46,19 +46,19 @@ impl Default for CatalogOptions {
     }
 }
 
-/// A matching JDK or JRE archive advertised by Disco; not yet downloaded or authenticated.
+/// A matching SDK archive advertised by a provider; not yet downloaded or authenticated.
 #[derive(Clone, Debug, Serialize)]
 pub struct AvailableSdk {
     /// Opaque catalog package identifier.
     pub id: String,
-    /// Complete numeric Java release including a build number when advertised.
+    /// Complete release including a Java build number when advertised.
     pub version: String,
     /// Original archive filename.
     pub filename: String,
     /// `zip` or `tar.gz`.
     pub archive_type: String,
     /// Selection whose variant this archive satisfies.
-    pub request: JavaRequest,
+    pub request: SdkRequest,
 }
 
 /// A download URL bound to a secure digest by the catalog or release service.
@@ -72,10 +72,13 @@ pub(super) struct Artifact {
 /// Lists matching GA archives in descending version order.
 pub(super) fn available(
     root: &Path,
-    request: &JavaRequest,
+    request: &SdkRequest,
     options: &CatalogOptions,
 ) -> Result<Vec<AvailableSdk>> {
     request.validate()?;
+    let SdkRequest::Java(request) = request else {
+        return super::tools::available(root, request, options);
+    };
     let mut url = Url::parse("https://api.foojay.io/disco/v3.0/packages").unwrap();
     let archive = if cfg!(windows) { "zip" } else { "tar.gz" };
     let arch = match request.architecture.as_str() {
@@ -156,7 +159,7 @@ fn parse_packages(
             version: version.into(),
             filename: filename.into(),
             archive_type: archive.into(),
-            request: request.clone(),
+            request: SdkRequest::Java(request.clone()),
         });
     }
     result.sort_by(|a, b| version_order(&b.version, &a.version).then(a.id.cmp(&b.id)));
@@ -170,6 +173,9 @@ pub(super) fn artifact(
     package: &AvailableSdk,
     options: &CatalogOptions,
 ) -> Result<Artifact> {
+    if package.request.java().is_none() {
+        return super::tools::artifact(root, package, options);
+    }
     let value = metadata(
         root,
         &format!("https://api.foojay.io/disco/v3.0/ids/{}", package.id),
@@ -266,7 +272,7 @@ pub(super) fn artifact(
 }
 
 /// Parses an exact hexadecimal digest without accepting a truncated or nonhex value.
-fn parse_checksum(algorithm: Algorithm, text: &str) -> Result<Checksum> {
+pub(super) fn parse_checksum(algorithm: Algorithm, text: &str) -> Result<Checksum> {
     if text.len() != algorithm.digest_length() * 2 || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(invalid("invalid SDK checksum"));
     }
@@ -286,10 +292,16 @@ fn text<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
 }
 
 /// Reads bounded JSON metadata from a disposable 24-hour cache or HTTPS.
-fn metadata(root: &Path, url: &str, options: &CatalogOptions) -> Result<Value> {
+pub(super) fn metadata(root: &Path, url: &str, options: &CatalogOptions) -> Result<Value> {
+    serde_json::from_slice(&cached_bytes(root, url, options)?)
+        .map_err(|e| invalid(format!("invalid SDK catalog JSON: {e}")))
+}
+
+/// Caches bounded provider metadata independently of its JSON, XML, or digest representation.
+pub(super) fn cached_bytes(root: &Path, url: &str, options: &CatalogOptions) -> Result<Vec<u8>> {
     let key = hex(Checksum::compute(Algorithm::Sha256, url.as_bytes())?.digest());
     let directory = root.join("cache/sdk");
-    let path = directory.join(format!("{key}.json"));
+    let path = directory.join(format!("{key}.metadata"));
     if options.offline && options.refresh {
         return Err(invalid("offline and refresh are mutually exclusive"));
     }
@@ -304,19 +316,15 @@ fn metadata(root: &Path, url: &str, options: &CatalogOptions) -> Result<Value> {
         if fresh || options.offline {
             let mut bytes = Vec::new();
             file.take(16 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
-            if bytes.len() <= 16 * 1024 * 1024
-                && let Ok(value) = serde_json::from_slice(&bytes)
-            {
-                return Ok(value);
+            if bytes.len() <= 16 * 1024 * 1024 {
+                return Ok(bytes);
             }
         }
     }
     let bytes = fetch_bytes(url, 16 * 1024 * 1024, options)?;
-    let value = serde_json::from_slice(&bytes)
-        .map_err(|e| invalid(format!("invalid SDK catalog JSON: {e}")))?;
     fs::create_dir_all(&directory)?;
     super::state::publish(&path, &bytes)?;
-    Ok(value)
+    Ok(bytes)
 }
 
 /// Downloads a small bounded HTTPS response into memory.

@@ -14,7 +14,11 @@
   environment output, child execution, and managed-Java discovery in both application launch modes.
 - Validate archive traversal, links, limits, corrupt metadata, multiple versions, pinned updates,
   default protection, active leases, external ownership, and Windows/Linux command integration.
-- Keep Maven application installation and non-Java SDK providers as separate subsequent work.
+- Support Gradle and Apache Maven distributions through the same installation, pinning, update,
+  ownership, and lease machinery. Query official metadata and require SHA-256/SHA-512 sidecars.
+- Keep defaults and project selections independent for Java, Gradle, and Maven. Combine selected
+  homes during shell activation and execution; preserve Windows batch launcher behavior.
+- Keep Maven application installation and additional SDK providers as subsequent work.
 
 ## Goals and Boundaries
 

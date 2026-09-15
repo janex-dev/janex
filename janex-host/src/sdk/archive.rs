@@ -264,7 +264,10 @@ fn link(path: PathBuf, target: &str, symbolic: bool) -> Result<Link> {
 }
 
 /// Finds exactly one SDK root with a release file and the requested tools, without executing Java.
-pub(super) fn find_home(root: &Path, request: &JavaRequest) -> Result<PathBuf> {
+pub(super) fn find_home(root: &Path, request: &super::SdkRequest) -> Result<PathBuf> {
+    let super::SdkRequest::Java(request) = request else {
+        return super::tools::find_home(root, request);
+    };
     let mut homes = Vec::new();
     let mut pending = vec![(root.to_owned(), 0)];
     while let Some((path, depth)) = pending.pop() {

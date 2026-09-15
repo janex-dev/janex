@@ -1,14 +1,17 @@
 // Copyright (c) 2026 Glavo
 // SPDX-License-Identifier: MPL-2.0
 
-//! Native, persistent Java SDK installation and version selection.
+//! Native, persistent SDK installation and version selection.
 
 mod archive;
 mod catalog;
+mod request;
 mod selection;
 mod state;
+mod tools;
 
 pub use catalog::{AvailableSdk, CatalogOptions};
+pub use request::SdkRequest;
 pub(crate) use selection::application_runtimes;
 pub use selection::project_java;
 pub use selection::{SdkExecution, Shell};
