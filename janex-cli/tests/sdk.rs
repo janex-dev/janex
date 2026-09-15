@@ -15,6 +15,7 @@ fn invoke(home: &Path, project: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_janex"))
         .env("JANEX_HOME", home)
         .env_remove("JAVA_HOME")
+        .env_remove("JANEX_SHELL_STATE")
         .env_remove("GRADLE_HOME")
         .env_remove("MAVEN_HOME")
         .current_dir(project)
@@ -92,6 +93,7 @@ fn registered_sdk_supports_selection_exec_and_safe_unregister() {
         let output = Command::new(env!("CARGO_BIN_EXE_janex"))
             .env("JANEX_HOME", &home)
             .env_remove("JAVA_HOME")
+            .env_remove("JANEX_SHELL_STATE")
             .env("PATH", "")
             .current_dir(&project)
             .args([
@@ -124,7 +126,7 @@ fn registered_sdk_supports_selection_exec_and_safe_unregister() {
         &["env", "--java", id, "--shell", "powershell"],
     ));
     assert!(env.starts_with("$env:JAVA_HOME = '"));
-    success(invoke(&home, &project, &["use", id, "--pin"]));
+    success(invoke(&home, &project, &["use", id, "--project", "--pin"]));
     assert!(
         fs::read_to_string(project.join(".janex-toolchains.toml"))
             .unwrap()
@@ -202,7 +204,7 @@ fn portable_tools_share_commands_and_preserve_independent_selections() {
             &["install", target, "--path", path.to_str().unwrap()],
         ));
         success(invoke(&home, &project, &["default", target]));
-        success(invoke(&home, &project, &["use", target]));
+        success(invoke(&home, &project, &["use", target, "--project"]));
         success(invoke(&home, &project, &["update", target]));
     }
     let text = fs::read_to_string(project.join(".janex-toolchains.toml")).unwrap();

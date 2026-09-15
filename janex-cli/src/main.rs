@@ -4,6 +4,7 @@
 //! Janex command-line entry point.
 
 mod sdk;
+mod shell;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use janex_host::pack::{PackOptions, PackSigner, pack};

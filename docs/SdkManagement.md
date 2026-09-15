@@ -60,7 +60,7 @@ directories to `PATH`. Tool launchers use the selected Java; Janex does not infe
 Java version range. `env --shell <shell>` prints shell-specific environment assignments;
 the caller evaluates them to change its own shell. Ordinary commands never modify the parent shell.
 Project selection uses optional `java`, `gradle`, and `maven` strings in `.janex-toolchains.toml`.
-`use` updates one family and preserves the others. The file does not execute project code.
+`use --project` updates one family and preserves the others. The file does not execute project code.
 For each family, explicit selection precedes its shell home variable, project selection, and
 global default. Java additionally falls back to system discovery. Installed application execution
 does not read project toolchain configuration or select portable tools.
@@ -75,23 +75,54 @@ janex default maven@3.9
 janex exec --java bellsoft@25 -- java -version
 janex exec --java bellsoft@21 --gradle gradle@8 -- gradle --version
 janex exec --maven maven@3.9 -- mvn --version
-janex use bellsoft@21
-janex use gradle@8
+janex use --project bellsoft@21
+janex use --project gradle@8
 janex update bellsoft@21
 janex list --json
 ```
 
-To activate a selection in the current shell, explicitly evaluate the generated assignments:
+## Shell Integration
+
+Load integration once in the current shell or add the appropriate initialization command to its
+startup file. Janex prints code and never edits startup files automatically.
 
 ```sh
-eval "$(janex env --java bellsoft@21 --shell sh)"
+eval "$(janex activate bash)"
 ```
 
 ```powershell
-janex env --java bellsoft@21 --shell powershell | Out-String | Invoke-Expression
+janex activate powershell | Out-String | Invoke-Expression
 ```
 
-Shell activation is optional. It retains no process lease after `env` exits; applications launched
+Zsh accepts `eval "$(janex activate zsh)"`; fish accepts `janex activate fish | source`.
+The integration defines a thin `janex` shell function. Other commands pass through to the native
+executable. `use` and `deactivate` evaluate environment output only when the native command succeeds.
+
+```sh
+janex use bellsoft@21 gradle@8
+java -version
+gradle --version
+janex use
+janex deactivate
+```
+
+`use <targets...>` changes only the named SDK families in this terminal. `use` without targets
+clears manual selections and applies the current project and defaults. Shell selection order is
+manual selection, project, global default, then the original home variable. Generated home variables
+do not block a later project change. `use --project <target>` only saves project configuration;
+`--pin` is valid with `--project` and saves an exact local installation ID.
+
+Repeated switches remove previously inserted SDK bins from PATH. Manual PATH additions are retained
+across switches. `deactivate` restores the activation-time PATH and SDK home variables, including
+their absent/empty state, and removes the shell function. That explicit restoration replaces later
+manual edits to these variables. Reinitialization retains the original snapshot. Internal session
+state is carried by `JANEX_SHELL_STATE`; it does not modify global SDK defaults. No existing JVM is
+required to initialize integration. Automatic directory hooks are not installed; run `janex use`
+after changing projects.
+
+`env --shell <shell>` remains a lower-level environment renderer without session restoration.
+
+Shell activation is optional. It retains no process lease after the environment command exits; applications launched
 outside Janex and background daemons surviving the foreground child are not tracked by Janex.
 Windows `.cmd` and `.bat` launchers use standard command escaping; their own script semantics apply.
 Project files are local selections rather than registered

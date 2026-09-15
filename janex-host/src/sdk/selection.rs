@@ -148,7 +148,7 @@ impl SdkExecution {
 }
 
 /// Returns the conventional environment variable for a validated SDK family.
-fn home_variable(family: &str) -> &'static str {
+pub(super) fn home_variable(family: &str) -> &'static str {
     match family {
         "java" => "JAVA_HOME",
         "gradle" => "GRADLE_HOME",
@@ -264,7 +264,7 @@ impl SdkManager {
 }
 
 /// Checks the platform entry point before exposing a selected home.
-fn validate_home(home: &Path, family: &str) -> Result<()> {
+pub(super) fn validate_home(home: &Path, family: &str) -> Result<()> {
     let name = match family {
         "java" => java_name(),
         "gradle" if cfg!(windows) => "gradle.bat",
@@ -305,7 +305,7 @@ fn parse_project(text: &str) -> Result<BTreeMap<String, String>> {
 }
 
 /// Reads the nearest project file, stopping at a repository boundary.
-fn project_requests(directory: &Path) -> Result<BTreeMap<String, String>> {
+pub(super) fn project_requests(directory: &Path) -> Result<BTreeMap<String, String>> {
     for directory in directory.ancestors() {
         let path = directory.join(".janex-toolchains.toml");
         if path.is_file() {

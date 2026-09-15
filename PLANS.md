@@ -19,6 +19,11 @@
 - Keep defaults and project selections independent for Java, Gradle, and Maven. Combine selected
   homes during shell activation and execution; preserve Windows batch launcher behavior.
 - Keep Maven application installation and additional SDK providers as subsequent work.
+- Provide thin Bash, Zsh, sh, Fish, and PowerShell integration around native environment rendering.
+  Make `use` shell-local and `use --project` explicit. Retain the activation-time environment,
+  remove stale SDK PATH entries, apply project selections without stale generated home overrides,
+  and evaluate only successful native results. Validate real interpreters and failure atomicity.
+  Keep automatic directory hooks as subsequent work.
 
 ## Goals and Boundaries
 

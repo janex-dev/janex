@@ -13,6 +13,10 @@ use std::{ffi::OsString, path::PathBuf};
 /// SDK operations in the shared Janex command namespace.
 #[derive(Subcommand)]
 pub(super) enum SdkCommand {
+    /// Print shell integration code to evaluate in the current shell.
+    Activate(ActivateArgs),
+    /// Restore the activation-time environment and remove shell integration.
+    Deactivate(DeactivateArgs),
     /// List downloadable SDK versions without installing them.
     Available(AvailableArgs),
     /// Install SDK versions while retaining all existing versions.
@@ -33,7 +37,7 @@ pub(super) enum SdkCommand {
     Exec(ExecArgs),
     /// Print shell environment assignments for an installed SDK.
     Env(EnvArgs),
-    /// Save an installed SDK selection in the current project's toolchain file.
+    /// Select SDKs in the current shell, or save one project selection with --project.
     Use(UseArgs),
     /// Prevent updates from changing a saved SDK requirement's selected build.
     Pin(PinArgs),
@@ -224,11 +228,39 @@ pub(super) struct ExecArgs {
 #[derive(Clone, Copy, ValueEnum)]
 pub(super) enum ShellArg {
     /// sh, bash, or zsh.
+    #[value(alias = "bash", alias = "zsh")]
     Sh,
     /// PowerShell.
     Powershell,
     /// Fish.
     Fish,
+}
+
+impl ShellArg {
+    /// Returns the environment renderer used by this shell syntax.
+    pub(super) fn shell(self) -> Shell {
+        match self {
+            Self::Sh => Shell::Sh,
+            Self::Powershell => Shell::PowerShell,
+            Self::Fish => Shell::Fish,
+        }
+    }
+}
+
+/// Shell initialization request.
+#[derive(Args)]
+pub(super) struct ActivateArgs {
+    /// Shell whose integration script should be printed; bash and zsh also accept sh syntax.
+    #[arg(value_enum)]
+    shell: ShellArg,
+}
+
+/// Shell restoration request, normally supplied by the shell function.
+#[derive(Args)]
+pub(super) struct DeactivateArgs {
+    /// Internal rendering protocol used by the shell function.
+    #[arg(long, value_enum, hide = true)]
+    shell: Option<ShellArg>,
 }
 
 /// Shell environment rendering options.
@@ -248,20 +280,47 @@ pub(super) struct EnvArgs {
     shell: ShellArg,
 }
 
-/// Project-local selection request.
+/// Shell or project selection request.
 #[derive(Args)]
 pub(super) struct UseArgs {
     /// Installed SDK target or installation ID.
-    target: String,
-    /// Save the exact installation ID instead of its version requirement.
+    targets: Vec<String>,
+    /// Save one selection in the current project without changing the shell.
     #[arg(long)]
+    project: bool,
+    /// Save the exact installation ID instead of its version requirement.
+    #[arg(long, requires = "project")]
     pin: bool,
+    /// Internal rendering protocol used by the shell function.
+    #[arg(long, value_enum, hide = true, conflicts_with = "project")]
+    shell: Option<ShellArg>,
 }
 
 /// Executes SDK commands without embedding policy in argument parsing.
 pub(super) fn run(command: SdkCommand) -> Result<i32> {
     let manager = SdkManager::user()?;
     match command {
+        SdkCommand::Activate(args) => {
+            let shell = args.shell.shell();
+            let environment =
+                manager.shell_environment(&[], &std::env::current_dir()?, shell, false)?;
+            print!("{environment}{}", super::shell::activate(shell)?);
+        }
+        SdkCommand::Deactivate(args) => {
+            let shell = args
+                .shell
+                .ok_or_else(|| {
+                    Error::InvalidInput(
+                        "load Janex shell integration before using deactivate".into(),
+                    )
+                })?
+                .shell();
+            print!(
+                "{}{}",
+                manager.shell_deactivate(shell)?,
+                super::shell::deactivate(shell)
+            );
+        }
         SdkCommand::Pin(args) => {
             manager.set_pin(&args.variant.request(&args.target)?, true)?;
             println!("Pinned {}", args.target);
@@ -432,12 +491,30 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
             print!("{}", execution.environment(shell)?);
         }
         SdkCommand::Use(args) => {
-            println!(
-                "{}",
-                manager
-                    .use_project(&args.target, &std::env::current_dir()?, args.pin)?
-                    .display()
-            );
+            if args.project {
+                if args.targets.len() != 1 {
+                    return Err(Error::InvalidInput(
+                        "use --project requires exactly one target".into(),
+                    ));
+                }
+                println!(
+                    "{}",
+                    manager
+                        .use_project(&args.targets[0], &std::env::current_dir()?, args.pin)?
+                        .display()
+                );
+            } else {
+                let shell = args.shell.ok_or_else(|| Error::InvalidInput("load Janex shell integration before using use; use --project to save a project selection".into()))?.shell();
+                print!(
+                    "{}",
+                    manager.shell_environment(
+                        &args.targets,
+                        &std::env::current_dir()?,
+                        shell,
+                        args.targets.is_empty()
+                    )?
+                );
+            }
         }
     }
     Ok(0)

@@ -7,6 +7,7 @@ mod archive;
 mod catalog;
 mod request;
 mod selection;
+mod shell;
 mod state;
 mod tools;
 
@@ -15,6 +16,7 @@ pub use request::SdkRequest;
 pub(crate) use selection::application_runtimes;
 pub use selection::project_java;
 pub use selection::{SdkExecution, Shell};
+pub use shell::quote as quote_shell;
 pub use state::{Installation, SdkManager, SdkStatus, Selection};
 
 use crate::{Result, error::invalid};

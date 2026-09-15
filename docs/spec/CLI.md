@@ -407,7 +407,10 @@ janex default <TARGET_OR_ID>
 janex default --clear [--family java|gradle|maven]
 janex current [--json]
 janex home <TARGET_OR_ID>
-janex use <TARGET_OR_ID> [--pin]
+janex activate <bash|zsh|sh|fish|powershell>
+janex deactivate
+janex use [TARGET_OR_ID...]
+janex use --project <TARGET_OR_ID> [--pin]
 janex pin <SAVED_REQUIREMENT>
 janex unpin <SAVED_REQUIREMENT>
 janex exec [--java <TARGET_OR_ID>] [--gradle <TARGET_OR_ID>] [--maven <TARGET_OR_ID>] -- <COMMAND> [ARGS...]
@@ -433,11 +436,19 @@ rejects the current global default and SDKs protected by live Janex execution le
 unregistration leaves files untouched. Project files outside Janex's registry are not tracked as
 persistent roots; an explicit project reference to an uninstalled SDK subsequently fails.
 
-`use` updates one of `java`, `gradle`, or `maven` in `.janex-toolchains.toml`, preserving other families.
+`use --project` updates one of `java`, `gradle`, or `maven` in `.janex-toolchains.toml`, preserving other families.
 `--pin` stores an exact local installation ID. `exec`, `current`, and `env` resolve each family's
 explicit selection, shell home variable, project selection, and global default, in that order.
 Java additionally falls back to system discovery. `env` prints assignments for
 the caller to evaluate; it cannot modify its parent shell.
+
+`activate` prints a shell function and initial environment for the caller to evaluate. With that
+integration loaded, `use <targets...>` selects SDKs in the current terminal; `use` without targets
+clears manual selections and applies the current project's configuration and defaults. Native
+`use` without integration reports an error instead of silently writing project configuration.
+Shell selection order is manual selection, project, global default, then the original home variable.
+`deactivate` restores the activation-time environment and removes the function. Failed native
+resolution emits no environment changes. Directory changes do not automatically trigger selection.
 
 `run` and native application launchers ignore project toolchain files. They include managed SDKs
 in Java discovery and retain a lease for the selected installation while the execution plan exists.
