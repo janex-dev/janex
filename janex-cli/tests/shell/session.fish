@@ -1,13 +1,21 @@
 # Copyright (c) 2026 Glavo
 # SPDX-License-Identifier: MPL-2.0
 
-set -l original_path (string join : -- $PATH)
 set -l original_java $JAVA_HOME
-$JANEX_TEST_EXE activate fish | source
+source "$JANEX_HOME/shell/init.fish"; or exit 40
+set -q JANEX_SHELL_STATE; and exit 41
+set -q GRADLE_HOME; and exit 42
+test "$JAVA_HOME" = "$original_java"; or exit 43
+set -l original_path (string join : -- $PATH)
+source "$JANEX_HOME/shell/init.fish"; or exit 44
+test (string join : -- $PATH) = "$original_path"; or exit 45
+janex activate; or exit 46
 test "$GRADLE_HOME" = "$JANEX_TEST_FIRST"; or exit 10
 test (gradle) = fixture; or exit 11
 janex use gradle@8.14.3; or exit 12
 test "$GRADLE_HOME" = "$JANEX_TEST_SECOND"; or exit 13
+janex activate; or exit 53
+test "$GRADLE_HOME" = "$JANEX_TEST_SECOND"; or exit 54
 contains -- "$JANEX_TEST_FIRST/bin" $PATH; and exit 14
 set -l previous_path (string join : -- $PATH)
 set -l previous_state $JANEX_SHELL_STATE
@@ -25,11 +33,16 @@ janex use --project gradle@8.14.2; or exit 22
 test "$GRADLE_HOME" = "$JANEX_TEST_SECOND"; or exit 23
 janex use; or exit 24
 test "$GRADLE_HOME" = "$JANEX_TEST_FIRST"; or exit 25
-$JANEX_TEST_EXE activate fish | source
+janex activate; or exit 47
 janex deactivate; or exit 26
 test (string join : -- $PATH) = "$original_path"; or exit 27
 test "$JAVA_HOME" = "$original_java"; or exit 28
 set -q GRADLE_HOME; and exit 29
 set -q JANEX_SHELL_STATE; and exit 30
-functions -q janex; and exit 31
+functions -q janex; or exit 31
+janex --version; or exit 48
+janex activate; or exit 49
+test "$GRADLE_HOME" = "$JANEX_TEST_FIRST"; or exit 50
+janex deactivate; or exit 51
+test (string join : -- $PATH) = "$original_path"; or exit 52
 exit 0

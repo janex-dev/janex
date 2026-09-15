@@ -2,12 +2,20 @@
 # SPDX-License-Identifier: MPL-2.0
 
 set -eu
-original_path=$PATH
 original_java=$JAVA_HOME
-eval "$("$JANEX_TEST_EXE" activate sh)"
+. "$JANEX_HOME/shell/init.sh"
+test "${JANEX_SHELL_STATE+x}" != x
+test "${GRADLE_HOME+x}" != x
+test "$JAVA_HOME" = "$original_java"
+original_path=$PATH
+. "$JANEX_HOME/shell/init.sh"
+test "$PATH" = "$original_path"
+janex activate
 test "$GRADLE_HOME" = "$JANEX_TEST_FIRST"
 test "$(gradle)" = fixture
 janex use gradle@8.14.3
+test "$GRADLE_HOME" = "$JANEX_TEST_SECOND"
+janex activate
 test "$GRADLE_HOME" = "$JANEX_TEST_SECOND"
 case ":$PATH:" in *":$JANEX_TEST_FIRST/bin:"*) exit 20;; esac
 previous_path=$PATH
@@ -27,10 +35,15 @@ janex use --project gradle@8.14.2
 test "$GRADLE_HOME" = "$JANEX_TEST_SECOND"
 janex use
 test "$GRADLE_HOME" = "$JANEX_TEST_FIRST"
-eval "$("$JANEX_TEST_EXE" activate sh)"
+janex activate
 janex deactivate
 test "$PATH" = "$original_path"
 test "$JAVA_HOME" = "$original_java"
 test "${GRADLE_HOME+x}" != x
 test "${JANEX_SHELL_STATE+x}" != x
-test "$(command -v janex || :)" != janex
+test "$(command -v janex)" = janex
+janex --version
+janex activate
+test "$GRADLE_HOME" = "$JANEX_TEST_FIRST"
+janex deactivate
+test "$PATH" = "$original_path"

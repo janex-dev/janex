@@ -69,6 +69,39 @@ tasks.register("assembleRelease") {
     dependsOn(":janex-bootstrap:assemble", cargoBuildRelease)
 }
 
+tasks.register<Copy>("installJanex") {
+    group = "distribution"
+    description = "Installs native release binaries and shell scripts into JANEX_HOME."
+    dependsOn(cargoBuildRelease)
+    val home = providers.gradleProperty("janexHome")
+        .orElse(providers.environmentVariable("JANEX_HOME"))
+        .getOrElse(System.getProperty("user.home") + "/.janex")
+    val cargoDirectory = providers.environmentVariable("CARGO_TARGET_DIR")
+        .map { file(it) }.getOrElse(file("target"))
+    val target = providers.environmentVariable("CARGO_BUILD_TARGET").getOrElse("")
+    val binaries = cargoDirectory.resolve(target).resolve("release")
+    val windows = System.getProperty("os.name").startsWith("Windows")
+    val names = if (windows) listOf("janex.exe", "janex-launcher.exe")
+        else if (System.getProperty("os.name").startsWith("Mac")) listOf("janex")
+        else listOf("janex", "janex-launcher")
+    doFirst {
+        require(home.isNotBlank() && java.io.File(home).isAbsolute) {
+            "janexHome or JANEX_HOME must be a nonempty absolute path"
+        }
+        names.forEach { require(binaries.resolve(it).isFile) { "Missing release binary: $it" } }
+    }
+    into(home)
+    from(binaries) {
+        include(names)
+        into("bin")
+        filePermissions { unix("rwxr-xr-x") }
+    }
+    from("shell") {
+        into("shell")
+        filePermissions { unix("rw-r--r--") }
+    }
+}
+
 val artifactTarget = providers.gradleProperty("janexTarget").getOrElse("")
 val artifactPlatform = mapOf(
     "x86_64-unknown-linux-musl" to "linux-x86_64",
@@ -159,7 +192,12 @@ artifactArchive.configure {
     destinationDirectory = layout.buildDirectory.dir("distributions")
     from(artifactDirectory) {
         include(artifactNames)
+        into("bin")
         filePermissions { unix("rwxr-xr-x") }
+    }
+    from("shell") {
+        into("shell")
+        filePermissions { unix("rw-r--r--") }
     }
     isPreserveFileTimestamps = false
     isReproducibleFileOrder = true

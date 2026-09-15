@@ -9,7 +9,8 @@ It accepts ZIP and gzip-compressed tar archives. This is independent of the Jane
 ## Commands
 
 The shared command namespace is `available`, `install`, `list`, `update`, `uninstall`, `default`,
-`current`, `home`, `use`, `pin`, `unpin`, `exec`, and `env`. Java requests use `java:<vendor>@<version>`; the `java:`
+`current`, `home`, `use`, `pin`, `unpin`, `exec`, `env`, `init`, `activate`, and `deactivate`.
+Java requests use `java:<vendor>@<version>`; the `java:`
 prefix is optional for recognized Java vendors. Portable tools use `gradle@<version>` and
 `maven@<version>`. Installing the Maven SDK is separate from installing applications from Maven repositories.
 
@@ -83,29 +84,40 @@ janex list --json
 
 ## Shell Integration
 
-Load integration once in the current shell or add the appropriate initialization command to its
-startup file. Janex prints code and never edits startup files automatically.
+Distributions include `bin/` and `shell/`; extract them into `JANEX_HOME` (default `~/.janex`).
+Load the corresponding script once, or add it to the shell startup file. For a custom installation,
+set `JANEX_HOME` to its absolute path before loading the script.
 
 ```sh
-eval "$(janex activate bash)"
+source "$HOME/.janex/shell/init.sh"
 ```
 
 ```powershell
-janex activate powershell | Out-String | Invoke-Expression
+. "$HOME/.janex/shell/init.ps1"
 ```
 
-Zsh accepts `eval "$(janex activate zsh)"`; fish accepts `janex activate fish | source`.
-The integration defines a thin `janex` shell function. Other commands pass through to the native
-executable. `use` and `deactivate` evaluate environment output only when the native command succeeds.
+Bash and Zsh share `init.sh`; sh uses `. "$HOME/.janex/shell/init.sh"`.
+Fish uses `source "$HOME/.janex/shell/init.fish"`. PowerShell uses `init.ps1` on every platform.
+Initialization adds Janex's binary directory to PATH and defines a thin `janex` function without
+selecting SDKs. Other commands pass through to the native executable. `activate`, `use`, and
+`deactivate` evaluate environment output only when the native command succeeds.
+
+Portable installations can generate the same integration with `janex init <shell>`:
+`eval "$(janex init bash)"`, `janex init fish | source`, or
+`janex init powershell | Out-String | Invoke-Expression`. Janex never edits startup files automatically.
 
 ```sh
+janex activate
 janex use bellsoft@21 gradle@8
 java -version
 gradle --version
 janex use
 janex deactivate
+janex activate
 ```
 
+`activate` applies project selections and defaults, retaining any explicit selections already active.
+`use` also activates an inactive environment when selecting SDKs.
 `use <targets...>` changes only the named SDK families in this terminal. `use` without targets
 clears manual selections and applies the current project and defaults. Shell selection order is
 manual selection, project, global default, then the original home variable. Generated home variables
@@ -114,7 +126,8 @@ do not block a later project change. `use --project <target>` only saves project
 
 Repeated switches remove previously inserted SDK bins from PATH. Manual PATH additions are retained
 across switches. `deactivate` restores the activation-time PATH and SDK home variables, including
-their absent/empty state, and removes the shell function. That explicit restoration replaces later
+their absent/empty state, and retains the shell function and Janex's initialized PATH entry.
+That explicit restoration replaces later
 manual edits to these variables. Reinitialization retains the original snapshot. Internal session
 state is carried by `JANEX_SHELL_STATE`; it does not modify global SDK defaults. No existing JVM is
 required to initialize integration. Automatic directory hooks are not installed; run `janex use`
@@ -126,5 +139,5 @@ Shell activation is optional. It retains no process lease after the environment 
 outside Janex and background daemons surviving the foreground child are not tracked by Janex.
 Windows `.cmd` and `.bat` launchers use standard command escaping; their own script semantics apply.
 Project files are local selections rather than registered
-installation roots. `use --pin` writes an exact local installation ID. Missing project SDKs fail
+installation roots. `use --project --pin` writes an exact local installation ID. Missing project SDKs fail
 explicitly instead of silently selecting a different version.

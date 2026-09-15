@@ -24,6 +24,11 @@
   remove stale SDK PATH entries, apply project selections without stale generated home overrides,
   and evaluate only successful native results. Validate real interpreters and failure atomicity.
   Keep automatic directory hooks as subsequent work.
+- Distribute native executables in `bin/` and thin initialization scripts in `shell/` under
+  `JANEX_HOME`. Provide root Gradle installation and include scripts in platform archives.
+  Separate `init <shell>` from SDK activation; retain the shell function after `deactivate`.
+- Keep SDK switching based on shell environment updates. Future application installation exposes
+  stable command entry points in `JANEX_HOME/bin`, independently of the active SDK environment.
 
 ## Goals and Boundaries
 

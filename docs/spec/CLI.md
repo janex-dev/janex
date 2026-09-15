@@ -407,7 +407,8 @@ janex default <TARGET_OR_ID>
 janex default --clear [--family java|gradle|maven]
 janex current [--json]
 janex home <TARGET_OR_ID>
-janex activate <bash|zsh|sh|fish|powershell>
+janex init <bash|zsh|sh|fish|powershell>
+janex activate
 janex deactivate
 janex use [TARGET_OR_ID...]
 janex use --project <TARGET_OR_ID> [--pin]
@@ -442,12 +443,15 @@ explicit selection, shell home variable, project selection, and global default, 
 Java additionally falls back to system discovery. `env` prints assignments for
 the caller to evaluate; it cannot modify its parent shell.
 
-`activate` prints a shell function and initial environment for the caller to evaluate. With that
-integration loaded, `use <targets...>` selects SDKs in the current terminal; `use` without targets
+`init <shell>` prints initialization code that adds Janex's binary directory to PATH and defines a
+shell function without selecting SDKs. Installed `shell/init.sh`, `init.fish`, and `init.ps1` load
+this code from `JANEX_HOME/bin`. With integration loaded, `activate` applies SDK selections and
+`use <targets...>` selects SDKs in the current terminal; `use` without targets
 clears manual selections and applies the current project's configuration and defaults. Native
 `use` without integration reports an error instead of silently writing project configuration.
 Shell selection order is manual selection, project, global default, then the original home variable.
-`deactivate` restores the activation-time environment and removes the function. Failed native
+`deactivate` restores the activation-time environment and retains the function for later activation.
+`activate` retains existing manual selections; `use` can activate an inactive environment. Failed native
 resolution emits no environment changes. Directory changes do not automatically trigger selection.
 
 `run` and native application launchers ignore project toolchain files. They include managed SDKs

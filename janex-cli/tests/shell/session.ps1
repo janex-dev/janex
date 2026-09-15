@@ -2,13 +2,20 @@
 # SPDX-License-Identifier: MPL-2.0
 
 $ErrorActionPreference = 'Stop'
-$originalPath = $env:PATH
 $originalJava = $env:JAVA_HOME
-& $env:JANEX_TEST_EXE activate powershell | Out-String | Invoke-Expression
+. "$env:JANEX_HOME/shell/init.ps1"
+if (Test-Path Env:JANEX_SHELL_STATE) { throw 'Initialization activated SDKs' }
+if ($env:JAVA_HOME -ne $originalJava -or (Test-Path Env:GRADLE_HOME)) { throw 'Initialization changed SDK homes' }
+$originalPath = $env:PATH
+. "$env:JANEX_HOME/shell/init.ps1"
+if ($env:PATH -ne $originalPath) { throw 'Initialization duplicated PATH entries' }
+janex activate
 if ($env:GRADLE_HOME -ne $env:JANEX_TEST_FIRST) { throw 'Initial project selection failed' }
 if ((gradle) -ne 'fixture') { throw 'Direct tool lookup failed' }
 janex use gradle@8.14.3
 if ($LASTEXITCODE -ne 0 -or $env:GRADLE_HOME -ne $env:JANEX_TEST_SECOND) { throw 'Shell switch failed' }
+janex activate
+if ($env:GRADLE_HOME -ne $env:JANEX_TEST_SECOND) { throw 'Activation lost manual selection' }
 if (($env:PATH -split ';') -contains "$env:JANEX_TEST_FIRST\bin") { throw 'Old SDK remains on PATH' }
 $previousPath = $env:PATH
 $previousState = $env:JANEX_SHELL_STATE
@@ -25,10 +32,16 @@ janex use --project gradle@8.14.2
 if ($LASTEXITCODE -ne 0 -or $env:GRADLE_HOME -ne $env:JANEX_TEST_SECOND) { throw 'Project write changed shell' }
 janex use
 if ($env:GRADLE_HOME -ne $env:JANEX_TEST_FIRST) { throw 'Updated project was not read' }
-& $env:JANEX_TEST_EXE activate powershell | Out-String | Invoke-Expression
+janex activate
 janex deactivate
 if ($LASTEXITCODE -ne 0) { throw 'Deactivation failed' }
 if ($env:PATH -ne $originalPath -or $env:JAVA_HOME -ne $originalJava) { throw 'Original environment was not restored' }
 if (Test-Path Env:GRADLE_HOME) { throw 'Absent variable was not restored' }
 if (Test-Path Env:JANEX_SHELL_STATE) { throw 'State was not removed' }
-if (Test-Path Function:janex) { throw 'Function was not removed' }
+if (-not (Test-Path Function:janex)) { throw 'Function was removed' }
+janex --version
+if ($LASTEXITCODE -ne 0) { throw 'Command forwarding failed' }
+janex activate
+if ($env:GRADLE_HOME -ne $env:JANEX_TEST_FIRST) { throw 'Reactivation failed' }
+janex deactivate
+if ($env:PATH -ne $originalPath) { throw 'Reactivation lost baseline' }

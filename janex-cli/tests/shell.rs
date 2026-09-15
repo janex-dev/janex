@@ -63,11 +63,24 @@ fn register(root: &Path, home: &Path, version: &str) {
 fn exercise(shell: &str, script: &str, extension: &str) {
     eprintln!("Testing shell: {shell}");
     let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join("home");
+    let home = temp.path().join("Janex home's $value");
     let first = temp.path().join("SDK's first $value");
     let second = temp.path().join("SDK's second $value");
     register(&first, &home, "8.14.2");
     register(&second, &home, "8.14.3");
+    fs::create_dir_all(home.join("bin")).unwrap();
+    fs::create_dir_all(home.join("shell")).unwrap();
+    let executable = home
+        .join("bin")
+        .join(if cfg!(windows) { "janex.exe" } else { "janex" });
+    fs::copy(env!("CARGO_BIN_EXE_janex"), &executable).unwrap();
+    for (name, content) in [
+        ("init.sh", include_str!("../../shell/init.sh")),
+        ("init.ps1", include_str!("../../shell/init.ps1")),
+        ("init.fish", include_str!("../../shell/init.fish")),
+    ] {
+        fs::write(home.join("shell").join(name), content).unwrap();
+    }
     let project = temp.path().join("project");
     let other = temp.path().join("other");
     fs::create_dir(&project).unwrap();
@@ -105,7 +118,7 @@ fn exercise(shell: &str, script: &str, extension: &str) {
     command
         .arg(&script_path)
         .current_dir(&project)
-        .env("JANEX_TEST_EXE", env!("CARGO_BIN_EXE_janex"))
+        .env("JANEX_TEST_EXE", &executable)
         .env("JANEX_TEST_FIRST", &first)
         .env("JANEX_TEST_SECOND", &second)
         .env("JANEX_TEST_OTHER", &other)
@@ -115,6 +128,26 @@ fn exercise(shell: &str, script: &str, extension: &str) {
         .env_remove("GRADLE_HOME")
         .env_remove("MAVEN_HOME");
     success(command.output().unwrap());
+}
+
+/// Keeps initialization available even when project configuration or inherited SDK state is invalid.
+#[test]
+fn initialization_does_not_resolve_sdks_or_create_a_home() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    fs::write(temp.path().join(".janex-toolchains.toml"), "invalid [").unwrap();
+    for shell in ["sh", "fish", "powershell"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_janex"))
+            .env("JANEX_HOME", &home)
+            .env("JANEX_SHELL_STATE", "invalid state")
+            .current_dir(temp.path())
+            .args(["init", shell])
+            .output()
+            .unwrap();
+        assert!(!output.stdout.is_empty());
+        success(output);
+        assert!(!home.exists());
+    }
 }
 
 #[test]

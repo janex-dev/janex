@@ -1,8 +1,12 @@
 # Copyright (c) 2026 Glavo
 # SPDX-License-Identifier: MPL-2.0
 
+if not contains -- @JANEX_BIN@ $PATH
+    set -gx PATH @JANEX_BIN@ $PATH
+end
+
 function janex
-    if test (count $argv) -gt 0; and contains -- $argv[1] use deactivate
+    if test (count $argv) -gt 0; and contains -- $argv[1] activate use deactivate
         for arg in $argv
             if contains -- $arg --project --help -h --shell; or string match -q -- '--shell=*' $arg
                 command @JANEX_EXE@ $argv
@@ -19,3 +23,4 @@ function janex
         command @JANEX_EXE@ $argv
     end
 end
+true

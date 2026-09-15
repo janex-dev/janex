@@ -1,9 +1,14 @@
 # Copyright (c) 2026 Glavo
 # SPDX-License-Identifier: MPL-2.0
 
+case ":${PATH-}:" in
+    *":"@JANEX_BIN@":"*) ;;
+    *) export PATH=@JANEX_BIN@${PATH+:"$PATH"} ;;
+esac
+
 janex() {
     case "${1-}" in
-        use|deactivate)
+        activate|use|deactivate)
             local _janex_arg _janex_code
             for _janex_arg in "$@"; do
                 case "$_janex_arg" in

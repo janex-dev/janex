@@ -13,9 +13,11 @@ use std::{ffi::OsString, path::PathBuf};
 /// SDK operations in the shared Janex command namespace.
 #[derive(Subcommand)]
 pub(super) enum SdkCommand {
-    /// Print shell integration code to evaluate in the current shell.
+    /// Print shell initialization code to evaluate in the current shell.
+    Init(InitArgs),
+    /// Activate SDK selections in the initialized shell.
     Activate(ActivateArgs),
-    /// Restore the activation-time environment and remove shell integration.
+    /// Restore the activation-time environment, retaining shell integration.
     Deactivate(DeactivateArgs),
     /// List downloadable SDK versions without installing them.
     Available(AvailableArgs),
@@ -249,10 +251,18 @@ impl ShellArg {
 
 /// Shell initialization request.
 #[derive(Args)]
-pub(super) struct ActivateArgs {
+pub(super) struct InitArgs {
     /// Shell whose integration script should be printed; bash and zsh also accept sh syntax.
     #[arg(value_enum)]
     shell: ShellArg,
+}
+
+/// Shell activation request, normally supplied by the shell function.
+#[derive(Args)]
+pub(super) struct ActivateArgs {
+    /// Internal rendering protocol used by the shell function.
+    #[arg(long, value_enum, hide = true)]
+    shell: Option<ShellArg>,
 }
 
 /// Shell restoration request, normally supplied by the shell function.
@@ -298,13 +308,20 @@ pub(super) struct UseArgs {
 
 /// Executes SDK commands without embedding policy in argument parsing.
 pub(super) fn run(command: SdkCommand) -> Result<i32> {
+    if let SdkCommand::Init(args) = command {
+        print!("{}", super::shell::init(args.shell.shell())?);
+        return Ok(0);
+    }
     let manager = SdkManager::user()?;
     match command {
+        SdkCommand::Init(_) => unreachable!(),
         SdkCommand::Activate(args) => {
-            let shell = args.shell.shell();
+            let shell = args.shell.ok_or_else(|| Error::InvalidInput(
+                "load Janex shell integration before using activate; evaluate janex init <shell> first".into(),
+            ))?.shell();
             let environment =
                 manager.shell_environment(&[], &std::env::current_dir()?, shell, false)?;
-            print!("{environment}{}", super::shell::activate(shell)?);
+            print!("{environment}");
         }
         SdkCommand::Deactivate(args) => {
             let shell = args
@@ -315,11 +332,7 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
                     )
                 })?
                 .shell();
-            print!(
-                "{}{}",
-                manager.shell_deactivate(shell)?,
-                super::shell::deactivate(shell)
-            );
+            print!("{}", manager.shell_deactivate(shell)?);
         }
         SdkCommand::Pin(args) => {
             manager.set_pin(&args.variant.request(&args.target)?, true)?;
