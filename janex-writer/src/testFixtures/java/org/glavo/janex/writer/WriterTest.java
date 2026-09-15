@@ -29,6 +29,7 @@ public final class WriterTest {
             jar(root);
             directory(root);
             compression(root);
+            classfiles(root);
             external(root);
             failures(root);
             System.out.println("Java writer checks passed.");
@@ -178,7 +179,86 @@ public final class WriterTest {
                     "Wrong decoded resource length");
             bytes = decoded;
         }
+        int[][] transforms = file.transforms();
+        for (int i = transforms.length - 1; i >= 0; i--) {
+            bytes = ClassFile.restore(bytes, plan.pools()[transforms[i][1]], transforms[i][0], plan.limits());
+        }
         return bytes;
+    }
+
+    /// Checks exact CLASSFILE restoration, shared names, pool boundaries, and malformed fallback.
+    private static void classfiles(Path root) throws Exception {
+        Path sources = Files.createDirectory(root.resolve("class-sources"));
+        Path classes = Files.createDirectory(root.resolve("classes"));
+        List<String> arguments = new ArrayList<>(List.of("--release", "8", "-encoding", "UTF-8", "-d", classes.toString()));
+        for (int index = 0; index < 60; index++) {
+            Path source = sources.resolve("Example" + index + ".java");
+            Files.writeString(source, """
+                    package shared;
+                    /// Exercises string constants, descriptors, and Modified UTF-8 round trips.
+                    public class Example%d {
+                        /// Shared text reused by every class.
+                        public static final String TEXT = "A shared string constant repeated across class files";
+                        /// NUL, an unpaired surrogate, and a supplementary character.
+                        public static final String EDGE = "\\000\\uD800\\uD83D\\uDE80";
+                        /// Creates the fixture.
+                        public Example%d() { }
+                        /// Preserves a method descriptor containing an array class reference.
+                        public Object[] identity(Object[] value) { return value; }
+                    }
+                    """.formatted(index, index));
+            arguments.add(source.toString());
+        }
+        require(javax.tools.ToolProvider.getSystemJavaCompiler().run(null, null, null,
+                arguments.toArray(String[]::new)) == 0, "Class fixture compilation failed");
+        byte[] original = Files.readAllBytes(classes.resolve("shared/Example0.class"));
+        StringPool strings = new StringPool(ReadLimits.DEFAULT);
+        for (int i = 0; i < 130; i++) strings.intern("preexisting-" + i);
+        byte[] transformed = ClassFileEncoder.transform(original, strings, ReadLimits.DEFAULT);
+        require(transformed != null, "Class transform was not exercised");
+        Input encodedPool = new Input(strings.encode());
+        String[] values = new String[Math.toIntExact(encodedPool.uint())];
+        for (int i = 0; i < values.length; i++) values[i] = new String(encodedPool.sized(), StandardCharsets.UTF_8);
+        require(Arrays.equals(original, ClassFile.restore(transformed, values, original.length)), "CLASSFILE bytes changed");
+        require(Arrays.asList(values).contains("shared") && Arrays.asList(values).contains("Example0"),
+                "Class name was not split into shared components");
+        int checkpoint = strings.size();
+        require(ClassFileEncoder.transform(new byte[]{1, 2, 3}, strings, ReadLimits.DEFAULT) == null,
+                "Malformed class was transformed");
+        require(strings.size() == checkpoint, "Rejected class polluted the string pool");
+        Files.write(classes.resolve("broken.class"), new byte[]{1, 2, 3});
+        for (boolean compression : new boolean[]{true, false}) {
+            long rawSize = 0;
+            for (boolean enabled : new boolean[]{false, true}) {
+                PackOptions options = new PackOptions(classes, root.resolve("classes-" + compression + "-" + enabled + ".janex"));
+                options.mainClass = "shared.Example0";
+                options.compression = compression;
+                options.transformClassfiles = enabled;
+                JanexWriter.write(options);
+                if (!enabled) rawSize = Files.size(options.output);
+                else require(Files.size(options.output) <= rawSize, "CLASSFILE increased the package size");
+                try (JanexReader reader = new JanexReader(options.output)) {
+                    ResourcePlan plan = reader.launch("main").resources;
+                    boolean any = false;
+                    try (var paths = Files.walk(classes)) {
+                        for (Path file : paths.filter(Files::isRegularFile).toList()) {
+                            String name = classes.relativize(file).toString().replace('\\', '/');
+                            require(Arrays.equals(Files.readAllBytes(file), content(plan, name)), "Class resource changed: " + name);
+                            any |= plan.roots().get(0).files().get(name).transforms().length != 0;
+                        }
+                    }
+                    require(any == enabled, "CLASSFILE switch was not exercised");
+                }
+                if (enabled) {
+                    PackOptions copy = new PackOptions(classes, root.resolve("classes-copy-" + compression + ".janex"));
+                    copy.mainClass = options.mainClass;
+                    copy.compression = compression;
+                    JanexWriter.write(copy);
+                    require(Arrays.equals(Files.readAllBytes(options.output), Files.readAllBytes(copy.output)),
+                            "CLASSFILE packaging is not reproducible");
+                }
+            }
+        }
     }
 
     /// Checks block boundaries, incompressible input, decoded page checksums, and reproducibility.

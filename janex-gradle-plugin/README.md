@@ -2,8 +2,8 @@
 
 The `org.glavo.janex` plugin packages a Java application and its runtime dependencies directly through
 `janex-writer`, without a native CLI. It applies the Java plugin, adds a `janex` extension and a `janexPack` task,
-and makes `assemble` depend on the package. Packages are unsigned and include a `java -jar`
-launcher by default.
+and makes `assemble` depend on the package. Packages include a `java -jar` launcher by default;
+publisher signing is optional.
 
 The plugin is built with JDK 25, targets Java 17, and is tested with the repository's Gradle 9.7.1
 wrapper. Application bytecode can target an older Java version independently.
@@ -61,6 +61,7 @@ janex {
     arguments.addAll("", "two words", "\uD83D\uDE80")
     withLauncher = true
     compression = true
+    transformClassfiles = true
     outputFile = layout.buildDirectory.file("distributions/application.janex")
 }
 ```
@@ -70,8 +71,35 @@ janex {
 Compression defaults to automatic Zstandard for blobs and table pages, including encoding overhead
 in the size comparison. Set `compression = false` to disable it.
 
-The Java writer currently writes blobs without CLASSFILE transforms or publisher
-signatures. Packages remain readable by both the Rust Host and Java launcher.
+CLASSFILE transforms default to enabled. They share constant-pool strings and class-name components
+with resource names; each root uses the smaller complete encoded pool. Set `transformClassfiles = false`
+to retain ordinary class bytes. Resource contents remain byte-for-byte reproducible after decoding.
+
+### Publisher signing
+
+```kotlin
+janex {
+    withLauncher = false
+    signing {
+        cmsCertificate = file("publisher.pem")
+        cmsKey = file("publisher-key.pem")
+        passwordEnvironment = "JANEX_SIGNING_PASSWORD"
+    }
+}
+```
+
+For OpenPGP, replace `cmsCertificate` and `cmsKey` with `openPgpKey = file("publisher-secret.asc")`.
+`openPgpFingerprint` optionally selects a primary key or signing subkey by its full hexadecimal
+fingerprint. `algorithm` accepts `org.glavo.janex.writer.SigningAlgorithm` values; absence selects the
+key's default. `time` optionally fixes an ISO-8601 signing instant, but does not remove algorithm randomness.
+Omit `passwordEnvironment` for unencrypted keys. Passwords are read during task execution.
+
+Signed tasks always execute and bypass the build cache; decoded keys and password values are never
+stored in task properties or the configuration cache. Failed signing preserves the previous output.
+Signed packages run through an authenticating Janex Host or a native prefix with its embedded public
+certificate. `withLauncher` must be false because the standalone JAR launcher has no authentication policy.
+
+### Native launchers
 
 For a native executable, supply a launcher built for the target platform:
 
@@ -96,7 +124,7 @@ filenames, file contents, and writer implementation. Shared build caching is sup
 replace the destination; writer failures preserve the previous package. Do not place the output inside
 an input directory or use an input file as the destination.
 Directory dependencies are always repacked to retain permission changes. Shared build caching is
-disabled for directory dependencies and native prefixes; ordinary JAR-only packages are cacheable.
+disabled for directory dependencies, native prefixes, and signing; unsigned JAR-only packages are cacheable.
 
 ## Demo
 
@@ -119,7 +147,7 @@ Publish the implementation, Java libraries, sources, Javadoc, and plugin marker 
 
 The repository is generated under `janex-gradle-plugin/build/repository`. All binary outputs stay
 in ignored build directories. To consume a published plugin, add that repository under
-`pluginManagement.repositories` alongside `mavenCentral()` for the compression dependency, and use
+`pluginManagement.repositories` alongside `mavenCentral()` for compression and signing dependencies, and use
 `id("org.glavo.janex") version "0.1.0"`.
 
 For a CNB Maven repository, pass its actual address using `-PjanexPublishUrl=...` and supply publishing

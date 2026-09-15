@@ -10,6 +10,18 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+
+import org.glavo.janex.writer.CmsSigner;
+import org.glavo.janex.writer.OpenPgpSigner;
+import org.glavo.janex.writer.JanexWriter;
+import org.glavo.janex.writer.PackOptions;
+import org.glavo.janex.writer.PackageSigner;
+import org.glavo.janex.writer.SignatureTest;
+import org.glavo.janex.writer.SigningAlgorithm;
+import org.glavo.janex.reader.JanexReader;
 
 import org.gradle.testkit.runner.BuildResult;
 import org.gradle.testkit.runner.GradleRunner;
@@ -34,6 +46,7 @@ public final class JanexPluginTest {
         modularPackaging(Files.createTempDirectory(directory, "modules-"), executable);
         publishedPlugin(Files.createTempDirectory(directory, "published-"), executable);
         javaOnlyPackaging(Files.createTempDirectory(directory, "java-only-"));
+        signingPackaging(Files.createTempDirectory(directory, "signing-"), executable);
         System.out.println("Janex Gradle plugin functional checks passed.");
     }
 
@@ -43,6 +56,10 @@ public final class JanexPluginTest {
         BuildResult first = build(project, executable, false, "assemble");
         require(first.task(":janexPack").getOutcome() == TaskOutcome.SUCCESS, first.getOutput());
         Path output = project.resolve("build/distributions/fixture.janex");
+        try (JanexReader reader = new JanexReader(output)) {
+            require(reader.launch("main").resources.roots().get(0).files().get("demo/Shared0.class").transforms().length == 1,
+                    "Interoperability fixture did not select CLASSFILE transforms");
+        }
         require(run(List.of(executable.toString(), "run", "--allow-unsigned", "--java", javaExecutable(), output.toString()))
                 .contains("hello|resource|configured|4"), "Rust could not launch the Java-written package");
         String launch = runJar(output);
@@ -130,6 +147,101 @@ public final class JanexPluginTest {
         build(project, executable, false, "janexPack");
         String output = runJar(project.resolve("build/distributions/fixture.janex"));
         require(output.contains("hello|resource|configured|4"), output);
+    }
+
+    /// Verifies signed task execution, every algorithm through Rust, native pins, and tamper rejection.
+    private static void signingPackaging(Path project, Path executable) throws Exception {
+        fixture(project, false);
+        Path fixtures = Path.of(System.getProperty("janex.test.fixtures"));
+        Path cert = fixtures.resolve("cms/rsa256.cert.pem");
+        Files.copy(fixtures.resolve("cms/rsa256.encrypted.pem"), project.resolve("signing.key"));
+        String original = Files.readString(project.resolve("build.gradle.kts"));
+        Instant time = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
+        write(project, "build.gradle.kts", original + """
+
+                janex {
+                    withLauncher.set(false)
+                    signing {
+                        cmsCertificate.set(file("%s"))
+                        cmsKey.set(file("signing.key"))
+                        passwordEnvironment.set("JANEX_TEST_KEY_PASSWORD")
+                        time.set("%s")
+                    }
+                }
+                """.formatted(kotlinPath(cert), time));
+        build(project, executable, false, "janexPack");
+        Path output = project.resolve("build/distributions/fixture.janex");
+        String launched = run(List.of(executable.toString(), "run", "--java", javaExecutable(),
+                "--trust-cms-certificate", cert.toString(), output.toString()));
+        require(launched.contains("hello|resource|configured|4"), launched);
+        BuildResult repeated = build(project, executable, false, "janexPack");
+        require(repeated.getOutput().contains("Reusing configuration cache"), repeated.getOutput());
+        require(repeated.task(":janexPack").getOutcome() == TaskOutcome.SUCCESS, "Signed task was incorrectly up to date");
+        byte[] previous = Files.readAllBytes(output);
+        Files.writeString(project.resolve("signing.key"), "invalid private key");
+        build(project, executable, true, "janexPack");
+        require(Arrays.equals(previous, Files.readAllBytes(output)), "Failed signing replaced the previous package");
+        write(project, "build.gradle.kts", original + """
+
+                janex {
+                    withLauncher.set(false)
+                    signing {
+                        openPgpKey.set(file("%s"))
+                        passwordEnvironment.set("JANEX_TEST_KEY_PASSWORD")
+                    }
+                }
+                """.formatted(kotlinPath(fixtures.resolve("openpgp/encrypted.secret.asc"))));
+        build(project, executable, false, "janexPack");
+        require(run(List.of(executable.toString(), "run", "--java", javaExecutable(), "--trust-openpgp-key",
+                fixtures.resolve("openpgp/encrypted.public.pgp").toString(), output.toString()))
+                .contains("hello|resource|configured|4"), "Encrypted OpenPGP plugin signing failed");
+        for (SigningAlgorithm algorithm : SigningAlgorithm.values()) {
+            String name = SignatureTest.fixture(algorithm);
+            for (boolean pgp : new boolean[]{false, true}) {
+                if (!pgp && name.equals("ed25519")) continue;
+                PackageSigner signer = pgp ? OpenPgpSigner.load(fixtures.resolve("openpgp/" + name + ".secret.pgp"),
+                        null, null, algorithm, time) : CmsSigner.load(fixtures.resolve("cms/" + name + ".cert.pem"),
+                        fixtures.resolve("cms/" + name + ".key.pem"), null, algorithm);
+                Path trusted = fixtures.resolve(pgp ? "openpgp/" + name + ".public.pgp" : "cms/" + name + ".cert.pem");
+                String trustOption = pgp ? "--trust-openpgp-key" : "--trust-cms-certificate";
+                PackOptions options = new PackOptions(project.resolve("build/libs/fixture.jar"),
+                        project.resolve((pgp ? "pgp-" : "cms-") + algorithm + ".janex"));
+                options.mainClass = "demo.Main";
+                options.classPath.add(project.resolve("dependency/build/libs/dependency.jar"));
+                options.jvmOptions.add("-Ddemo.flag=configured");
+                options.signer = signer;
+                options.signingClock = Clock.fixed(time, ZoneOffset.UTC);
+                JanexWriter.write(options);
+                for (String mode : List.of("bootstrap", "direct")) {
+                    require(run(List.of(executable.toString(), "run", "--java", javaExecutable(), "--launch-mode", mode,
+                            trustOption, trusted.toString(), options.output.toString()))
+                            .contains("hello|resource|configured|0"), "Rust rejected Java signature " + algorithm);
+                }
+                if (algorithm == SigningAlgorithm.RSA_SHA256) {
+                    String os = System.getProperty("os.name");
+                    if (os.startsWith("Windows") || os.equals("Linux") || os.equals("FreeBSD")) {
+                        PackOptions nativeOptions = new PackOptions(options.source,
+                                project.resolve((pgp ? "pgp-native" : "cms-native") + (os.startsWith("Windows") ? ".exe" : "")));
+                        nativeOptions.mainClass = options.mainClass;
+                        nativeOptions.classPath.addAll(options.classPath);
+                        nativeOptions.jvmOptions.addAll(options.jvmOptions);
+                        nativeOptions.signer = signer;
+                        nativeOptions.nativeLauncher = executable.resolveSibling(os.startsWith("Windows") ? "janex-launcher.exe" : "janex-launcher");
+                        JanexWriter.write(nativeOptions);
+                        require(run(List.of(nativeOptions.output.toString())).contains("hello|resource|configured|0"),
+                                "Native launcher rejected embedded signer pin");
+                    }
+                }
+                byte[] damaged = Files.readAllBytes(options.output);
+                damaged[16] ^= 1;
+                Path corrupted = project.resolve("corrupted-" + pgp + "-" + algorithm + ".janex");
+                Files.write(corrupted, damaged);
+                run(List.of(executable.toString(), "run", "--java", javaExecutable(), trustOption,
+                        trusted.toString(), corrupted.toString()), false);
+                run(List.of(executable.toString(), "run", "--allow-unsigned", "--java", javaExecutable(),
+                        options.output.toString()), false);
+            }
+        }
     }
 
     /// Resolves the plugin marker and implementation through an ordinary Maven repository.
@@ -233,6 +345,20 @@ public final class JanexPluginTest {
         write(project, "dependency/src/main/resources/dependency.txt", "resource");
         write(project, "other/src/main/resources/dependency.txt", "other");
         write(project, "src/main/resources/packed.txt", "compressible-resource\n".repeat(20000));
+        for (int index = 0; index < 24; index++) {
+            write(project, "src/main/java/demo/Shared" + index + ".java", """
+                    package demo;
+                    /// Exercises shared constant-pool strings across multiple class files.
+                    public class Shared%d {
+                        /// Creates the fixture.
+                        public Shared%d() { }
+                        /// Returns the shared resource-contract description.
+                        public static String value() {
+                            return "Shared CLASSFILE constants must preserve exact Modified UTF-8 bytes, descriptors, names, and original class-file structure across Java and Rust readers.";
+                        }
+                    }
+                    """.formatted(index, index));
+        }
         write(project, "src/main/java/demo/Main.java", """
                 package demo;
                 import dependency.Greeting;
@@ -242,6 +368,10 @@ public final class JanexPluginTest {
                     public Main() { }
                     /// Prints launch state and Unicode code points for each argument.
                     public static void main(String[] args) throws Exception {
+                        for (int i = 0; i < 24; i++) {
+                            String shared = (String) Class.forName("demo.Shared" + i).getMethod("value").invoke(null);
+                            if (!shared.startsWith("Shared CLASSFILE constants")) throw new AssertionError("Class constant changed");
+                        }
                         String pattern = "compressible-resource\\n";
                         int length = 0;
                         try (java.io.InputStream input = Main.class.getResourceAsStream("/packed.txt")) {
@@ -287,13 +417,18 @@ public final class JanexPluginTest {
 
     /// Executes a command and returns normalized UTF-8 output, failing on a nonzero exit status.
     private static String run(List<String> command) throws Exception {
+        return run(command, true);
+    }
+
+    /// Executes a command and checks whether its exit status matches the expected outcome.
+    private static String run(List<String> command, boolean success) throws Exception {
         ProcessBuilder builder = new ProcessBuilder(new ArrayList<>(command)).redirectErrorStream(true);
         builder.environment().put("JANEX_JAVA", javaExecutable());
         builder.environment().remove("JANEX_LAUNCH_MODE");
         Process process = builder.start();
         String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8)
                 .replace("\r\n", "\n");
-        require(process.waitFor() == 0, output);
+        require((process.waitFor() == 0) == success, "Unexpected command outcome: " + command + "\n" + output);
         return output;
     }
 

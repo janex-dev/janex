@@ -16,22 +16,27 @@ import org.glavo.janex.reader.Checksum;
 import static org.glavo.janex.reader.internal.Input.require;
 
 /// Writes Janex 0.1 application packages with shared blobs and SHA-256 integrity coverage.
-/// File checksums use XXH3-64. This implementation emits no CLASSFILE transforms or publisher
-/// signatures. The optional JAR tail contains the bundled portable Java launcher.
+/// File checksums use XXH3-64. The optional JAR tail contains the bundled portable Java launcher.
 public final class JanexWriter {
     /// Prevents instantiation.
     private JanexWriter() { }
 
     /// Writes a new package after importing every input and validating its application descriptor.
-    /// Inputs and options must remain unchanged during the call. No network requests are made.
+    /// Inputs and options must remain unchanged during the call. Dependencies are not downloaded;
+    /// a caller-supplied signer controls its own external service access.
     /// The destination must not exist. Temporary files are removed on failure; bytes are synced
     /// before publication. Concurrent writers to the same destination are not supported.
     ///
     /// @param options nonnull input paths, launch settings, and allocation limits
-    /// @throws IOException if inputs, metadata, limits, wrappers, or filesystem operations are invalid
+    /// @throws IOException if inputs, metadata, limits, wrappers, signing, or filesystem operations fail
     public static void write(PackOptions options) throws IOException {
         Objects.requireNonNull(options);
         Objects.requireNonNull(options.limits);
+        Objects.requireNonNull(options.signingClock);
+        PackageSigner signer = options.signer;
+        int verificationType = signer == null ? 1 : signer.verificationType();
+        require(signer == null || verificationType == 2 || verificationType == 3, "Invalid publisher signature type");
+        require(signer == null || !options.withLauncher, "Signed packages require Janex Host; disable the standalone JAR launcher");
         require(options.maxTotalBytes >= 0, "Negative aggregate byte limit");
         Path output = options.output.toAbsolutePath().normalize();
         if (Files.exists(output, LinkOption.NOFOLLOW_LINKS)) throw new FileAlreadyExistsException(output.toString());
@@ -69,6 +74,12 @@ public final class JanexWriter {
         List<BlobPool> pools = new ArrayList<>();
         for (int index = 0; index < roots.size(); index++) {
             BlobPool pool = new BlobPool(index + 1L, roots.get(index), options);
+            if (options.transformClassfiles && roots.get(index).layers.values().stream()
+                    .anyMatch(layer -> layer.keySet().stream().anyMatch(name -> name.endsWith(".class")))) {
+                BlobPool candidate = new BlobPool(index + 1L, roots.get(index), options, true);
+                if ((long) candidate.bytes.length + Encoding.cbor(candidate.info).length
+                        < (long) pool.bytes.length + Encoding.cbor(pool.info).length) pool = candidate;
+            }
             pools.add(pool);
             boolean modular = index == 0 ? options.mainModule != null : index > options.classPath.size();
             (modular ? modulePath : classPath).add(Map.of(0, 0, 1, List.of(index + 1, pool.root)));
@@ -118,9 +129,12 @@ public final class JanexWriter {
                 metadata.little(0, 4);
                 metadata.little(1, 4);
                 metadata.map(Map.of(0, sections, 1, region(header), 2, region(tail)));
-                metadata.write(1);
-                byte[] checksum = sha256(metadata.toByteArray());
-                metadata.sized(checksum);
+                metadata.write(verificationType);
+                byte[] verification = signer == null ? sha256(metadata.toByteArray())
+                        : signer.sign(metadata.toByteArray(), options.signingClock.instant());
+                require(verification != null && verification.length != 0, "Empty verification payload");
+                options.limits.bytes(verification.length);
+                metadata.sized(verification);
                 int metadataLength = metadata.size() + 24;
                 options.limits.bytes(metadataLength);
                 metadata.writeBytes(Encoding.utf8("JANEXEND"));

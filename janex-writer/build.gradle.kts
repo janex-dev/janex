@@ -13,6 +13,8 @@ version = "0.1.0"
 dependencies {
     api(project(":janex-reader"))
     implementation("io.airlift:aircompressor:2.0.3")
+    implementation("org.bouncycastle:bcpkix-jdk18on:1.86")
+    implementation("org.bouncycastle:bcpg-jdk18on:1.86")
 }
 
 java {
@@ -61,4 +63,13 @@ tasks.register<JavaExec>("checkWriter") {
     javaLauncher = javaToolchains.launcherFor(java.toolchain)
 }
 
-tasks.check { dependsOn("checkWriter") }
+tasks.register<JavaExec>("checkSignatures") {
+    group = "verification"
+    description = "Checks Java publisher signing with independent public key fixtures."
+    classpath = sourceSets.testFixtures.get().runtimeClasspath
+    mainClass = "org.glavo.janex.writer.SignatureTest"
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    systemProperty("janex.test.fixtures", layout.projectDirectory.dir("../janex-signature/tests/fixtures").asFile.absolutePath)
+}
+
+tasks.check { dependsOn("checkWriter", "checkSignatures") }

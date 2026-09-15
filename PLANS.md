@@ -316,8 +316,12 @@ placeholder interfaces do not constitute completion.
 - Validate Java output with the Rust Host and Rust output with the Java reader and launcher.
 - Compress blobs and table pages with portable Zstandard when their encoded representation shrinks;
   expose a default-enabled Gradle compression switch and verify both modes across readers and launchers.
-- Add CLASSFILE encoding and publisher signing as separate follow-up work, using the file-format
-  specification as the shared contract.
+- Encode both CLASSFILE external-string forms, preserve Modified UTF-8 exactly, and share class-name
+  components with resource names. Compare complete compressed pools before selecting transforms.
+- Sign with CMS or OpenPGP after selecting the final representation, including encrypted private-key
+  loading and native-wrapper public signer pins. Preserve failure atomicity and explicit signing time.
+- Expose transforms and signing through Gradle, loading secrets only during task execution and excluding
+  signed tasks from build-cache and up-to-date reuse. Verify all algorithms through the Rust Host.
 
 ## Java Bootstrap Validation
 

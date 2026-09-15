@@ -13,6 +13,7 @@ val functionalTest = sourceSets.create("functionalTest")
 
 dependencies {
     implementation(project(":janex-writer"))
+    add(functionalTest.implementationConfigurationName, testFixtures(project(":janex-writer")))
 }
 
 java {
@@ -90,6 +91,8 @@ tasks.register<JavaExec>("checkPlugin") {
     systemProperty("janex.test.executable", janexExecutable.get())
     systemProperty("janex.test.directory", layout.buildDirectory.dir("functional-tests").get().asFile.absolutePath)
     systemProperty("janex.test.repository", layout.buildDirectory.dir("repository").get().asFile.toURI().toString())
+    systemProperty("janex.test.fixtures", layout.projectDirectory.dir("../janex-signature/tests/fixtures").asFile.absolutePath)
+    environment("JANEX_TEST_KEY_PASSWORD", "public-fixture-password")
 }
 
 tasks.check {

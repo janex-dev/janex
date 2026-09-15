@@ -11,6 +11,12 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+
+import org.gradle.api.Action;
+import org.gradle.api.tasks.Nested;
 
 import org.glavo.janex.writer.JanexWriter;
 import org.glavo.janex.writer.PackOptions;
@@ -35,6 +41,9 @@ import org.gradle.api.tasks.CacheableTask;
 /// Gradle tracks input contents, path order, and launch settings for incremental and cached builds.
 @CacheableTask
 public abstract class JanexPack extends DefaultTask {
+    /// Managed settings containing key locations but no secret key material.
+    private final JanexSigning signing = getProject().getObjects().newInstance(JanexSigning.class);
+
     /// Creates a packaging task. [JanexPlugin] supplies conventions for `janexPack`.
     public JanexPack() {
         getApplicationId().convention("main");
@@ -42,11 +51,23 @@ public abstract class JanexPack extends DefaultTask {
         getArguments().convention(List.of());
         getWithLauncher().convention(true);
         getCompression().convention(true);
+        getTransformClassfiles().convention(true);
         getNativeLaunchMode().convention("bootstrap");
-        getOutputs().upToDateWhen(task -> !((JanexPack) task).hasDirectoryInputs());
+        getOutputs().upToDateWhen(task -> !((JanexPack) task).hasDirectoryInputs() && !((JanexPack) task).signing.isEnabled());
+        getOutputs().doNotCacheIf("Signing keys and execution-time policy are not cached",
+                task -> ((JanexPack) task).signing.isEnabled());
         getOutputs().doNotCacheIf("Directory permissions and native executable modes require filesystem metadata",
                 task -> ((JanexPack) task).hasDirectoryInputs() || ((JanexPack) task).getNativeLauncher().isPresent());
     }
+
+    /// Returns optional publisher-signing settings, resolved only during execution.
+    /// @return the mutable managed signing settings
+    @Nested
+    public JanexSigning getSigning() { return signing; }
+
+    /// Configures publisher-signing settings for this task.
+    /// @param action configuration action applied immediately
+    public void signing(Action<? super JanexSigning> action) { action.execute(signing); }
 
     /// Returns the required primary JAR, preserving its filename during packaging.
     ///
@@ -130,6 +151,12 @@ public abstract class JanexPack extends DefaultTask {
     @Input
     public abstract Property<Boolean> getCompression();
 
+    /// Returns whether to try shared CLASSFILE strings, defaulting to true.
+    /// The writer retains the smaller complete pool representation.
+    /// @return the CLASSFILE transform property
+    @Input
+    public abstract Property<Boolean> getTransformClassfiles();
+
     /// Returns whether to append a `java -jar` launcher, defaulting to `true`.
     ///
     /// @return the JAR-launcher inclusion property
@@ -178,6 +205,9 @@ public abstract class JanexPack extends DefaultTask {
         if (getNativeLauncher().isPresent()) {
             inputs.add(getNativeLauncher().get().getAsFile());
         }
+        for (var property : List.of(signing.getCmsCertificate(), signing.getCmsKey(), signing.getOpenPgpKey())) {
+            if (property.isPresent()) inputs.add(property.get().getAsFile());
+        }
         for (File input : inputs) {
             Path path = input.toPath().toAbsolutePath().normalize();
             if (output.equals(path) || (Files.exists(output) && Files.isSameFile(output, path))
@@ -200,6 +230,10 @@ public abstract class JanexPack extends DefaultTask {
             options.arguments.addAll(getArguments().get());
             options.withLauncher = getWithLauncher().get();
             options.compression = getCompression().get();
+            options.transformClassfiles = getTransformClassfiles().get();
+            Instant time = signing.getTime().isPresent() ? Instant.parse(signing.getTime().get()) : Instant.now();
+            options.signingClock = Clock.fixed(time, ZoneOffset.UTC);
+            options.signer = signing.load(time);
             if (getNativeLauncher().isPresent()) {
                 options.nativeLauncher = getNativeLauncher().get().getAsFile().toPath();
                 options.nativeLaunchMode = getNativeLaunchMode().get();

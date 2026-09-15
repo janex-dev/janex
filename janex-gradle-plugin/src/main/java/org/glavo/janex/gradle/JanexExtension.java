@@ -3,6 +3,9 @@
 
 package org.glavo.janex.gradle;
 
+import javax.inject.Inject;
+import org.gradle.api.Action;
+import org.gradle.api.model.ObjectFactory;
 import org.gradle.api.file.ConfigurableFileCollection;
 import org.gradle.api.file.RegularFileProperty;
 import org.gradle.api.provider.ListProperty;
@@ -14,9 +17,23 @@ import org.gradle.api.provider.Property;
 /// the module path; otherwise they default to the classpath. Each path can be replaced with
 /// [ConfigurableFileCollection#setFrom(Object...)].
 public abstract class JanexExtension {
+    /// Lazily configured publisher-signing settings.
+    private final JanexSigning signing;
+
     /// Creates the extension; conventions are supplied by [JanexPlugin].
-    public JanexExtension() {
+    /// @param objects Gradle's managed-object factory
+    @Inject
+    public JanexExtension(ObjectFactory objects) {
+        signing = objects.newInstance(JanexSigning.class);
     }
+
+    /// Returns optional publisher-signing settings.
+    /// @return the mutable managed signing settings
+    public JanexSigning getSigning() { return signing; }
+
+    /// Configures optional publisher signing; signed packages require `withLauncher = false`.
+    /// @param action configuration action applied immediately
+    public void signing(Action<? super JanexSigning> action) { action.execute(signing); }
 
     /// Returns the primary JAR, defaulting to the Java plugin's `jar` output.
     ///
@@ -71,6 +88,11 @@ public abstract class JanexExtension {
     ///
     /// @return the compression property, defaulting to `true`
     public abstract Property<Boolean> getCompression();
+
+    /// Returns whether to try shared CLASSFILE strings, defaulting to true.
+    /// The writer retains the smaller complete pool representation.
+    /// @return the CLASSFILE transform property
+    public abstract Property<Boolean> getTransformClassfiles();
 
     /// Returns whether to append the `java -jar` launcher, defaulting to `true`.
     ///

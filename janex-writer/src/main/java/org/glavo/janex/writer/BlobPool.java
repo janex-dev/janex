@@ -16,9 +16,11 @@ final class BlobPool {
     /// Raw blobs in stable index order.
     private final List<byte[]> blobs = new ArrayList<>();
     /// Distinct path strings in insertion order, beginning with the empty string.
-    private final Map<String, Integer> strings = new LinkedHashMap<>();
+    private final StringPool strings;
     /// Digest buckets retaining exact bytes to distinguish hash collisions.
-    private final Map<ByteBuffer, List<Integer>> shared = new HashMap<>();
+    private final Map<ByteBuffer, List<SharedFile>> shared = new HashMap<>();
+    /// Whether this candidate uses class transforms and split class resource names.
+    private final boolean transform;
     /// Per-write policy and input limits.
     private final PackOptions options;
     /// Index of the complete resource-root blob.
@@ -30,9 +32,15 @@ final class BlobPool {
 
     /// Builds a resource root, string pool, and blob table from imported layers.
     BlobPool(long id, Resources resources, PackOptions options) throws IOException {
+        this(id, resources, options, false);
+    }
+
+    /// Builds one candidate representation with an independent shared string pool.
+    BlobPool(long id, Resources resources, PackOptions options, boolean transform) throws IOException {
         this.id = id;
         this.options = options;
-        intern("");
+        this.transform = transform;
+        strings = new StringPool(options.limits);
         Encoding layers = new Encoding();
         layers.uint(resources.layers.size());
         for (var layer : resources.layers.entrySet()) {
@@ -59,14 +67,14 @@ final class BlobPool {
                 for (var entry : directory.getValue().entrySet()) {
                     Resources.Node node = entry.getValue();
                     entries.little(node.target() == null ? 0x00534552 : 0x4c4d5953, 4);
-                    entries.uint(intern(entry.getKey()));
+                    name(entries, entry.getKey());
                     Map<Integer, Object> metadata = mode(node.mode());
                     if (node.target() != null) {
                         entries.uint(intern(node.target()));
                     } else {
                         byte[] checksum = Checksum.compute(Checksum.Algorithm.XXH3_64, node.bytes()).encode();
                         if (node.bytes().length == 0) entries.inline(node.bytes());
-                        else entries.blob(id, file(node.bytes(), checksum));
+                        else entries.writeBytes(file(entry.getKey(), node.bytes(), checksum));
                         metadata.put(0, checksum);
                     }
                     entries.map(metadata);
@@ -76,10 +84,7 @@ final class BlobPool {
                 options.limits.bytes(layers.size());
             }
         }
-        Encoding stringPool = new Encoding();
-        stringPool.uint(strings.size());
-        for (String string : strings.keySet()) stringPool.sized(Encoding.utf8(string));
-        int pool = append(stringPool.toByteArray());
+        int pool = append(strings.encode());
         Encoding resource = new Encoding();
         resource.uint(id);
         resource.uint(pool);
@@ -119,22 +124,47 @@ final class BlobPool {
 
     /// Interns one string without changing existing indices.
     private int intern(String value) throws IOException {
-        Encoding.utf8(value);
-        Integer index = strings.get(value);
-        if (index != null) return index;
-        options.limits.elements((long) strings.size() + 1);
-        index = strings.size();
-        strings.put(value, index);
-        return index;
+        return strings.intern(value);
     }
 
-    /// Reuses a file blob only when its complete bytes are equal.
-    private int file(byte[] bytes, byte[] checksum) throws IOException {
-        List<Integer> matches = shared.computeIfAbsent(ByteBuffer.wrap(checksum), ignored -> new ArrayList<>());
-        for (int index : matches) if (Arrays.equals(blobs.get(index), bytes)) return index;
-        int index = append(bytes);
-        matches.add(index);
-        return index;
+    /// Encodes class filenames by sharing their basename with class constants.
+    private void name(Encoding output, String name) throws IOException {
+        if (transform && name.endsWith(".class") && name.length() > 6) {
+            output.write(0);
+            output.write(0);
+            output.uint(2);
+            output.uint(intern(name.substring(0, name.length() - 6)));
+            output.uint(intern(".class"));
+        } else output.uint(intern(name));
+    }
+
+    /// Reuses the same content and transforms only when complete original bytes are equal.
+    private byte[] file(String name, byte[] bytes, byte[] checksum) throws IOException {
+        List<SharedFile> matches = shared.computeIfAbsent(ByteBuffer.wrap(checksum), ignored -> new ArrayList<>());
+        for (SharedFile previous : matches) if (Arrays.equals(previous.original, bytes)) return previous.content;
+        byte[] transformed = transform && name.endsWith(".class")
+                ? ClassFileEncoder.transform(bytes, strings, options.limits) : null;
+        Encoding content = new Encoding();
+        content.write(1);
+        content.uint(id);
+        content.uint(append(transformed == null ? bytes : transformed));
+        content.uint(transformed == null ? 0 : 1);
+        if (transformed != null) {
+            content.uint(bytes.length);
+            content.write(1);
+            content.write(0);
+        }
+        byte[] result = content.toByteArray();
+        matches.add(new SharedFile(bytes, result));
+        return result;
+    }
+
+    /// Retains exact original bytes and their reusable content descriptor.
+    /// @param original unmodified imported file bytes
+    /// @param content encoded Content value
+    private record SharedFile(byte[] original, byte[] content) {
+        /// Retains the arrays for the lifetime of this builder.
+        private SharedFile { }
     }
 
     /// Adds one bounded blob and returns its stable index.

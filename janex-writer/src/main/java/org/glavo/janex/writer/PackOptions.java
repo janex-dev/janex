@@ -4,6 +4,7 @@
 package org.glavo.janex.writer;
 
 import java.nio.file.Path;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -41,6 +42,15 @@ public final class PackOptions {
     /// Whether to use Zstandard when stored bytes plus encoding overhead shrink; defaults to true.
     /// Applies to blobs and table pages. False stores both without compression.
     public boolean compression = true;
+    /// Whether to try shared CLASSFILE strings; defaults to true.
+    /// A root retains ordinary class bytes when the complete encoded pool would not shrink.
+    public boolean transformClassfiles = true;
+    /// Optional publisher signer; null writes checksum verification.
+    /// Signed packages require an authenticating Host and cannot use the standalone JAR launcher.
+    public PackageSigner signer;
+    /// Clock consulted once for a signed write; fixed clocks permit reproducible signing times.
+    /// Signature algorithms may still use randomness.
+    public Clock signingClock = Clock.systemUTC();
     /// Whether to append the bundled portable launcher for `java -jar` execution.
     public boolean withLauncher;
     /// Optional unsigned PE or ELF native launcher to prepend.

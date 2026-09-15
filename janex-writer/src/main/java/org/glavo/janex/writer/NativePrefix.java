@@ -39,7 +39,8 @@ final class NativePrefix {
             }
         }
         byte[] config = Encoding.cbor(Map.of(0, options.applicationId, 1, options.nativeLaunchMode.equals("direct") ? 1 : 0,
-                2, 0, 3, new byte[0]));
+                2, options.signer == null ? 0 : options.signer.verificationType(),
+                3, options.signer == null ? new byte[0] : options.signer.certificate()));
         require(config.length <= 4 * 1024 * 1024 && (long) bytes.length + config.length + 12 <= 256 * 1024 * 1024,
                 "Native launcher header exceeds byte limit");
         Encoding output = new Encoding();
