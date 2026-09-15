@@ -301,7 +301,8 @@ public final class JanexPluginTest {
                 """.formatted(repository) + Files.readString(settings));
         Path script = project.resolve("build.gradle.kts");
         Files.writeString(script, Files.readString(script)
-                .replace("id(\"org.glavo.janex\")", "id(\"org.glavo.janex\") version \"0.1.0\""));
+                .replace("id(\"org.glavo.janex\")", "id(\"org.glavo.janex\") version \""
+                        + System.getProperty("janex.test.version") + "\""));
         GradleRunner.create().withProjectDir(project.toFile())
                 .withArguments("janexPack", "--configuration-cache", "--stacktrace")
                 .build();

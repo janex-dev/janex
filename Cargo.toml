@@ -6,7 +6,7 @@ resolver = "3"
 members = ["janex-format", "janex-signature", "janex-platform", "janex-java", "janex-host", "janex-cli", "janex-launcher"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.0-SNAPSHOT"
 authors = ["Glavo"]
 edition = "2024"
 

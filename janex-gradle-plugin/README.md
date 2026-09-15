@@ -153,7 +153,11 @@ Publish the implementation, Java libraries, sources, Javadoc, and plugin marker 
 The repository is generated under `janex-gradle-plugin/build/repository`. All binary outputs stay
 in ignored build directories. To consume a published plugin, add that repository under
 `pluginManagement.repositories` alongside `mavenCentral()` for compression and signing dependencies, and use
-`id("org.glavo.janex") version "0.1.0"`.
+`id("org.glavo.janex") version "0.1.0-SNAPSHOT"`.
+
+All Java modules and the plugin marker use `workspace.package.version` from the root `Cargo.toml`,
+including standalone and composite plugin builds. See [project versioning](../docs/BuildArtifacts.md#versioning)
+for the development and release workflow.
 
 For a CNB Maven repository, pass its actual address using `-PjanexPublishUrl=...` and supply publishing
 credentials through `ORG_GRADLE_PROJECT_cnbUsername=cnb` and

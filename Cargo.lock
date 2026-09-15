@@ -1225,7 +1225,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "janex-cli"
-version = "0.1.0"
+version = "0.1.0-SNAPSHOT"
 dependencies = [
  "clap",
  "janex-format",
@@ -1244,7 +1244,7 @@ dependencies = [
 
 [[package]]
 name = "janex-format"
-version = "0.1.0"
+version = "0.1.0-SNAPSHOT"
 dependencies = [
  "fluent-uri",
  "half",
@@ -1259,7 +1259,7 @@ dependencies = [
 
 [[package]]
 name = "janex-host"
-version = "0.1.0"
+version = "0.1.0-SNAPSHOT"
 dependencies = [
  "flate2",
  "fs4",
@@ -1285,7 +1285,7 @@ dependencies = [
 
 [[package]]
 name = "janex-java"
-version = "0.1.0"
+version = "0.1.0-SNAPSHOT"
 dependencies = [
  "flate2",
  "janex-platform",
@@ -1296,7 +1296,7 @@ dependencies = [
 
 [[package]]
 name = "janex-launcher"
-version = "0.1.0"
+version = "0.1.0-SNAPSHOT"
 dependencies = [
  "ctrlc",
  "janex-format",
@@ -1312,14 +1312,14 @@ dependencies = [
 
 [[package]]
 name = "janex-platform"
-version = "0.1.0"
+version = "0.1.0-SNAPSHOT"
 dependencies = [
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "janex-signature"
-version = "0.1.0"
+version = "0.1.0-SNAPSHOT"
 dependencies = [
  "cms",
  "der",

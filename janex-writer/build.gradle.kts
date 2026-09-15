@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "org.glavo.janex"
-version = "0.1.0"
+version = rootProject.version
 
 dependencies {
     api(project(":janex-reader"))

@@ -7,9 +7,7 @@ plugins {
 
 group = "org.glavo.janex"
 
-if (version == Project.DEFAULT_VERSION) {
-    version = "0.1.0"
-}
+apply(from = "gradle/version.gradle.kts")
 
 // Cargo owns incremental compilation; these Exec tasks intentionally declare no outputs.
 val cargoBuild = tasks.register<Exec>("cargoBuild") {

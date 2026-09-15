@@ -7,7 +7,11 @@ plugins {
 }
 
 group = "org.glavo.janex"
-version = "0.1.0"
+if (project == rootProject) {
+    apply(from = "../gradle/version.gradle.kts")
+} else {
+    version = rootProject.version
+}
 
 val functionalTest = sourceSets.create("functionalTest")
 
@@ -91,6 +95,7 @@ tasks.register<JavaExec>("checkPlugin") {
     systemProperty("janex.test.executable", janexExecutable.get())
     systemProperty("janex.test.directory", layout.buildDirectory.dir("functional-tests").get().asFile.absolutePath)
     systemProperty("janex.test.repository", layout.buildDirectory.dir("repository").get().asFile.toURI().toString())
+    systemProperty("janex.test.version", project.version.toString())
     systemProperty("janex.test.fixtures", layout.projectDirectory.dir("../janex-signature/tests/fixtures").asFile.absolutePath)
     environment("JANEX_TEST_KEY_PASSWORD", "public-fixture-password")
 }

@@ -1,5 +1,19 @@
 # Build Artifacts
 
+## Versioning
+
+The root `Cargo.toml` defines the project version in `workspace.package.version`.
+All Rust crates inherit it, and all Java modules and the Gradle plugin marker read the same value,
+including standalone and composite plugin builds. Development versions use the `-SNAPSHOT` suffix.
+
+For a release, remove `-SNAPSHOT` in `Cargo.toml`, refresh `Cargo.lock` with `cargo check --workspace`,
+and commit both files before creating the matching `v<version>` tag. Afterward, set the next development
+version with `-SNAPSHOT` and refresh the lockfile again. Builds do not rewrite versions;
+`cargo build --release` and `assembleRelease` select optimized compilation and retain the declared version.
+The file format version in `docs/spec/FileFormat.md` is independent of the project version.
+
+## Distribution builds
+
 The **Build artifacts** GitHub Actions workflow builds all supported distributions
 on pushes to `main`, pull requests, and manual runs. Download each target's artifact
 from the workflow run page. Artifacts expire after 14 days and contain a single
