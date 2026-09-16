@@ -16,25 +16,27 @@ import static org.glavo.janex.reader.internal.Input.require;
 /// and module descriptors. Bytecode type verification remains the Java runtime's responsibility.
 public final class ClassFile {
     /// Restores exact class bytes from a CLASSFILE transform using the default read policy.
+    /// Pooled Modified UTF-8 bytes are copied without transcoding.
     ///
     /// @param bytes transformed input, not modified
-    /// @param pool selected root or file string pool, not modified
+    /// @param pool selected root or file data pool, not modified
     /// @param length required decoded byte length
     /// @return a new structurally validated ordinary class file
     /// @throws IOException if framing, references, output length, or read limits are invalid
-    public static byte[] restore(byte[] bytes, String[] pool, int length) throws IOException {
+    public static byte[] restore(byte[] bytes, byte[][] pool, int length) throws IOException {
         return restore(bytes, pool, length, ReadLimits.DEFAULT);
     }
 
     /// Restores and validates a CLASSFILE transform under the supplied read policy.
+    /// Pooled Modified UTF-8 bytes are copied without transcoding.
     ///
     /// @param bytes transformed input, not modified
-    /// @param pool selected root or file string pool, not modified
+    /// @param pool selected root or file data pool, not modified
     /// @param length required decoded byte length
     /// @param limits inherited buffered-byte and constant-pool limits
     /// @return a new structurally validated ordinary class file
     /// @throws IOException if framing, references, output length, or read limits are invalid
-    public static byte[] restore(byte[] bytes, String[] pool, int length, ReadLimits limits) throws IOException {
+    public static byte[] restore(byte[] bytes, byte[][] pool, int length, ReadLimits limits) throws IOException {
         return org.glavo.janex.reader.internal.codec.ClassFiles.restore(bytes, pool, length, limits);
     }
 

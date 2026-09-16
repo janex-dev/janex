@@ -36,9 +36,9 @@ pub(crate) struct InspectArgs {
     /// Show all declared local resource roots and layers, including inactive branches.
     #[arg(long)]
     resources: bool,
-    /// Include root and explicit CLASSFILE string pools; implies --resources.
+    /// Include root and explicit CLASSFILE data pools; implies --resources.
     #[arg(long)]
-    strings: bool,
+    data_pools: bool,
     /// Emit a versioned JSON document with exact decimal strings for 64-bit values.
     #[arg(long)]
     json: bool,
@@ -151,7 +151,7 @@ fn resource(root: &ResourceRoot, blob: BlobRef) -> janex_format::Result<Json> {
             .push(json!({"condition": cbor(layer.condition.value())?, "directories": directories}));
     }
     Ok(json!({
-        "reference": reference(blob), "name": root.jar_name()?, "string_pool": reference(root.string_pool),
+        "reference": reference(blob), "name": root.jar_name()?, "data_pool": reference(root.data_pool),
         "metadata": cbor(&root.metadata)?, "layers": layers,
     }))
 }
@@ -265,7 +265,7 @@ pub(crate) fn run(args: InspectArgs) -> janex_host::Result<i32> {
         }
         report["blob_pools"] = Json::Array(pools);
     }
-    if args.resources || args.strings {
+    if args.resources || args.data_pools {
         let references: BTreeSet<_> = applications
             .iter()
             .flat_map(|application| application.resource_references())
@@ -275,8 +275,8 @@ pub(crate) fn run(args: InspectArgs) -> janex_host::Result<i32> {
         let mut string_references = BTreeSet::new();
         for reference in references {
             let root = ResourceRoot::decode(&blobs.resolve(reference)?, &mut blobs)?;
-            if args.strings {
-                string_references.insert(root.string_pool);
+            if args.data_pools {
+                string_references.insert(root.data_pool);
                 for layer in &root.layers {
                     for directory in &layer.directories {
                         for entry in &directory.entries {
@@ -294,17 +294,21 @@ pub(crate) fn run(args: InspectArgs) -> janex_host::Result<i32> {
             roots.push(resource(&root, reference)?);
         }
         report["resource_roots"] = Json::Array(roots);
-        if args.strings {
+        if args.data_pools {
             let mut pools = Vec::new();
             for reference in string_references {
                 let strings =
-                    janex_format::strings::StringPool::decode(&blobs.resolve(reference)?, limits)?;
+                    janex_format::data_pool::DataPool::decode(&blobs.resolve(reference)?, limits)?;
                 let values = (0..strings.len())
-                    .map(|index| strings.get(index as u64))
+                    .map(|index| {
+                        strings
+                            .get(index as u64)
+                            .map(|bytes| json!({"bytes_hex": hex(bytes)}))
+                    })
                     .collect::<janex_format::Result<Vec<_>>>()?;
-                pools.push(json!({"reference": self::reference(reference), "strings": values}));
+                pools.push(json!({"reference": self::reference(reference), "entries": values}));
             }
-            report["string_pools"] = Json::Array(pools);
+            report["data_pools"] = Json::Array(pools);
         }
     }
     let mut output = io::BufWriter::new(io::stdout().lock());
@@ -413,8 +417,8 @@ fn print_text(output: &mut impl Write, report: &Json) -> io::Result<()> {
         for root in roots {
             writeln!(
                 output,
-                "Resource root {}: reference={}, string pool={}",
-                root["name"], root["reference"], root["string_pool"]
+                "Resource root {}: reference={}, data pool={}",
+                root["name"], root["reference"], root["data_pool"]
             )?;
             for (index, layer) in root["layers"]
                 .as_array()
@@ -432,12 +436,12 @@ fn print_text(output: &mut impl Write, report: &Json) -> io::Result<()> {
             }
         }
     }
-    if let Some(pools) = report["string_pools"].as_array() {
+    if let Some(pools) = report["data_pools"].as_array() {
         for pool in pools {
-            writeln!(output, "String pool {}", pool["reference"])?;
-            for (index, value) in pool["strings"]
+            writeln!(output, "Data pool {}", pool["reference"])?;
+            for (index, value) in pool["entries"]
                 .as_array()
-                .expect("pool strings")
+                .expect("pool entries")
                 .iter()
                 .enumerate()
             {

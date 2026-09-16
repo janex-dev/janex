@@ -1,19 +1,38 @@
 // Copyright (c) 2026 Glavo
 // SPDX-License-Identifier: MPL-2.0
 
-//! String-pool invariants and independent name encoding vectors.
+//! Opaque data-pool invariants and independent UTF-8 name encoding vectors.
 
 use janex_format::{
     ErrorKind,
     binary::{Decoder, Limits},
-    strings::StringPool,
+    data_pool::DataPool,
 };
 
 #[test]
+fn opaque_entries_are_valid_until_interpreted_as_text() {
+    let wire = b"\x03\x00\x01\xff\x02\xc0\x80";
+    let mut pool = DataPool::decode(wire, Limits::default()).unwrap();
+    assert_eq!(pool.get(1).unwrap(), b"\xff");
+    assert_eq!(pool.intern(b"\xc0\x80"), 2);
+    assert_eq!(pool.encode().unwrap(), wire);
+    for value in [b"\x01".as_slice(), b"\x00\x00\x02\x00\x02"] {
+        assert!(
+            janex_format::strings::read_nonempty(
+                &pool,
+                &mut Decoder::new(value, Limits::default()).unwrap()
+            )
+            .is_err()
+        );
+    }
+    assert!(DataPool::decode(b"\x03\x00\x01\xff\x01\xff", Limits::default()).is_err());
+}
+
+#[test]
 fn pool_and_three_name_forms_share_class_basenames() {
-    let mut pool = StringPool::decode(b"\x03\x00\x06Object\x06.class", Limits::default()).unwrap();
+    let mut pool = DataPool::decode(b"\x03\x00\x06Object\x06.class", Limits::default()).unwrap();
     assert_eq!(pool.intern("Object"), 1);
-    assert_eq!(pool.get(0).unwrap(), "");
+    assert_eq!(pool.get(0).unwrap(), b"");
     assert!(!pool.is_empty());
     for (wire, expected) in [
         (&b"\x01"[..], "Object"),
@@ -22,11 +41,14 @@ fn pool_and_three_name_forms_share_class_basenames() {
         (&b"\x00\x00\x03\x00\x01\x02"[..], "Object.class"),
     ] {
         let mut decoder = Decoder::new(wire, Limits::default()).unwrap();
-        assert_eq!(pool.read_nonempty(&mut decoder).unwrap(), expected);
+        assert_eq!(
+            janex_format::strings::read_nonempty(&pool, &mut decoder).unwrap(),
+            expected
+        );
         decoder.finish().unwrap();
     }
     let mut encoded = Vec::new();
-    pool.write_nonempty("Object.class", &mut encoded).unwrap();
+    janex_format::strings::write_nonempty(&mut pool, "Object.class", &mut encoded).unwrap();
     assert_eq!(encoded, b"\x00\x00\x02\x01\x02");
     assert_eq!(pool.find("Object.class"), None);
     assert_eq!(pool.encode().unwrap(), b"\x03\x00\x06Object\x06.class");
@@ -38,12 +60,11 @@ fn invalid_pools_references_and_concatenation_limits() {
         &b"\x00"[..],
         &b"\x01\x01x"[..],
         &b"\x02\x00\x00"[..],
-        &b"\x02\x00\x01\xff"[..],
         &b"\x01\x00\x00"[..],
     ] {
-        assert!(StringPool::decode(invalid, Limits::default()).is_err());
+        assert!(DataPool::decode(invalid, Limits::default()).is_err());
     }
-    let mut pool = StringPool::new();
+    let mut pool = DataPool::new();
     pool.intern("hello");
     for invalid in [
         &b"\x02"[..],
@@ -53,8 +74,11 @@ fn invalid_pools_references_and_concatenation_limits() {
         &b"\x00\x00\x02\x01\x02"[..],
     ] {
         assert!(
-            pool.read_nonempty(&mut Decoder::new(invalid, Limits::default()).unwrap())
-                .is_err()
+            janex_format::strings::read_nonempty(
+                &pool,
+                &mut Decoder::new(invalid, Limits::default()).unwrap()
+            )
+            .is_err()
         );
     }
     let limits = Limits {
@@ -62,14 +86,17 @@ fn invalid_pools_references_and_concatenation_limits() {
         ..Limits::default()
     };
     assert_eq!(
-        pool.read_nonempty(&mut Decoder::new(b"\x00\x00\x02\x01\x01", limits).unwrap())
-            .unwrap_err()
-            .kind(),
+        janex_format::strings::read_nonempty(
+            &pool,
+            &mut Decoder::new(b"\x00\x00\x02\x01\x01", limits).unwrap()
+        )
+        .unwrap_err()
+        .kind(),
         ErrorKind::Limit
     );
     pool.intern("a large shared string");
     assert_eq!(
-        pool.read_nonempty(&mut Decoder::new(b"\x02", limits).unwrap())
+        janex_format::strings::read_nonempty(&pool, &mut Decoder::new(b"\x02", limits).unwrap())
             .unwrap_err()
             .kind(),
         ErrorKind::Limit

@@ -80,7 +80,7 @@ pub fn materialize<R: Read + Seek>(
 
 /// Tracks one expansion traversal and its output limits.
 struct Materializer<'a, 'root> {
-    /// Merged source nodes and default string pool.
+    /// Merged source nodes and default data pool.
     tree: &'a ResourceTree<'root>,
     /// Canonical child paths grouped by canonical parent path.
     children: BTreeMap<&'a str, Vec<&'a str>>,

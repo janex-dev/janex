@@ -9,10 +9,10 @@
 use crate::{
     Result,
     binary::{Decoder, Limits, write_vuint},
+    data_pool::DataPool,
     error::invalid,
-    strings::StringPool,
 };
-use std::collections::BTreeSet;
+use std::{borrow::Cow, collections::BTreeSet};
 
 /// A module dependency declared in a Module attribute.
 #[derive(Clone, Debug)]
@@ -77,14 +77,10 @@ pub fn inspect(bytes: &[u8], limits: Limits) -> Result<ClassInfo> {
 
 /// Produces a smaller transformed class file, or returns `None` without modifying the pool.
 ///
-/// Selected UTF-8 strings are interned only when the final transformation saves at least
-/// the minimum transform-descriptor overhead. Unpaired UTF-16 surrogates stay in their
-/// original constant-pool entries. Existing constant-pool indices and body bytes are retained.
-pub fn transform(
-    bytes: &[u8],
-    strings: &mut StringPool,
-    limits: Limits,
-) -> Result<Option<Vec<u8>>> {
+/// Entries are externalized only when their Modified UTF-8 bytes are also valid UTF-8
+/// and the final transformation saves the minimum transform-descriptor overhead.
+/// Existing constant-pool indices and body bytes are retained.
+pub fn transform(bytes: &[u8], strings: &mut DataPool, limits: Limits) -> Result<Option<Vec<u8>>> {
     let parsed = parse(bytes, limits)?;
     let checkpoint = strings.len();
     let classes: BTreeSet<_> = parsed
@@ -103,10 +99,10 @@ pub fn transform(
         let mut replacement = Vec::new();
         if constant.tag == 1 {
             let original = &constant.body[2..];
-            if let Ok(text) = String::from_utf16(&decode_modified(original)?) {
+            if let Ok(text) = std::str::from_utf8(original) {
                 let before = strings.len();
                 if classes.contains(&(index as u16)) && !text.starts_with('[') {
-                    let (package, name) = text.rsplit_once('/').unwrap_or(("", text.as_str()));
+                    let (package, name) = text.rsplit_once('/').unwrap_or(("", text));
                     if !name.is_empty() {
                         replacement.push(0xfe);
                         write_vuint(&mut replacement, strings.intern(package))?;
@@ -114,7 +110,7 @@ pub fn transform(
                     }
                 } else {
                     replacement.push(0xff);
-                    write_vuint(&mut replacement, strings.intern(&text))?;
+                    write_vuint(&mut replacement, strings.intern(text))?;
                 }
                 if replacement.len() > constant.body.len() {
                     strings.truncate(before);
@@ -143,7 +139,7 @@ pub fn transform(
 ///
 /// Checks every external index, Modified UTF-8 length, and final class-file framing.
 /// Output allocation is bounded by `limits.max_bytes`.
-pub fn restore(bytes: &[u8], strings: &StringPool, limits: Limits) -> Result<Vec<u8>> {
+pub fn restore(bytes: &[u8], strings: &DataPool, limits: Limits) -> Result<Vec<u8>> {
     let mut decoder = Decoder::new(bytes, limits)?;
     if decoder.take(4)? != [0xca, 0xfe, 0xca, 0x70] {
         return Err(invalid("incorrect transformed class magic"));
@@ -161,10 +157,10 @@ pub fn restore(bytes: &[u8], strings: &StringPool, limits: Limits) -> Result<Vec
         let tag = decoder.u8()?;
         match tag {
             0xff | 0xfe => {
-                let text = if tag == 0xff {
+                let utf = if tag == 0xff {
                     let text = strings.get(decoder.vuint()?)?;
                     check_external_length(text.len())?;
-                    text.to_owned()
+                    Cow::Borrowed(text)
                 } else {
                     let package = strings.get(decoder.vuint()?)?;
                     let name = strings.get(decoder.vuint()?)?;
@@ -175,18 +171,20 @@ pub fn restore(bytes: &[u8], strings: &StringPool, limits: Limits) -> Result<Vec
                         package.len() + name.len() + usize::from(!package.is_empty()),
                     )?;
                     if package.is_empty() {
-                        name.to_owned()
+                        Cow::Borrowed(name)
                     } else {
-                        format!("{package}/{name}")
+                        let mut bytes = package.to_vec();
+                        bytes.push(b'/');
+                        bytes.extend_from_slice(name);
+                        Cow::Owned(bytes)
                     }
                 };
-                let utf = encode_modified(&text);
                 let length = u16::try_from(utf.len())
                     .map_err(|_| invalid("external class string exceeds 65535 bytes"))?;
                 limits.bytes(output.len() as u64 + 3 + utf.len() as u64)?;
                 output.push(1);
                 output.extend_from_slice(&length.to_be_bytes());
-                output.extend(utf);
+                output.extend_from_slice(&utf);
             }
             _ => {
                 let start = decoder.position();
@@ -621,27 +619,7 @@ fn decode_modified(bytes: &[u8]) -> Result<Vec<u16>> {
     Ok(result)
 }
 
-/// Encodes Unicode text using the JVM's UTF-16-based Modified UTF-8 representation.
-fn encode_modified(text: &str) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    for unit in text.encode_utf16() {
-        match unit {
-            1..=0x7f => bytes.push(unit as u8),
-            0..=0x7ff => {
-                bytes.push(0xc0 | (unit >> 6) as u8);
-                bytes.push(0x80 | (unit & 0x3f) as u8);
-            }
-            _ => {
-                bytes.push(0xe0 | (unit >> 12) as u8);
-                bytes.push(0x80 | ((unit >> 6) & 0x3f) as u8);
-                bytes.push(0x80 | (unit & 0x3f) as u8);
-            }
-        }
-    }
-    bytes
-}
-
-/// Rejects oversized UTF-8 input before constructing its larger Modified UTF-8 representation.
+/// Rejects restored bytes that exceed the CONSTANT_Utf8 length field.
 fn check_external_length(length: usize) -> Result<()> {
     if length > usize::from(u16::MAX) {
         return Err(invalid("external class string exceeds 65535 bytes"));

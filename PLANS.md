@@ -151,7 +151,7 @@ responsibility, and direct `java -jar` ZIP64 support remains bounded by the init
 `pack --with-launcher` appends the bootstrap JAR using the existing JAR Tail Wrapper. Metadata binds
 the tail's exact size and SHA-256 digest. Keep native bootstrap and direct launching available.
 The initial standalone profile supports embedded classpath/module roots, resource layers, shared
-string pools, Stored/Extents blobs, Zstandard with raw and trained external dictionaries, and
+data pools, Stored/Extents blobs, Zstandard with raw and trained external dictionaries, and
 CLASSFILE transforms on Java 8+.
 It accepts None or Checksum metadata verification and checks every recorded container digest using
 the five specified algorithms. It rejects signed packages and unsupported startup options
@@ -225,7 +225,7 @@ janex pack <SOURCE> --output <FILE>
   acquisition; dependencies must be supplied explicitly through command arguments.
 - Preserve the original JAR filename and resource contents. Do not follow symbolic links while
   importing directories. Report unrepresentable paths, duplicate entries, and conflicts as errors.
-- Write shared string pools and blob data with XXH3-64 checksums for file entries. Use SHA-256 for
+- Write shared data pools and blob data with XXH3-64 checksums for file entries. Use SHA-256 for
   sections, blob-table pages, and the default Checksum verification type. Write to a temporary file
   and publish the result only after successful completion.
   Report an error if the destination already exists.

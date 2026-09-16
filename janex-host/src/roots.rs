@@ -91,7 +91,7 @@ impl Roots {
                 }
             }
             // Imported files are inline and untransformed; this in-memory root never dereferences
-            // or serializes its placeholder string-pool reference.
+            // or serializes its placeholder data-pool reference.
             let root = root.into_resource_root(BlobRef { pool: 0, index: 0 })?;
             self.entries.insert(RootKey::of(entry), root);
         }

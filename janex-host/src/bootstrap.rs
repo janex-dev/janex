@@ -9,8 +9,8 @@ use janex_format::{
     blob::{BlobRef, BlobStore, Entry},
     condition::Context,
     content::{Content, Source},
+    data_pool::DataPool,
     resource::{Node, ResourceRoot, ResourceTree},
-    strings::StringPool,
 };
 use janex_java::manifest::Manifest;
 use std::{
@@ -182,7 +182,7 @@ pub(crate) fn prepare(
     })
 }
 
-/// Accumulates bounded, topologically ordered source descriptors and shared string pools.
+/// Accumulates bounded, topologically ordered source descriptors and shared data pools.
 struct Builder<'a> {
     /// Source reader over the verified snapshot.
     blobs: &'a mut BlobStore<Cursor<Vec<u8>>>,
@@ -194,7 +194,7 @@ struct Builder<'a> {
     ids: BTreeMap<BlobRef, usize>,
     /// Decoded source lengths.
     sizes: Vec<u64>,
-    /// Serialized string pools shared by transforms.
+    /// Serialized data pools shared by transforms.
     pools: Vec<Vec<u8>>,
     /// Pool identities independent of the referring root.
     pool_ids: BTreeMap<BlobRef, usize>,
@@ -295,10 +295,10 @@ impl Builder<'_> {
             return Ok(*id);
         }
         let explicit;
-        let pool = if reference == root.string_pool {
-            &root.strings
+        let pool = if reference == root.data_pool {
+            &root.data
         } else {
-            explicit = StringPool::decode(
+            explicit = DataPool::decode(
                 &self.blobs.resolve(reference)?,
                 self.blobs.reader().limits(),
             )?;
@@ -307,7 +307,9 @@ impl Builder<'_> {
         let mut data = Vec::new();
         number(&mut data, pool.len() as u64)?;
         for i in 0..pool.len() {
-            string(&mut data, pool.get(i as u64)?)?;
+            let bytes = pool.get(i as u64)?;
+            number(&mut data, bytes.len() as u64)?;
+            data.extend_from_slice(bytes);
         }
         self.index_bytes += data.len() as u64;
         self.blobs.reader().limits().bytes(self.index_bytes)?;
@@ -339,7 +341,7 @@ impl Builder<'_> {
                 .get(0)?
                 .map(|v| BlobRef::from_value(&v))
                 .transpose()?
-                .unwrap_or(root.string_pool);
+                .unwrap_or(root.data_pool);
             number(output, transform.input_size)?;
             number(output, self.pool(reference, root)? as u64)?;
         }
@@ -499,10 +501,11 @@ public class Main {
             String::from_utf8_lossy(&compiled.stderr)
         );
         let original = fs::read(temp.path().join("Main.class")).unwrap();
-        let mut strings = StringPool::new();
+        let mut strings = DataPool::new();
         let transformed = classfile::transform(&original, &mut strings, Limits::default())
             .unwrap()
             .unwrap();
+        strings.intern(b"\xff\xc0\x80\xed\xa0\x80");
         let dictionary = b"a shared dictionary containing a repeated resource message";
         let plain = b"a repeated resource message";
         let mut encoder =
@@ -595,8 +598,8 @@ public class Main {
         ];
         entries.sort_by(|a, b| a.name().cmp(b.name()));
         let root = ResourceRoot {
-            string_pool: reference(99),
-            strings: StringPool::new(),
+            data_pool: reference(99),
+            data: DataPool::new(),
             metadata: Value::empty_map(),
             layers: vec![Layer {
                 condition: Condition::unconditional(),

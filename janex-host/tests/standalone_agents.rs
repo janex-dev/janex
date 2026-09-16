@@ -148,7 +148,7 @@ fn agent_hashes(source: &Path, target: &Path, algorithm: Algorithm, corrupt: boo
                     content, metadata, ..
                 } = entry
                 {
-                    let bytes = content.resolve_file(&mut blobs, &root.strings).unwrap();
+                    let bytes = content.resolve_file(&mut blobs, &root.data).unwrap();
                     let mut checksum = Checksum::compute(algorithm, bytes.as_slice())
                         .unwrap()
                         .encode();
@@ -161,7 +161,7 @@ fn agent_hashes(source: &Path, target: &Path, algorithm: Algorithm, corrupt: boo
         }
     }
     let encoded_root = root.encode(Limits::default()).unwrap();
-    let encoded_strings = root.strings.encode().unwrap();
+    let encoded_strings = root.data.encode().unwrap();
     let mut reader = Reader::open_auto(Cursor::new(&original), Limits::default()).unwrap();
     let mut writer = Writer::new(Vec::new()).unwrap();
     for section in reader.sections().cloned().collect::<Vec<_>>() {
@@ -182,7 +182,7 @@ fn agent_hashes(source: &Path, target: &Path, algorithm: Algorithm, corrupt: boo
                 };
                 let bytes = if current == reference {
                     encoded_root.clone()
-                } else if current == root.string_pool {
+                } else if current == root.data_pool {
                     encoded_strings.clone()
                 } else {
                     blobs.resolve(current).unwrap()

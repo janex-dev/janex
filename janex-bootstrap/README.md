@@ -23,7 +23,7 @@ The Host authenticates an owned snapshot once, evaluates conditions and layers, 
 and produces a bounded resource index. The Java system loader reads ordinary Stored blobs and
 Extents from the private snapshot, reverses Zstandard and CLASSFILE encodings on demand, and
 retains up to 64 MiB of decoded blob data within the configured byte limit. Root and file override
-string pools retain their identities. Resource checksums are not rehashed in Java; authentication
+data pools retain their identities. Resource checksums are not rehashed in Java; authentication
 comes from the Host's verified snapshot. Manifests are sanitized in the Host.
 
 Explicit external JAR dependencies are fetched and checked by the Host, then imported into the

@@ -8,6 +8,8 @@ Public reading APIs live in `org.glavo.janex.reader`. Binary and archive helpers
 The reader has no dependency on the bootstrap module. `new JanexReader(path)` uses its portable
 Zstandard decoder; constructor overloads accept custom decoding and acquisition policies.
 `ClassFile.restore` restores CLASSFILE content independently of a running launcher.
+Its `byte[][]` pool contains opaque entries; referenced Modified UTF-8 bytes are copied without
+transcoding. Resource paths independently require UTF-8 when their pool entries are referenced.
 
 `JanexReader.launch()` returns selected metadata and immutable `ResourcePlan` descriptions.
 The bootstrap's `org.glavo.janex.bootstrap.loader.ResourceIndexes` serializes these descriptions into

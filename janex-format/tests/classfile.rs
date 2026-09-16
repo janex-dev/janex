@@ -3,7 +3,7 @@
 
 //! Independent class-file bytes and real JDK transformation fixtures.
 
-use janex_format::{ErrorKind, binary::Limits, classfile, strings::StringPool};
+use janex_format::{ErrorKind, binary::Limits, classfile, data_pool::DataPool};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -36,14 +36,14 @@ fn class_transform_restores_exact_bytes_and_preserves_unpaired_surrogates() {
         classfile::inspect(&bytes, Limits::default()).unwrap().name,
         "sample/Example"
     );
-    let mut pool = StringPool::new();
+    let mut pool = DataPool::new();
     let encoded = classfile::transform(&bytes, &mut pool, Limits::default())
         .unwrap()
         .unwrap();
     assert_eq!(&encoded[..4], b"\xca\xfe\xca\x70");
     assert_eq!(&encoded[10..13], &[0xfe, 1, 2]);
-    assert_eq!(pool.get(1).unwrap(), "sample");
-    assert_eq!(pool.get(2).unwrap(), "Example");
+    assert_eq!(pool.get(1).unwrap(), b"sample");
+    assert_eq!(pool.get(2).unwrap(), b"Example");
     assert!(
         encoded
             .windows(6)
@@ -53,7 +53,7 @@ fn class_transform_restores_exact_bytes_and_preserves_unpaired_surrogates() {
         classfile::restore(&encoded, &pool, Limits::default()).unwrap(),
         bytes
     );
-    assert!(classfile::restore(&encoded, &StringPool::new(), Limits::default()).is_err());
+    assert!(classfile::restore(&encoded, &DataPool::new(), Limits::default()).is_err());
     for end in 0..bytes.len() {
         assert!(
             classfile::inspect(&bytes[..end], Limits::default()).is_err(),
@@ -84,20 +84,58 @@ fn class_transform_restores_exact_bytes_and_preserves_unpaired_surrogates() {
 #[test]
 fn external_strings_check_modified_utf8_length_and_empty_class_names() {
     let bytes = fixture();
-    let mut pool = StringPool::new();
+    let mut pool = DataPool::new();
     let mut encoded = classfile::transform(&bytes, &mut pool, Limits::default())
         .unwrap()
         .unwrap();
     encoded[12] = 0;
     assert!(classfile::restore(&encoded, &pool, Limits::default()).is_err());
-    let mut oversized = StringPool::new();
+    let mut oversized = DataPool::new();
     oversized.intern("sample");
-    oversized.intern(&"\0".repeat(40000));
+    oversized.intern([0xc0, 0x80].repeat(40000));
     encoded[12] = 2;
     assert!(classfile::restore(&encoded, &oversized, Limits::default()).is_err());
     let mut invalid = bytes;
     invalid[10] = 5;
     assert!(classfile::inspect(&invalid, Limits::default()).is_err());
+}
+
+#[test]
+fn external_constants_copy_raw_modified_utf8_without_transcoding() {
+    let base = fixture();
+    let position = base
+        .windows(6)
+        .position(|bytes| bytes == [1, 0, 3, 0xed, 0xa0, 0x80])
+        .unwrap();
+    for raw in [
+        vec![0xc0, 0x80],
+        vec![0xed, 0xa0, 0x80],
+        vec![0xed, 0xb0, 0x80],
+        vec![0xed, 0xa0, 0xbd, 0xed, 0xb8, 0x80],
+        vec![b'x'; 65535],
+    ] {
+        let mut ordinary = base[..position].to_vec();
+        ordinary.push(1);
+        ordinary.extend_from_slice(&(raw.len() as u16).to_be_bytes());
+        ordinary.extend_from_slice(&raw);
+        ordinary.extend_from_slice(&base[position + 6..]);
+        classfile::inspect(&ordinary, Limits::default()).unwrap();
+        let mut pool = DataPool::new();
+        pool.intern(&raw);
+        let mut transformed = base[..position].to_vec();
+        transformed[..4].copy_from_slice(b"\xca\xfe\xca\x70");
+        transformed.extend_from_slice(&[0xff, 1]);
+        transformed.extend_from_slice(&base[position + 6..]);
+        assert_eq!(
+            classfile::restore(&transformed, &pool, Limits::default()).unwrap(),
+            ordinary
+        );
+        for invalid in [vec![0], vec![0xf0, 0x9f, 0x98, 0x80], vec![b'x'; 65536]] {
+            let mut bad_pool = DataPool::new();
+            bad_pool.intern(invalid);
+            assert!(classfile::restore(&transformed, &bad_pool, Limits::default()).is_err());
+        }
+    }
 }
 
 /// Owns an exclusively created scratch directory for one JDK test.
@@ -181,7 +219,7 @@ public class Example {
             "src/sample/Example.java",
         ],
     );
-    let mut pool = StringPool::new();
+    let mut pool = DataPool::new();
     for path in ["classes/sample/Example.class", "classes/module-info.class"] {
         let original = fs::read(root.join(path)).unwrap();
         let encoded = classfile::transform(&original, &mut pool, Limits::default())

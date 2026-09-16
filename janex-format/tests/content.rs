@@ -9,13 +9,13 @@ use janex_format::{
     cbor::Value,
     container::{BLOB_POOL, Reader, Writer},
     content::{Content, Source, Transform},
-    strings::StringPool,
+    data_pool::DataPool,
 };
 use std::io::Cursor;
 
 /// Creates a container with a valid explicit pool, a malformed pool, and transformed bytes.
 fn fixture() -> Fixture {
-    let mut strings = StringPool::new();
+    let mut strings = DataPool::new();
     for text in ["sample", "Example", "java/lang", "Object"] {
         strings.intern(text);
     }
@@ -57,7 +57,7 @@ struct Fixture {
     /// Container holding valid and invalid referenced blobs.
     blobs: BlobStore<Cursor<Vec<u8>>>,
     /// Default pool used by the fixture's transformed class.
-    strings: StringPool,
+    strings: DataPool,
     /// Expected ordinary class-file bytes.
     original: Vec<u8>,
     /// Independently encoded external-string class-file bytes.
@@ -91,9 +91,7 @@ fn transform_uses_default_pool_or_validated_override_without_fallback() {
     ])
     .unwrap();
     assert_eq!(
-        content
-            .resolve_file(&mut blobs, &StringPool::new())
-            .unwrap(),
+        content.resolve_file(&mut blobs, &DataPool::new()).unwrap(),
         original
     );
     let mut encoded = Vec::new();
@@ -106,9 +104,7 @@ fn transform_uses_default_pool_or_validated_override_without_fallback() {
         content.transforms[0].properties
     );
     assert_eq!(
-        decoded
-            .resolve_file(&mut blobs, &StringPool::new())
-            .unwrap(),
+        decoded.resolve_file(&mut blobs, &DataPool::new()).unwrap(),
         original
     );
     assert!(decoded.resolve_entries(&mut blobs).is_err());

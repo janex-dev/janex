@@ -12,8 +12,8 @@ use janex_format::{
     condition::{Condition, Context},
     container::{BLOB_POOL, Reader, Writer},
     content::Content,
+    data_pool::DataPool,
     resource::{Directory, DirectoryEntry, Layer, Node, ResourceRoot},
-    strings::StringPool,
 };
 use std::io::Cursor;
 
@@ -92,8 +92,8 @@ fn layer(mut directories: Vec<Directory>) -> Layer {
 /// Creates a root whose pool will occupy blob zero.
 fn root(layers: Vec<Layer>) -> ResourceRoot {
     ResourceRoot {
-        string_pool: BlobRef { pool: 1, index: 0 },
-        strings: StringPool::new(),
+        data_pool: BlobRef { pool: 1, index: 0 },
+        data: DataPool::new(),
         metadata: Value::empty_map(),
         layers,
     }
@@ -161,7 +161,7 @@ fn root_round_trip_shares_names_and_retains_metadata() {
         ),
         directory("empty", vec![]),
     ])]);
-    root.strings.intern("Object");
+    root.data.intern("Object");
     root.metadata = Value::map([
         (
             Value::text("janex.java.jar_name"),
@@ -171,8 +171,8 @@ fn root_round_trip_shares_names_and_retains_metadata() {
     ])
     .unwrap();
     let encoded = root.encode(Limits::default()).unwrap();
-    assert_eq!(root.strings.find("Object.class"), None);
-    let mut blobs = store(&[root.strings.encode().unwrap(), b"class bytes".to_vec()]);
+    assert_eq!(root.data.find("Object.class"), None);
+    let mut blobs = store(&[root.data.encode().unwrap(), b"class bytes".to_vec()]);
     let mut decoded = ResourceRoot::decode(&encoded, &mut blobs).unwrap();
     assert_eq!(decoded.encode(Limits::default()).unwrap(), encoded);
     assert_eq!(decoded.metadata, root.metadata);
@@ -188,7 +188,7 @@ fn root_round_trip_shares_names_and_retains_metadata() {
     assert!(
         matches!(tree.get("java/lang/Object.class"), Some(Node::File { metadata: value, .. }) if **value == metadata)
     );
-    let mut corrupted = store(&[root.strings.encode().unwrap(), b"other bytes".to_vec()]);
+    let mut corrupted = store(&[root.data.encode().unwrap(), b"other bytes".to_vec()]);
     assert_eq!(
         tree.read_file("java/lang/Object.class", &mut corrupted)
             .unwrap_err()

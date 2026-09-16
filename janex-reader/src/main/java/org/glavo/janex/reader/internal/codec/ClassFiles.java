@@ -8,7 +8,7 @@ import java.io.*;
 import org.glavo.janex.reader.ClassFile;
 import org.glavo.janex.reader.ReadLimits;
 
-/// Restores the two external UTF-8 constant-pool entry forms defined by Janex 0.1.
+/// Restores external CONSTANT_Utf8 entries by copying pooled Modified UTF-8 bytes.
 public final class ClassFiles {
     /// Prevents instantiation.
     private ClassFiles() {
@@ -21,12 +21,12 @@ public final class ClassFiles {
     /// @param length required original class length
     /// @return a new ordinary class file
     /// @throws IOException if framing, references, or output length are invalid
-    public static byte[] restore(byte[] bytes, String[] pool, int length) throws IOException {
+    public static byte[] restore(byte[] bytes, byte[][] pool, int length) throws IOException {
         return restore(bytes, pool, length, ReadLimits.DEFAULT);
     }
 
     /// Restores and structurally validates class bytes under the inherited resource limits.
-    public static byte[] restore(byte[] bytes, String[] pool, int length, ReadLimits limits) throws IOException {
+    public static byte[] restore(byte[] bytes, byte[][] pool, int length, ReadLimits limits) throws IOException {
         if (length < 0 || length > limits.maxBytes() || bytes.length > limits.maxBytes()) {
             throw new IOException("CLASSFILE byte limit exceeded");
         }
@@ -47,19 +47,27 @@ public final class ClassFiles {
         for (int i = 1; i < count; i++) {
             int tag = input.readUnsignedByte();
             if (tag == 0xff || tag == 0xfe) {
-                String text = string(input, pool);
+                byte[] text = entry(input, pool);
                 if (tag == 0xfe) {
-                    String name = string(input, pool);
-                    if (name.isEmpty()) {
+                    byte[] name = entry(input, pool);
+                    if (name.length == 0) {
                         throw new IOException("Empty external class name");
                     }
-                    if ((long) text.length() + name.length() + (text.isEmpty() ? 0 : 1) > 65535) {
+                    if ((long) text.length + name.length + (text.length == 0 ? 0 : 1) > 65535) {
                         throw new IOException("External class string exceeds 65535 bytes");
                     }
-                    text = text.isEmpty() ? name : text + '/' + name;
+                    data.writeByte(1);
+                    data.writeShort(text.length + name.length + (text.length == 0 ? 0 : 1));
+                    if (text.length != 0) {
+                        data.write(text);
+                        data.writeByte('/');
+                    }
+                    data.write(name);
+                } else {
+                    data.writeByte(1);
+                    data.writeShort(text.length);
+                    data.write(text);
                 }
-                data.writeByte(1);
-                data.writeUTF(text);
             } else {
                 data.writeByte(tag);
                 int size;
@@ -113,27 +121,27 @@ public final class ClassFiles {
         return result;
     }
 
-    /// Reads a bounded ULEB128 string index, accepting zero padding permitted by the format.
-    private static String string(DataInputStream input, String[] pool) throws IOException {
+    /// Reads a bounded ULEB128 data index, accepting zero padding permitted by the format.
+    private static byte[] entry(DataInputStream input, byte[][] pool) throws IOException {
         long value = 0;
         for (int shift = 0; shift < 70; shift += 7) {
             int next = input.readUnsignedByte();
             if (shift == 63 && next > 1) {
-                throw new IOException("String index overflow");
+                throw new IOException("Data-pool index overflow");
             }
             value |= (long) (next & 127) << shift;
             if (next < 128) {
                 if (value < 0 || value >= pool.length) {
-                    throw new IOException("String index out of range");
+                    throw new IOException("Data-pool index out of range");
                 }
-                String text = pool[(int) value];
-                if (text.length() > 65535) {
+                byte[] text = pool[(int) value];
+                if (text.length > 65535) {
                     throw new IOException("External class string exceeds 65535 bytes");
                 }
                 return text;
             }
         }
-        throw new IOException("String index overflow");
+        throw new IOException("Data-pool index overflow");
     }
 
     /// Writes into an exact-size output without growing or exposing partial results.
@@ -155,6 +163,19 @@ public final class ClassFiles {
                 throw new IOException("CLASSFILE exceeds declared size");
             }
             bytes[position++] = (byte) value;
+        }
+
+        /// Copies one byte range, rejecting overflow before modifying the result.
+        @Override
+        public void write(byte[] source, int offset, int length) throws IOException {
+            if (offset < 0 || length < 0 || offset > source.length - length) {
+                throw new IndexOutOfBoundsException();
+            }
+            if (length > bytes.length - position) {
+                throw new IOException("CLASSFILE exceeds declared size");
+            }
+            System.arraycopy(source, offset, bytes, position, length);
+            position += length;
         }
     }
 }

@@ -77,7 +77,7 @@ fn package(
         entry.push(0);
         Content::inline(entry).write(&mut root).unwrap();
     }
-    let mut data = vec![1, 0]; // One empty StringPool entry.
+    let mut data = vec![1, 0]; // One empty DataPool entry.
     data.extend(&root);
     data.extend(physical);
     let mut pages = Vec::new();

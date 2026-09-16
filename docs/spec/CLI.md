@@ -27,7 +27,7 @@ If no suitable runtime is available, `janex run` should report the missing requi
 
 ```text
 janex inspect <FILE>
-    [--sections] [--blobs] [--resources] [--strings]
+    [--sections] [--blobs] [--resources] [--data-pools]
     [--json] [--verify] [--external-tail-length <BYTES>]
 ```
 
@@ -43,9 +43,9 @@ Inspection never launches code, selects a runtime, or acquires external dependen
   including agents and inactive or later-cleared path lists. All resource layers, conditions,
   directories, files, links, and tombstones remain unmerged. External references remain in application
   metadata. Unknown application descriptors are preserved but do not contribute inferred roots.
-- `--strings` implies `--resources` and includes the root string pools and explicitly referenced
+- `--data-pools` implies `--resources` and includes the root data pools and explicitly referenced
   CLASSFILE override pools. Reading resource structure decodes roots, directory-entry blobs, and
-  default string pools; it does not restore ordinary file contents.
+  default data pools; it does not restore ordinary file contents.
 - `--verify` checks recorded metadata, section, and external-region checksums. Missing checksums
   reduce reported coverage; they are not failures. This does not authenticate CMS/OpenPGP signatures
   or check every restored file checksum. Table-page checksums are always checked when pages are read.
@@ -58,9 +58,12 @@ trusted signer; the report explicitly leaves signature authentication unchecked.
 ### Machine Output
 
 `--json` emits one document with `schema_version: 1`. It uses the same detail selectors as text output.
-Unrequested `sections`, `blob_pools`, `resource_roots`, and `string_pools` members are omitted.
+Unrequested `sections`, `blob_pools`, `resource_roots`, and `data_pools` members are omitted.
 Applications and original file metadata are included in the summary. Consumers should tolerate
 additional members.
+
+Each `data_pools` record contains a blob `reference` and an `entries` array in pool-index order.
+Entries use `{"bytes_hex":"..."}` without assuming a text encoding.
 
 Opaque IDs, byte sizes, physical offsets, and logical blob indices are decimal strings, preserving
 unsigned 64-bit values in JavaScript. Ordinary bounded counts and method IDs are JSON numbers.
@@ -79,7 +82,7 @@ Tools can use `janex-format` directly: `Reader::section_range` returns absolute 
 `BlobStore::pool_info` exposes the page directory without loading its pages; `BlobStore::entry`
 returns Stored or Extents descriptions. `Application::resource_references` enumerates unique local
 roots across all Java configuration branches without evaluating conditions. Existing
-`ResourceRoot::decode` and `StringPool` APIs expose unmerged resources and indexed strings.
+`ResourceRoot::decode` and `DataPool` APIs expose unmerged resources and indexed byte sequences.
 These operations use the normal format parser and reader limits; the CLI does not maintain a
 separate binary parser. They do not establish publisher trust.
 
@@ -137,7 +140,7 @@ File entries use XXH3-64 checksums; sections, blob-table pages, and Checksum ver
 The output constrains both external regions to be absent. A shared string
 pool and identical-file blob reuse reduce repetition within each root. Zstandard is used where it
 reduces storage. CLASSFILE transforms are selected only when their complete candidate package is
-smaller, including string-pool and index costs. Unrecognized class files remain ordinary resources.
+smaller, including data-pool and index costs. Unrecognized class files remain ordinary resources.
 Unsigned output bytes are reproducible given unchanged inputs, permission bits, options, and encoder
 versions. Signatures may include the current time or randomness.
 

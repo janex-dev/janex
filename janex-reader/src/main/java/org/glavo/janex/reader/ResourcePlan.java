@@ -18,15 +18,15 @@ public final class ResourcePlan {
     private final ReadLimits limits;
     /// Sources in dependency order.
     private final List<Source> sources;
-    /// Selected CLASSFILE string pools.
-    private final String[][] pools;
+    /// Selected CLASSFILE data pools.
+    private final byte[][][] pools;
     /// Required module names and exact versions; empty versions are unconstrained.
     private final Map<String, String> requirements;
     /// Resource roots in lookup order.
     private final List<Root> roots;
 
     /// Retains validated preparation data without exposing mutable input arrays or collections.
-    ResourcePlan(Path snapshot, ReadLimits limits, List<Source> sources, String[][] pools, Map<String, String> requirements, List<Root> roots) {
+    ResourcePlan(Path snapshot, ReadLimits limits, List<Source> sources, byte[][][] pools, Map<String, String> requirements, List<Root> roots) {
         this.snapshot = snapshot;
         this.limits = limits;
         this.sources = Collections.unmodifiableList(new ArrayList<>(sources));
@@ -50,8 +50,8 @@ public final class ResourcePlan {
         return sources;
     }
 
-    /// Returns selected CLASSFILE string pools.
-    public String[][] pools() {
+    /// Returns a deep copy of the selected CLASSFILE data pools.
+    public byte[][][] pools() {
         return copy(pools);
     }
 
@@ -149,7 +149,7 @@ public final class ResourcePlan {
     public static final class File {
         /// Source index, or -1 for a directory.
         private final int source;
-        /// CLASSFILE decoded length and string-pool index pairs.
+        /// CLASSFILE decoded length and data-pool index pairs.
         private final int[][] transforms;
         /// Creation, modification, and access nanoseconds; absent values are null.
         private final BigInteger[] times;
@@ -169,7 +169,7 @@ public final class ResourcePlan {
             return source;
         }
 
-        /// Returns cLASSFILE decoded length and string-pool index pairs.
+        /// Returns cLASSFILE decoded length and data-pool index pairs.
         public int[][] transforms() {
             return copy(transforms);
         }
@@ -194,11 +194,14 @@ public final class ResourcePlan {
         return copy;
     }
 
-    /// Copies string-pool arrays while sharing immutable strings.
-    private static String[][] copy(String[][] values) {
-        String[][] copy = values.clone();
+    /// Copies each pool, entry array, and byte sequence.
+    private static byte[][][] copy(byte[][][] values) {
+        byte[][][] copy = values.clone();
         for (int i = 0; i < copy.length; i++) {
             copy[i] = copy[i].clone();
+            for (int j = 0; j < copy[i].length; j++) {
+                copy[i][j] = copy[i][j].clone();
+            }
         }
         return copy;
     }

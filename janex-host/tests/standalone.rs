@@ -332,8 +332,8 @@ fn java_reader_matches_rust_for_extents_transforms_layers_and_links() {
         condition::Condition,
         container::{APPLICATION, BLOB_POOL, Writer},
         content::{Content, Source, Transform},
+        data_pool::DataPool,
         resource::{Directory, DirectoryEntry, Layer, ResourceRoot},
-        strings::StringPool,
     };
     let temp = tempfile::tempdir().unwrap();
     fs::write(temp.path().join("Main.java"), r#"
@@ -341,6 +341,7 @@ import java.nio.file.*;
 public class Main {
     public static void main(String[] args) throws Exception {
         if (!java.util.Arrays.equals(args, new String[]{"selected", "user"})) throw new AssertionError();
+        if ("\u0000\ud800\ud83d\ude80".length() != 4) throw new AssertionError();
         if (Main.class.getResource("/obsolete") != null) throw new AssertionError();
         if (!Files.isDirectory(Paths.get(Main.class.getResource("/replaced/").toURI()))) throw new AssertionError();
         Path path = Paths.get(Main.class.getResource("/alias/value.txt").toURI());
@@ -381,17 +382,33 @@ public class Main {
         ])
         .unwrap();
     let class = fs::read(temp.path().join("classes/Main.class")).unwrap();
-    let mut class_strings = StringPool::new();
-    let transformed = classfile::transform(&class, &mut class_strings, limits)
+    let mut class_strings = DataPool::new();
+    let mut transformed = classfile::transform(&class, &mut class_strings, limits)
         .unwrap()
         .unwrap();
+    let raw = [
+        0xc0, 0x80, 0xed, 0xa0, 0x80, 0xed, 0xa0, 0xbd, 0xed, 0xba, 0x80,
+    ];
+    let mut entry = vec![1, 0, raw.len() as u8];
+    entry.extend_from_slice(&raw);
+    let position = transformed
+        .windows(entry.len())
+        .position(|bytes| bytes == entry)
+        .unwrap();
+    let mut external = vec![0xff];
+    janex_format::binary::write_vuint(&mut external, class_strings.intern(raw)).unwrap();
+    transformed.splice(position..position + entry.len(), external);
+    assert_eq!(
+        classfile::restore(&transformed, &class_strings, limits).unwrap(),
+        class
+    );
     let class_source = pool.push(&transformed, 3).unwrap();
     let class_pool = pool.push(&class_strings.encode().unwrap(), 3).unwrap();
-    let mut names = StringPool::new();
+    let mut names = DataPool::new();
     names.intern("Main");
     let mut root = ResourceRoot {
-        string_pool: reference(pool.len() as u64),
-        strings: names,
+        data_pool: reference(pool.len() as u64),
+        data: names,
         metadata: Value::empty_map(),
         layers: vec![
             Layer {
@@ -477,8 +494,8 @@ public class Main {
     });
     let root_bytes = root.encode(limits).unwrap();
     assert_eq!(
-        pool.push(&root.strings.encode().unwrap(), 3).unwrap(),
-        root.string_pool.index
+        pool.push(&root.data.encode().unwrap(), 3).unwrap(),
+        root.data_pool.index
     );
     let root_index = pool.push(&root_bytes, 3).unwrap();
     let pool = pool.finish(8, 3).unwrap();

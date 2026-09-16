@@ -10,7 +10,7 @@ import java.util.*;
 import com.github.luben.zstd.ZstdCompressCtx;
 import org.glavo.janex.reader.Checksum;
 
-/// Holds one encoded blob pool with a string pool scoped to its resource root.
+/// Holds one encoded blob pool with a data pool scoped to its resource root.
 final class BlobPool {
     /// Section identifier assigned by the container writer.
     final long id;
@@ -29,7 +29,7 @@ final class BlobPool {
         this.info = info;
     }
 
-    /// Builds one resource root with its own string pool.
+    /// Builds one resource root with its own data pool.
     static BlobPool local(long id, Resources resources, PackOptions options, boolean transform) throws IOException {
         try (ZstdCompressCtx compressor = StoredBlob.compressor(options)) {
             Builder builder = new Builder(id, resources, options, transform);
@@ -50,8 +50,8 @@ final class BlobPool {
         private final long id;
         /// Raw blobs in stable index order.
         private final List<byte[]> blobs = new ArrayList<>();
-        /// Distinct path strings in insertion order, beginning with the empty string.
-        private final StringPool strings;
+        /// Shared path and class-constant bytes in insertion order, beginning with empty bytes.
+        private final DataPool strings;
         /// Digest buckets retaining exact bytes to distinguish hash collisions.
         private final Map<ByteBuffer, List<SharedFile>> shared = new HashMap<>();
         /// Whether this candidate uses class transforms and split class resource names.
@@ -61,12 +61,12 @@ final class BlobPool {
         /// Index of the complete resource-root blob.
         final int root;
 
-        /// Builds one root with stable references to its own string pool.
+        /// Builds one root with stable references to its own data pool.
         Builder(long id, Resources resources, PackOptions options, boolean transform) throws IOException {
             this.id = id;
             this.options = options;
             this.transform = transform;
-            strings = new StringPool(options.limits);
+            strings = new DataPool(options.limits);
             append(new byte[0]);
             Encoding layers = new Encoding();
             layers.uint(resources.layers.size());
@@ -119,7 +119,7 @@ final class BlobPool {
             root = append(resource.toByteArray());
         }
 
-        /// Finalizes this root's string pool and encodes its complete blob section.
+        /// Finalizes this root's data pool and encodes its complete blob section.
         BlobPool finish(ZstdCompressCtx compressor) throws IOException {
             blobs.set(0, strings.encode());
             Encoding data = new Encoding();
@@ -153,7 +153,7 @@ final class BlobPool {
 
         /// Interns one string without changing existing indices.
         private int intern(String value) throws IOException {
-            return strings.intern(value);
+            return strings.intern(Encoding.utf8(value));
         }
 
         /// Encodes class filenames by sharing their basename with class constants.

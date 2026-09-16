@@ -6,7 +6,7 @@
 use janex_format::{
     binary::{self, Limits},
     classfile,
-    strings::StringPool,
+    data_pool::DataPool,
 };
 use std::{
     fs,
@@ -26,7 +26,7 @@ fn vector(
     transform: bool,
     encoded: &[u8],
     length: usize,
-    pool: &StringPool,
+    pool: &DataPool,
     limits: Limits,
 ) {
     let count = u32::from_be_bytes(output[..4].try_into().unwrap());
@@ -43,7 +43,7 @@ fn vector(
     output.extend((length as u32).to_be_bytes());
     output.extend((pool.len() as u32).to_be_bytes());
     for index in 0..pool.len() {
-        bytes(output, pool.get(index as u64).unwrap().as_bytes());
+        bytes(output, pool.get(index as u64).unwrap());
     }
     let restored = if transform {
         classfile::restore(encoded, pool, limits)
@@ -58,7 +58,7 @@ fn vector(
 
 /// Checks an ordinary candidate and the corresponding transform without external strings.
 fn ordinary(output: &mut Vec<u8>, encoded: &[u8], limits: Limits) {
-    let pool = StringPool::new();
+    let pool = DataPool::new();
     vector(output, false, encoded, 0, &pool, limits);
     let mut transformed = encoded.to_vec();
     if transformed.starts_with(&[0xca, 0xfe, 0xba, 0xbe]) {
@@ -173,7 +173,7 @@ public class Fixture implements Runnable {
         let mut trailing = original.clone();
         trailing.push(0);
         ordinary(&mut vectors, &trailing, limits);
-        let mut pool = StringPool::new();
+        let mut pool = DataPool::new();
         if let Some(transformed) = classfile::transform(&original, &mut pool, limits).unwrap() {
             vector(
                 &mut vectors,
@@ -217,6 +217,7 @@ public class Fixture implements Runnable {
         vec![0xe0, 0x80, 0x80],
         vec![0xed, 0xa0, 0x80],
         vec![0xed, 0xb0, 0x80],
+        vec![0xed, 0xa0, 0xbd, 0xed, 0xb8, 0x80],
         vec![0xf0, 0x9f, 0x98, 0x80],
         vec![0x80],
         vec![0xc2],
@@ -224,8 +225,27 @@ public class Fixture implements Runnable {
     ] {
         let mut extra = vec![1];
         extra.extend((modified.len() as u16).to_be_bytes());
-        extra.extend(modified);
-        ordinary(&mut vectors, &minimal(&extra, false), limits);
+        extra.extend_from_slice(&modified);
+        let original = minimal(&extra, false);
+        ordinary(&mut vectors, &original, limits);
+        let mut pool = DataPool::new();
+        let index = pool.intern(&modified);
+        let mut transformed = minimal(&[0xff, index as u8], false);
+        transformed[..4].copy_from_slice(&[0xca, 0xfe, 0xca, 0x70]);
+        if classfile::inspect(&original, limits).is_ok() {
+            assert_eq!(
+                classfile::restore(&transformed, &pool, limits).unwrap(),
+                original
+            );
+        }
+        vector(
+            &mut vectors,
+            true,
+            &transformed,
+            original.len(),
+            &pool,
+            limits,
+        );
     }
     for tag in 0..=255 {
         let mut extra = vec![tag];
@@ -243,7 +263,7 @@ public class Fixture implements Runnable {
         "\0".repeat(32768),
         "🚀".repeat(10923),
     ] {
-        let mut pool = StringPool::new();
+        let mut pool = DataPool::new();
         let name = pool.intern(&text);
         let package = pool.intern("sample");
         for prefix in [None, Some(0), Some(package)] {

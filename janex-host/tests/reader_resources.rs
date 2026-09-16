@@ -12,8 +12,8 @@ use janex_format::{
     condition::Context,
     container::{APPLICATION, BLOB_POOL, Reader, Writer},
     content::{Content, Transform},
+    data_pool::DataPool,
     resource::{Node, ResourceRoot, ResourceTree},
-    strings::StringPool,
 };
 use std::{
     collections::BTreeSet,
@@ -29,12 +29,14 @@ enum Name {
     Index(String),
     Inline(String),
     Concat(Vec<String>),
+    Raw(Vec<u8>),
 }
 
 impl Name {
     /// Encodes the chosen form without normalizing malformed fixture values.
-    fn write(&self, output: &mut Vec<u8>, pool: &mut StringPool) {
+    fn write(&self, output: &mut Vec<u8>, pool: &mut DataPool) {
         match self {
+            Self::Raw(value) => binary::write_vuint(output, pool.intern(value)).unwrap(),
             Self::Index(value) => binary::write_vuint(output, pool.intern(value)).unwrap(),
             Self::Inline(value) => {
                 output.push(0);
@@ -159,8 +161,8 @@ fn stored_pool(blobs: &[Vec<u8>]) -> BuiltPool {
 
 /// Encodes a container while leaving resource validation to each implementation.
 fn package(layers: &[Layer]) -> Vec<u8> {
-    let mut strings = StringPool::new();
-    let mut root = vec![0, 0, 0]; // String-pool reference and empty root metadata.
+    let mut strings = DataPool::new();
+    let mut root = vec![0, 0, 0]; // Data-pool reference and empty root metadata.
     binary::write_vuint(&mut root, layers.len() as u64).unwrap();
     for layer in layers {
         let condition = if layer.active {
@@ -193,6 +195,8 @@ fn package(layers: &[Layer]) -> Vec<u8> {
             Content::inline(entries).write(&mut root).unwrap();
         }
     }
+    strings.intern(b"\xff");
+    strings.intern(b"\xc0\x80");
     let pool = stored_pool(&[strings.encode().unwrap(), root]);
     let entry = Value::map([
         (Value::uint(0), Value::uint(0)),
@@ -392,6 +396,16 @@ fn java_resource_layers_and_aliases_match_native_resolution() {
         String::from_utf8_lossy(&compiled.stderr)
     );
     let mut vectors = vec![0; 4];
+    for raw in [vec![0xff], vec![0xc0, 0x80], vec![0xed, 0xa0, 0x80]] {
+        vector(
+            &mut vectors,
+            &[layer(vec![directory(
+                "",
+                vec![file(Name::Raw(raw), b"invalid name")],
+            )])],
+            Limits::default(),
+        );
+    }
     let limits = Limits::default();
     vector(
         &mut vectors,

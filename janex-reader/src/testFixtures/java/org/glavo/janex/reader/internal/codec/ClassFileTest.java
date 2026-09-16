@@ -4,7 +4,6 @@
 package org.glavo.janex.reader.internal.codec;
 
 import java.io.*;
-import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
 import org.glavo.janex.reader.ClassFile;
@@ -25,9 +24,9 @@ public final class ClassFileTest {
                 ReadLimits limits = new ReadLimits(input.readInt(), input.readInt(), input.readInt());
                 byte[] encoded = bytes(input);
                 int length = input.readInt();
-                String[] pool = new String[input.readInt()];
+                byte[][] pool = new byte[input.readInt()][];
                 for (int item = 0; item < pool.length; item++) {
-                    pool[item] = new String(bytes(input), StandardCharsets.UTF_8);
+                    pool[item] = bytes(input);
                 }
                 boolean valid = input.readBoolean();
                 byte[] expected = bytes(input);

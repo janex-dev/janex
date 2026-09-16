@@ -12,8 +12,8 @@ use crate::{
     condition::{Condition, Context, nonempty},
     container::integer_keys,
     content::Content,
+    data_pool::DataPool,
     error::invalid,
-    strings::StringPool,
 };
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -59,9 +59,9 @@ impl DirectoryEntry {
     }
 
     /// Reads one entry and resolves names using the root pool.
-    fn read(decoder: &mut Decoder<'_>, strings: &StringPool) -> Result<Self> {
+    fn read(decoder: &mut Decoder<'_>, strings: &DataPool) -> Result<Self> {
         let tag = decoder.u32()?;
-        let name = strings.read_nonempty(decoder)?;
+        let name = crate::strings::read_nonempty(strings, decoder)?;
         match tag {
             0x00534552 => Ok(Self::File {
                 name,
@@ -70,7 +70,7 @@ impl DirectoryEntry {
             }),
             0x4c4d5953 => Ok(Self::SymbolicLink {
                 name,
-                target: strings.read_nonempty(decoder)?,
+                target: crate::strings::read_nonempty(strings, decoder)?,
                 metadata: cbor::read_sized(decoder)?,
             }),
             0x424d4f54 => Ok(Self::Tombstone { name }),
@@ -79,14 +79,14 @@ impl DirectoryEntry {
     }
 
     /// Writes one entry, interning names into the root pool as needed.
-    fn write(&self, bytes: &mut Vec<u8>, strings: &mut StringPool) -> Result<()> {
+    fn write(&self, bytes: &mut Vec<u8>, strings: &mut DataPool) -> Result<()> {
         let tag: u32 = match self {
             Self::File { .. } => 0x00534552,
             Self::SymbolicLink { .. } => 0x4c4d5953,
             Self::Tombstone { .. } => 0x424d4f54,
         };
         bytes.extend_from_slice(&tag.to_le_bytes());
-        strings.write_nonempty(self.name(), bytes)?;
+        crate::strings::write_nonempty(strings, self.name(), bytes)?;
         match self {
             Self::File {
                 content, metadata, ..
@@ -97,7 +97,7 @@ impl DirectoryEntry {
             Self::SymbolicLink {
                 target, metadata, ..
             } => {
-                strings.write_nonempty(target, bytes)?;
+                crate::strings::write_nonempty(strings, target, bytes)?;
                 cbor::write_sized(bytes, metadata)?;
             }
             Self::Tombstone { .. } => {}
@@ -126,16 +126,16 @@ pub struct Layer {
     pub directories: Vec<Directory>,
 }
 
-/// A layered resource root with its resolved default string pool.
+/// A layered resource root with its resolved default data pool.
 ///
 /// Fields may be edited before encoding. Encoding and merging revalidate paths, metadata,
 /// ordering, and per-layer conflicts. File content is loaded only when requested.
 #[derive(Clone, Debug)]
 pub struct ResourceRoot {
-    /// The blob reference written for the root's shared string pool.
-    pub string_pool: BlobRef,
+    /// The blob reference written for the root's shared data pool.
+    pub data_pool: BlobRef,
     /// Resolved pool used by names and CLASSFILE transforms without an override.
-    pub strings: StringPool,
+    pub data: DataPool,
     /// Text-keyed root metadata, retaining extensions.
     pub metadata: Value,
     /// Layers in application order.
@@ -150,15 +150,15 @@ impl ResourceRoot {
     pub fn decode<R: Read + Seek>(bytes: &[u8], blobs: &mut BlobStore<R>) -> Result<Self> {
         let limits = blobs.reader().limits();
         let mut decoder = Decoder::new(bytes, limits)?;
-        let string_pool = BlobRef::read(&mut decoder)?;
-        let strings = StringPool::decode(&blobs.resolve(string_pool)?, limits)?;
+        let data_pool = BlobRef::read(&mut decoder)?;
+        let strings = DataPool::decode(&blobs.resolve(data_pool)?, limits)?;
         let metadata = cbor::read_sized(&mut decoder)?;
         let mut layers = Vec::new();
         for _ in 0..decoder.count()? {
             let condition = Condition::from_value(cbor::read_sized(&mut decoder)?)?;
             let mut directories = Vec::new();
             for _ in 0..decoder.count()? {
-                let path = strings.get(decoder.vuint()?)?.to_owned();
+                let path = crate::strings::text(&strings, decoder.vuint()?)?.to_owned();
                 let metadata = cbor::read_sized(&mut decoder)?;
                 let count = decoder.count()?;
                 let content = Content::read(&mut decoder)?;
@@ -182,8 +182,8 @@ impl ResourceRoot {
         }
         decoder.finish()?;
         let root = Self {
-            string_pool,
-            strings,
+            data_pool,
+            data: strings,
             metadata,
             layers,
         };
@@ -193,24 +193,24 @@ impl ResourceRoot {
 
     /// Encodes a root using inline directory-entry arrays and interns any missing names.
     ///
-    /// Encode `strings` after this call and store it at `string_pool`. Existing pool
+    /// Encode `data` after this call and store it at `data_pool`. Existing pool
     /// indices remain stable. Failure may leave newly interned strings in the pool.
     pub fn encode(&mut self, limits: Limits) -> Result<Vec<u8>> {
         self.validate(limits)?;
         let mut bytes = Vec::new();
-        self.string_pool.write(&mut bytes)?;
+        self.data_pool.write(&mut bytes)?;
         cbor::write_sized(&mut bytes, &self.metadata)?;
         write_vuint(&mut bytes, self.layers.len() as u64)?;
         for layer in &self.layers {
             cbor::write_sized(&mut bytes, layer.condition.value())?;
             write_vuint(&mut bytes, layer.directories.len() as u64)?;
             for directory in &layer.directories {
-                write_vuint(&mut bytes, self.strings.intern(&directory.path))?;
+                write_vuint(&mut bytes, self.data.intern(&directory.path))?;
                 cbor::write_sized(&mut bytes, &directory.metadata)?;
                 write_vuint(&mut bytes, directory.entries.len() as u64)?;
                 let mut entries = Vec::new();
                 for entry in &directory.entries {
-                    entry.write(&mut entries, &mut self.strings)?;
+                    entry.write(&mut entries, &mut self.data)?;
                     limits.bytes(entries.len() as u64)?;
                 }
                 Content::inline(entries).write(&mut bytes)?;
@@ -255,7 +255,7 @@ impl ResourceRoot {
         self.validate(limits)?;
         let mut tree = ResourceTree {
             nodes: BTreeMap::from([(String::new(), Node::Directory(None))]),
-            strings: &self.strings,
+            data: &self.data,
             limits,
         };
         for layer in &self.layers {
@@ -397,7 +397,7 @@ pub struct ResourceTree<'a> {
     /// Canonical paths, including the empty root path.
     nodes: BTreeMap<String, Node<'a>>,
     /// Default pool for regular-file transforms.
-    strings: &'a StringPool,
+    data: &'a DataPool,
     /// Bounds on merged collections and link expansion.
     limits: Limits,
 }
@@ -484,7 +484,7 @@ impl<'a> ResourceTree<'a> {
         let Node::File { content, metadata } = node else {
             return Err(invalid("resource is not a regular file"));
         };
-        let bytes = content.resolve_file(blobs, self.strings)?;
+        let bytes = content.resolve_file(blobs, self.data)?;
         if let Some(checksum) = metadata.get(0)? {
             Checksum::decode(checksum.as_byte_string()?)?.verify(bytes.as_slice())?;
         }

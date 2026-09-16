@@ -25,8 +25,8 @@ public final class ResourceIndex implements Closeable {
     private final RandomAccessFile snapshot;
     /// Topologically ordered byte sources.
     private final Source[] sources;
-    /// String pools shared between CLASSFILE transforms.
-    private final String[][] pools;
+    /// Data pools shared between CLASSFILE transforms.
+    private final byte[][][] pools;
     /// Classpath roots in lookup order.
     final List<Root> roots;
     /// Required observable module names and optional exact versions.
@@ -61,14 +61,15 @@ public final class ResourceIndex implements Closeable {
             for (int i = 0; i < sources.length; i++) {
                 sources[i] = new Source(input, i);
             }
-            pools = new String[count(input)][];
+            pools = new byte[count(input)][][];
             for (int i = 0; i < pools.length; i++) {
-                pools[i] = new String[count(input)];
+                pools[i] = new byte[count(input)][];
                 for (int j = 0; j < pools[i].length; j++) {
-                    pools[i][j] = text(input);
+                    pools[i][j] = new byte[size(input)];
+                    input.readFully(pools[i][j]);
                 }
-                if (pools[i].length == 0 || !pools[i][0].isEmpty()) {
-                    throw new IOException("Invalid string pool");
+                if (pools[i].length == 0 || pools[i][0].length != 0) {
+                    throw new IOException("Invalid data pool");
                 }
             }
             Map<String, String> required = new LinkedHashMap<String, String>();

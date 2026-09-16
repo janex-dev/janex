@@ -5,6 +5,7 @@ package org.glavo.janex.reader;
 
 import java.io.*;
 import java.math.BigInteger;
+import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.util.*;
 
@@ -45,10 +46,10 @@ public final class JanexReader implements Closeable {
     private final List<Application> applications = new ArrayList<Application>();
     /// Sources in dependency order, shared by all selected roots.
     private final List<Source> sources = new ArrayList<Source>();
-    /// Decoded string pools in selection order.
-    private final List<String[]> strings = new ArrayList<String[]>();
+    /// Decoded data pools in selection order.
+    private final List<byte[][]> dataPools = new ArrayList<byte[][]>();
     /// Interned pool references.
-    private final Map<List<Long>, Integer> stringIds = new HashMap<List<Long>, Integer>();
+    private final Map<List<Long>, Integer> dataPoolIds = new HashMap<List<Long>, Integer>();
     /// Aggregate logical resource size selected for this launch.
     private long logicalBytes;
     /// Whether launch selection has started, including a failed attempt.
@@ -523,33 +524,33 @@ public final class JanexReader implements Closeable {
         return result;
     }
 
-    /// Resolves and interns a complete string pool.
-    private int stringPool(long pool, long index) throws IOException {
+    /// Resolves and interns a complete data pool.
+    private int dataPool(long pool, long index) throws IOException {
         List<Long> key = Arrays.asList(pool, index);
-        Integer previous = stringIds.get(key);
+        Integer previous = dataPoolIds.get(key);
         if (previous != null) {
             return previous;
         }
         Input input = input(bytes(reference(pool, index)));
-        String[] values = new String[limits.elements(input.uint())];
-        Set<String> unique = new HashSet<String>();
+        byte[][] values = new byte[limits.elements(input.uint())][];
+        Set<ByteBuffer> unique = new HashSet<ByteBuffer>();
         for (int i = 0; i < values.length; i++) {
-            values[i] = input.string();
-            require(unique.add(values[i]), "Duplicate string-pool entry");
+            values[i] = input.sized();
+            require(unique.add(ByteBuffer.wrap(values[i])), "Duplicate data-pool entry");
         }
         input.end();
-        require(values.length != 0 && values[0].isEmpty(), "String pool must start with empty string");
-        int id = strings.size();
-        strings.add(values);
-        stringIds.put(key, id);
+        require(values.length != 0 && values[0].length == 0, "Data pool must start with empty bytes");
+        int id = dataPools.size();
+        dataPools.add(values);
+        dataPoolIds.put(key, id);
         return id;
     }
 
-    /// Looks up a root string-pool entry.
+    /// Decodes a root data-pool entry as UTF-8 for a resource path or name.
     private String string(int pool, long index) throws IOException {
-        String[] values = strings.get(pool);
-        require(index >= 0 && index < values.length, "Invalid string-pool index");
-        return values[(int) index];
+        byte[][] values = dataPools.get(pool);
+        require(index >= 0 && index < values.length, "Invalid data-pool index");
+        return Input.utf8(values[(int) index]);
     }
 
     /// Reads a nonempty indexed, inline, or concatenated string.
@@ -580,7 +581,7 @@ public final class JanexReader implements Closeable {
     private static final class Node {
         /// Source ID, or -1 for a directory, -2 for a link, and -3 for a tombstone.
         int source = -1;
-        /// Reversed transform output-size and string-pool pairs.
+        /// Reversed transform output-size and data-pool pairs.
         int[][] transforms = new int[0][2];
         /// Relative symbolic-link target, when present.
         String target;
@@ -636,7 +637,7 @@ public final class JanexReader implements Closeable {
             for (int i = 0; i < node.transforms.length; i++) {
                 long[] reference = node.transformPools[i];
                 if (reference != null) {
-                    node.transforms[i][1] = stringPool(reference[0], reference[1]);
+                    node.transforms[i][1] = dataPool(reference[0], reference[1]);
                 }
             }
             node.pending = false;
@@ -704,7 +705,7 @@ public final class JanexReader implements Closeable {
     /// Reads and merges all layers, validating unmatched layers as well.
     private Root root(Object reference, boolean module, boolean agent) throws IOException {
         Input input = input(bytes(reference(reference)));
-        int pool = stringPool(input.uint(), input.uint());
+        int pool = dataPool(input.uint(), input.uint());
         Map<Object, Object> metadata = input.map();
         for (Object key : metadata.keySet()) {
             Conditions.nonempty(key);
@@ -1129,7 +1130,7 @@ public final class JanexReader implements Closeable {
         return launch;
     }
 
-    /// Describes selected roots with compact source and string-pool references.
+    /// Describes selected roots with compact source and data-pool references.
     private ResourcePlan resources(List<Root> roots, Map<String, String> requirements) throws IOException {
         SortedSet<Integer> usedSources = new TreeSet<Integer>();
         SortedSet<Integer> usedPools = new TreeSet<Integer>();
@@ -1167,9 +1168,9 @@ public final class JanexReader implements Closeable {
             selectedSources.add(new ResourcePlan.Source(source.inline, source.encoding == null ? -1 : source.offset,
                     source.inline == null && source.encoding != null ? limits.bytes(source.encoding.stored) : 0, filters, extents));
         }
-        String[][] selectedPools = new String[usedPools.size()][];
+        byte[][][] selectedPools = new byte[usedPools.size()][][];
         for (int id : usedPools) {
-            selectedPools[poolIds.get(id)] = strings.get(id);
+            selectedPools[poolIds.get(id)] = dataPools.get(id);
         }
         List<ResourcePlan.Root> selectedRoots = new ArrayList<ResourcePlan.Root>();
         for (Root root : roots) {

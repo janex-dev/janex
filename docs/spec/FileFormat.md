@@ -767,7 +767,7 @@ struct ContentTransform {
 
 #[repr(u8)]
 enum ContentTransformId {
-    /// A Java class-file transform using a shared `StringPool`.
+    /// A Java class-file transform using a shared `DataPool`.
     CLASSFILE = 1,
 }
 ```
@@ -787,22 +787,22 @@ transform array means the source already encodes `T`. Unsupported methods are in
 
 ### Java Class File Transform
 
-The class-file transform moves selected constant-pool strings into a shared `StringPool`.
+The class-file transform moves selected constant-pool bytes into a shared `DataPool`.
 
 ```cddl
 ClassFileTransformPropertiesObject = {
-    ? 0: BlobRefObject,                         ; string_pool
+    ? 0: BlobRefObject,                         ; data_pool
     * uint => any,
 }
 ```
 
-`string_pool` selects the pool when present; otherwise, the containing `ResourceRoot.string_pool`
+`data_pool` selects the pool when present; otherwise, the containing `ResourceRoot.data_pool`
 is used. An invalid explicit pool is an error, with no fallback.
 
 The input must be a valid Java class file, and reversing the transform must reproduce its exact
 bytes. The transform changes only the magic bytes and selected `CONSTANT_Utf8` entries; constant-pool
 counts, slots, reference indices, and all other bytes remain unchanged. Original class-file fields
-retain their big-endian encoding; external string indices use `StringPoolIndex` (`vuint`).
+retain their big-endian encoding; external data indices use `DataPoolIndex` (`vuint`).
 
 The transformed magic bytes are `CA FE CA 70`; decoding restores `CA FE BA BE`.
 The following entries may replace `CONSTANT_Utf8` entries:
@@ -811,29 +811,27 @@ The following entries may replace `CONSTANT_Utf8` entries:
 struct CONSTANT_External_String {
     tag: u8, // 0xFF
 
-    /// The index of the complete string in the selected string pool.
-    string_pool_index: StringPoolIndex,
+    /// The index of the complete Modified UTF-8 bytes in the selected data pool.
+    data_pool_index: DataPoolIndex,
 }
 
 struct CONSTANT_External_String_Class {
     tag: u8, // 0xFE
 
     /// The index of the slash-separated package name, or 0 for the unnamed package.
-    package_name_index: StringPoolIndex,
+    package_name_index: DataPoolIndex,
 
     /// The index of the nonempty class name without the package prefix.
-    class_name_index: StringPoolIndex,
+    class_name_index: DataPoolIndex,
 }
 ```
 
-`CONSTANT_External_String` restores the selected string. `CONSTANT_External_String_Class` restores
-`package + "/" + class` when the package is nonempty, or just `class` otherwise. Array class names
+`CONSTANT_External_String` copies the selected bytes. `CONSTANT_External_String_Class` concatenates
+`package + "/" + class` as bytes when the package is nonempty, or just `class` otherwise. Array class names
 may use `CONSTANT_External_String` or remain unchanged.
 
 Both entries decode to `CONSTANT_Utf8` (tag `0x01`), followed by a big-endian `u16` byte length and
-the restored string encoded as Modified UTF-8. The encoded string must fit in 65,535 bytes.
-Strings that cannot round-trip losslessly through the UTF-8 pool, such as those containing unpaired
-surrogates, must retain their original `CONSTANT_Utf8` entries.
+the restored bytes without transcoding. The result must be valid Modified UTF-8 and fit in 65,535 bytes.
 
 ## Resource Roots
 
@@ -846,8 +844,8 @@ resolved byte. Consumers may share a root; different contexts may produce differ
 
 ```rust
 struct ResourceRoot {
-    /// The path string pool and default pool for `CLASSFILE` transforms.
-    string_pool: BlobRef,
+    /// The path data pool and default pool for `CLASSFILE` transforms.
+    data_pool: BlobRef,
 
     /// One deterministic CBOR `ResourceRootMetadataObject`.
     metadata: Sized<CborMap>, // ResourceRootMetadataObject
@@ -869,37 +867,38 @@ struct ResourceLayer {
 ResourceRootMetadataObject = { * NonemptyText => any }
 ```
 
-The metadata map may be empty. Readers must resolve `string_pool` before using references to it.
-Multiple resource roots may name the same string-pool blob.
+The metadata map may be empty. Readers must resolve `data_pool` before using references to it.
+Multiple resource roots may name the same data-pool blob.
 
 The optional text attribute `janex.java.jar_name` preserves the JAR filename used when materializing
 this root as a Java path entry, including filename-derived automatic module names. It must be a
 single filename ending in `.jar`, without `/`, `\`, or NUL. The default is `resources.jar`.
 Consumers materialize different roots in separate directories to avoid filename collisions.
 
-### String Pools
+### Data Pools
 
-A string-pool blob must resolve to exactly one `StringPoolData` and consume every resolved byte.
+A data-pool blob must resolve to exactly one `DataPoolData` and consume every resolved byte.
 
 ```rust
-/// A zero-based index into `StringPoolData.strings`.
-type StringPoolIndex = vuint;
+/// A zero-based index into `DataPoolData.entries`.
+type DataPoolIndex = vuint;
 
-struct StringPoolData {
-    /// Distinct interned strings in pool-index order.
-    strings: Vec<String>,
+struct DataPoolData {
+    /// Distinct byte sequences in pool-index order.
+    entries: Vec<Sized<[u8]>>,
 }
 ```
 
-The pool contains unique UTF-8 strings, with the empty string at index `0`.
-A `StringPoolIndex` must select an existing element.
+The pool contains unique byte sequences, with the empty sequence at index `0`.
+A `DataPoolIndex` must select an existing element. Referencing fields define the interpretation
+and validity constraints of the selected bytes.
 
 ### `ResourceDirectory`
 
 ```rust
 struct ResourceDirectory {
-    /// The directory path relative to the resource root, as an index into the root's string pool.
-    path: StringPoolIndex,
+    /// The directory path relative to the resource root, as an index into the root's data pool.
+    path: DataPoolIndex,
 
     /// One deterministic CBOR resource-metadata map.
     metadata: Sized<CborMap>, // ResourceMetadataObject
@@ -986,12 +985,12 @@ Entry names and symbolic-link targets use `NonemptyStringValue`:
 
 | Encoding | Meaning |
 | --- | --- |
-| A positive `vuint` | An existing index in the root's string pool; no additional bytes. |
+| A positive `vuint` | An existing index in the root's data pool; no additional bytes. |
 | `0`, then a nonempty `String` | An inline value. |
-| `0`, then an empty `String`, then `Vec<StringPoolIndex>` | A concatenation of root string-pool entries. |
+| `0`, then an empty `String`, then `Vec<DataPoolIndex>` | A concatenation of root data-pool entries. |
 
-The concatenation index array must contain at least two entries. Their strings are concatenated in
-array order without separators, and the result must be nonempty.
+Referenced entries must be valid UTF-8. The concatenation index array must contain at least two
+entries. Their bytes are concatenated in array order without separators, and the result must be nonempty.
 The empty `String` is a marker, not the resolved value.
 
 For example, `05` references pool entry `5`; `00 03 66 6F 6F` encodes inline `"foo"`.

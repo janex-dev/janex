@@ -17,8 +17,8 @@ use janex_format::{
     classfile,
     container::{APPLICATION, BLOB_POOL, Writer},
     content::{Content, Source, Transform},
+    data_pool::DataPool,
     resource::{Directory, DirectoryEntry, Layer, ResourceRoot},
-    strings::StringPool,
     version::JavaRange,
 };
 use janex_signature::cms;
@@ -469,7 +469,7 @@ fn build_pool(
     transform: bool,
 ) -> Result<(janex_format::blob::BuiltPool, BlobRef, usize)> {
     let mut pool = PoolBuilder::new();
-    let mut strings = StringPool::new();
+    let mut strings = DataPool::new();
     let mut shared = BTreeMap::<Vec<u8>, Vec<SharedFile<'_>>>::new();
     let mut layers = Vec::new();
     let mut transformed = 0;
@@ -561,13 +561,13 @@ fn build_pool(
             directories,
         });
     }
-    let string_pool = BlobRef {
+    let data_pool = BlobRef {
         pool: pool_id,
         index: pool.len() as u64,
     };
     let mut root = ResourceRoot {
-        string_pool,
-        strings,
+        data_pool,
+        data: strings,
         layers,
         metadata: Value::map([(
             Value::text("janex.java.jar_name"),
@@ -575,7 +575,7 @@ fn build_pool(
         )])?,
     };
     let root_bytes = root.encode(options.import.limits)?;
-    let strings = root.strings.encode()?;
+    let strings = root.data.encode()?;
     options.import.limits.bytes(strings.len() as u64)?;
     pool.push(&strings, options.compression_level)?;
     let root = BlobRef {

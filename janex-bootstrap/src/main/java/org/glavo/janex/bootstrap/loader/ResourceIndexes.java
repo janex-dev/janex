@@ -56,12 +56,14 @@ public final class ResourceIndexes {
                 }
             }
         }
-        String[][] pools = plan.pools();
+        byte[][][] pools = plan.pools();
         output.writeInt(pools.length);
-        for (String[] pool : pools) {
+        for (byte[][] pool : pools) {
             output.writeInt(pool.length);
-            for (String value : pool) {
-                string(output, value, limits);
+            for (byte[] value : pool) {
+                limits.bytes(value.length);
+                output.writeInt(value.length);
+                output.write(value);
             }
         }
         output.writeInt(plan.requirements().size());

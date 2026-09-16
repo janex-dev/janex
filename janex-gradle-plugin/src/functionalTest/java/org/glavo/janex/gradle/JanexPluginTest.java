@@ -170,7 +170,7 @@ public final class JanexPluginTest {
                     "Interoperability fixture did not select CLASSFILE transforms");
             require(plan.pools().length == 2
                     && plan.roots().get(1).files().get("dependency/Shared0.class").transforms().length == 1,
-                    "Interoperability fixture did not retain independent root string pools");
+                    "Interoperability fixture did not retain independent root data pools");
         }
         require(run(List.of(executable.toString(), "run", "--allow-unsigned", "--java", javaExecutable(), output.toString()))
                 .contains("hello|resource|configured|4"), "Rust could not launch the Java-written package");

@@ -126,7 +126,7 @@ portable Java decoder. Each encoding pass reuses a single-threaded context for i
 pages and closes it when finished. Reproducible builds should pin the plugin and compression-library versions.
 
 CLASSFILE transforms default to enabled. They share constant-pool strings and class-name components
-with resource names within each ResourceRoot. Every root uses its own string pool and retains
+with resource names within each ResourceRoot. Every root uses its own data pool and retains
 ordinary class bytes when the complete transformed representation would not shrink.
 Set `transformClassfiles = false` to retain ordinary
 class bytes. Resource contents remain byte-for-byte reproducible after decoding.

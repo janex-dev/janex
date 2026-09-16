@@ -258,6 +258,8 @@ public final class WriterTest {
                         public static final String TEXT = "A shared string constant repeated across class files";
                         /// NUL, an unpaired surrogate, and a supplementary character.
                         public static final String EDGE = "\\000\\uD800\\uD83D\\uDE80";
+                        /// Constants whose UTF-8 and Modified UTF-8 bytes differ.
+                        public static final String NUL = "before\\000after", SUPPLEMENT = "before\\uD83D\\uDE80after";
                         /// Creates the fixture.
                         public Example%d() { }
                         /// Preserves a method descriptor containing an array class reference.
@@ -269,20 +271,24 @@ public final class WriterTest {
         require(javax.tools.ToolProvider.getSystemJavaCompiler().run(null, null, null,
                 arguments.toArray(String[]::new)) == 0, "Class fixture compilation failed");
         byte[] original = Files.readAllBytes(classes.resolve("shared/Example0.class"));
-        StringPool strings = new StringPool(ReadLimits.DEFAULT);
-        for (int i = 0; i < 130; i++) strings.intern("preexisting-" + i);
+        DataPool strings = new DataPool(ReadLimits.DEFAULT);
+        for (int i = 0; i < 130; i++) strings.intern(Encoding.utf8("preexisting-" + i));
         byte[] transformed = ClassFileEncoder.transform(original, strings, ReadLimits.DEFAULT);
         require(transformed != null, "Class transform was not exercised");
         Input encodedPool = new Input(strings.encode());
-        String[] values = new String[Math.toIntExact(encodedPool.uint())];
-        for (int i = 0; i < values.length; i++) values[i] = new String(encodedPool.sized(), StandardCharsets.UTF_8);
+        byte[][] values = new byte[Math.toIntExact(encodedPool.uint())][];
+        for (int i = 0; i < values.length; i++) values[i] = encodedPool.sized();
+        require(Arrays.stream(values).noneMatch(value -> Arrays.equals(value, "before\0after".getBytes(StandardCharsets.UTF_8))
+                        || Arrays.equals(value, "before\uD83D\uDE80after".getBytes(StandardCharsets.UTF_8))),
+                "Writer externalized constants with different UTF-8 and Modified UTF-8 bytes");
         require(Arrays.equals(original, ClassFile.restore(transformed, values, original.length)), "CLASSFILE bytes changed");
-        require(Arrays.asList(values).contains("shared") && Arrays.asList(values).contains("Example0"),
+        require(Arrays.stream(values).anyMatch(value -> Arrays.equals(value, "shared".getBytes(StandardCharsets.UTF_8)))
+                        && Arrays.stream(values).anyMatch(value -> Arrays.equals(value, "Example0".getBytes(StandardCharsets.UTF_8))),
                 "Class name was not split into shared components");
         int checkpoint = strings.size();
         require(ClassFileEncoder.transform(new byte[]{1, 2, 3}, strings, ReadLimits.DEFAULT) == null,
                 "Malformed class was transformed");
-        require(strings.size() == checkpoint, "Rejected class polluted the string pool");
+        require(strings.size() == checkpoint, "Rejected class polluted the data pool");
         Files.write(classes.resolve("broken.class"), new byte[]{1, 2, 3});
         for (boolean compression : new boolean[]{true, false}) {
             long rawSize = 0;
@@ -381,17 +387,18 @@ public final class WriterTest {
             JanexWriter.write(options);
             try (JanexReader reader = new JanexReader(options.output)) {
                 ResourcePlan plan = reader.launch("main").resources;
-                require(plan.roots().size() == 3 && plan.pools().length == 3, "Roots did not retain independent string pools");
+                require(plan.roots().size() == 3 && plan.pools().length == 3, "Roots did not retain independent data pools");
                 Set<Integer> poolIds = new HashSet<>();
                 for (int part = 0; part < jars.size(); part++) {
                     String name = jars.get(part).getFileName().toString();
                     var selected = plan.roots().stream().filter(value -> value.name().equals(name)).findFirst().orElseThrow();
                     int poolId = selected.files().get("shared/Example" + part * 20 + ".class").transforms()[0][1];
-                    require(poolIds.add(poolId), "Distinct roots reused a string pool");
-                    String[] strings = plan.pools()[poolId];
-                    require(strings[0].isEmpty() && new HashSet<>(Arrays.asList(strings)).size() == strings.length,
-                            "Root pool contains duplicate strings or a nonempty index zero");
-                    require(Arrays.stream(strings).filter("A shared string constant repeated across class files"::equals).count() == 1,
+                    require(poolIds.add(poolId), "Distinct roots reused a data pool");
+                    byte[][] strings = plan.pools()[poolId];
+                    require(strings[0].length == 0 && Arrays.stream(strings).map(java.nio.ByteBuffer::wrap).distinct().count() == strings.length,
+                            "Root pool contains duplicate entries or a nonempty index zero");
+                    byte[] shared = "A shared string constant repeated across class files".getBytes(StandardCharsets.UTF_8);
+                    require(Arrays.stream(strings).filter(value -> Arrays.equals(shared, value)).count() == 1,
                             "Class constant was not interned once within its root");
                     require(selected.module() == (part == 2), "Root pooling changed module-path membership");
                     require(new String(content(plan, selected, "root.txt"), StandardCharsets.UTF_8).equals("root-" + part),
@@ -411,14 +418,14 @@ public final class WriterTest {
             options = rootOptions(jars, root.resolve("root-pool-copy-" + compression + ".janex"), compression);
             JanexWriter.write(options);
             require(Arrays.equals(Files.readAllBytes(root.resolve("root-pool-" + compression + ".janex")), Files.readAllBytes(options.output)),
-                    "Root string pool output is not reproducible");
+                    "Root data pool output is not reproducible");
             options = rootOptions(jars, root.resolve("root-pool-no-transform-" + compression + ".janex"), compression);
             options.transformClassfiles = false;
             JanexWriter.write(options);
             try (JanexReader reader = new JanexReader(options.output)) {
                 for (var selected : reader.launch("main").resources.roots()) {
                     require(selected.files().values().stream().allMatch(file -> file.transforms().length == 0),
-                            "Root string pooling ignored disabled CLASSFILE transforms");
+                            "Root data pooling ignored disabled CLASSFILE transforms");
                 }
             }
         }
@@ -435,7 +442,7 @@ public final class WriterTest {
         return options;
     }
 
-    /// Checks that collection limits apply independently to each resource root string pool.
+    /// Checks that collection limits apply independently to each resource root data pool.
     private static void rootPoolLimits(Path root) throws Exception {
         Path first = Files.createDirectory(root.resolve("bounded-first"));
         Path second = Files.createDirectory(root.resolve("bounded-second"));

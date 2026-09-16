@@ -10,8 +10,8 @@ use crate::{
     cbor::{self, Value},
     classfile,
     container::integer_keys,
+    data_pool::DataPool,
     error::invalid,
-    strings::StringPool,
 };
 use std::io::{Read, Seek};
 
@@ -36,7 +36,7 @@ pub struct Transform {
 }
 
 impl Transform {
-    /// Validates the supported transform and any explicit string-pool reference.
+    /// Validates the supported transform and any explicit data-pool reference.
     fn validate(&self) -> Result<()> {
         integer_keys(&self.properties)?;
         if self.method != 1 {
@@ -138,7 +138,7 @@ impl Content {
     pub fn resolve_file<R: Read + Seek>(
         &self,
         blobs: &mut BlobStore<R>,
-        default_pool: &StringPool,
+        default_pool: &DataPool,
     ) -> Result<Vec<u8>> {
         let limits = blobs.reader().limits();
         let mut bytes = self.resolve_source(blobs)?;
@@ -148,7 +148,7 @@ impl Content {
             let explicit;
             let pool = if let Some(reference) = transform.properties.get(0)? {
                 explicit =
-                    StringPool::decode(&blobs.resolve(BlobRef::from_value(&reference)?)?, limits)?;
+                    DataPool::decode(&blobs.resolve(BlobRef::from_value(&reference)?)?, limits)?;
                 &explicit
             } else {
                 default_pool

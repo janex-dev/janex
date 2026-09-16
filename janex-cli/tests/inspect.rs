@@ -11,8 +11,8 @@ use janex_format::{
     condition::Condition,
     container::{APPLICATION, BLOB_POOL, Reader, Writer},
     content::Content,
+    data_pool::DataPool,
     resource::{Directory, DirectoryEntry, Layer, ResourceRoot},
-    strings::StringPool,
 };
 use serde_json::Value as Json;
 use std::{
@@ -38,11 +38,11 @@ fn map(fields: impl IntoIterator<Item = (u64, Value)>) -> Value {
 /// Creates a package with conditional layers, extents, unknown metadata, and dormant roots.
 fn fixture(signed: bool, missing_root: bool) -> Vec<u8> {
     let mut root = ResourceRoot {
-        string_pool: BlobRef {
+        data_pool: BlobRef {
             pool: POOL,
             index: 0,
         },
-        strings: StringPool::new(),
+        data: DataPool::new(),
         metadata: Value::map([(
             Value::text("janex.java.jar_name"),
             Value::text("sample.jar"),
@@ -84,9 +84,10 @@ fn fixture(signed: bool, missing_root: bool) -> Vec<u8> {
             },
         ],
     };
+    root.data.intern(b"\xff\xc0\x80");
     let encoded = root.encode(Limits::default()).unwrap();
     let mut pool = PoolBuilder::new();
-    pool.push(&root.strings.encode().unwrap(), 3).unwrap();
+    pool.push(&root.data.encode().unwrap(), 3).unwrap();
     pool.push(&encoded, 3).unwrap();
     pool.push(&vec![b'x'; 4096], 3).unwrap();
     pool.push_extents(vec![Extent {
@@ -195,7 +196,7 @@ fn reports_unmerged_layers_exact_ids_ranges_and_all_blobs() {
     fs::write(&path, &bytes).unwrap();
     let report = json(inspect(
         &path,
-        &["--sections", "--blobs", "--strings", "--json"],
+        &["--sections", "--blobs", "--data-pools", "--json"],
     ));
     assert_eq!(report["schema_version"], 1);
     assert_eq!(report["external_prefix_size"], "6");
@@ -243,10 +244,11 @@ fn reports_unmerged_layers_exact_ids_ranges_and_all_blobs() {
         roots[0]["layers"][1]["directories"][0]["entries"][1]["kind"],
         "tombstone"
     );
-    assert_eq!(report["string_pools"][0]["strings"][0], "");
+    assert_eq!(report["data_pools"][0]["entries"][0]["bytes_hex"], "");
+    assert_eq!(report["data_pools"][0]["entries"][1]["bytes_hex"], "ffc080");
     assert!(report.to_string().contains(&u64::MAX.to_string()));
     assert!(report.to_string().contains("cbor_hex"));
-    let output = inspect(&path, &["--sections", "--blobs", "--strings"]);
+    let output = inspect(&path, &["--sections", "--blobs", "--data-pools"]);
     assert!(output.status.success());
     let text = String::from_utf8(output.stdout).unwrap();
     for expected in [
@@ -254,7 +256,7 @@ fn reports_unmerged_layers_exact_ids_ranges_and_all_blobs() {
         "Pool ",
         "Resource root ",
         "Layer 1",
-        "String pool ",
+        "Data pool ",
         "signature: not_present",
     ] {
         assert!(text.contains(expected), "{expected}");

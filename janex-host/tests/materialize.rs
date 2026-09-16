@@ -10,8 +10,8 @@ use janex_format::{
     condition::{Condition, Context},
     container::{Reader, Writer},
     content::Content,
+    data_pool::DataPool,
     resource::{Directory, DirectoryEntry, Layer, ResourceRoot},
-    strings::StringPool,
 };
 use janex_host::materialize::materialize;
 use janex_java::manifest::Manifest;
@@ -55,8 +55,8 @@ fn root(directories: Vec<(&str, Vec<DirectoryEntry>)>) -> ResourceRoot {
         .collect();
     directories.sort_by(|a, b| a.path.cmp(&b.path));
     ResourceRoot {
-        string_pool: BlobRef { pool: 1, index: 0 },
-        strings: StringPool::new(),
+        data_pool: BlobRef { pool: 1, index: 0 },
+        data: DataPool::new(),
         metadata: Value::map([(
             Value::text("janex.java.jar_name"),
             Value::text("original-name.jar"),

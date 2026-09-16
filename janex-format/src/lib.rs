@@ -39,6 +39,7 @@ pub mod classfile;
 pub mod condition;
 pub mod container;
 pub mod content;
+pub mod data_pool;
 mod error;
 pub mod localized;
 pub mod purl;

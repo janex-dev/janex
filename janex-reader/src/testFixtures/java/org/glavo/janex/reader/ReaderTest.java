@@ -85,28 +85,28 @@ public final class ReaderTest {
         Map<String, ResourcePlan.File> files = new java.util.LinkedHashMap<String, ResourcePlan.File>();
         files.put("value", file);
         ResourcePlan.Root root = new ResourcePlan.Root("example.jar", false, files);
-        String[][] pools = {{"", "value"}};
+        byte[][][] pools = {{new byte[0], new byte[]{42}}};
         ResourcePlan plan = new ResourcePlan(java.nio.file.Paths.get("snapshot.janex"), ReadLimits.DEFAULT,
                 Arrays.asList(inline, extent), pools, java.util.Collections.emptyMap(), Arrays.asList(root));
         bytes[0] = 0;
         extents[0][2] = 0;
         transforms[0][0] = 0;
         times[0] = null;
-        pools[0][1] = "changed";
+        pools[0][1][0] = 0;
         files.clear();
         check(plan.sources().get(0).inline()[0] == 42);
         check(plan.sources().get(1).extents()[0][2] == 1);
         check(plan.roots().get(0).files().get("value").transforms()[0][0] == 10);
         check(file.times()[0].equals(BigInteger.ONE.shiftLeft(100)) && file.permissions() == 0);
-        check(plan.pools()[0][1].equals("value"));
+        check(plan.pools()[0][1][0] == 42);
         inline.inline()[0] = 0;
         extent.extents()[0][2] = 0;
         file.transforms()[0][0] = 0;
         file.times()[0] = null;
-        plan.pools()[0][1] = "changed";
+        plan.pools()[0][1][0] = 0;
         check(inline.inline()[0] == 42 && extent.extents()[0][2] == 1);
         check(file.transforms()[0][0] == 10 && file.times()[0] != null);
-        check(plan.pools()[0][1].equals("value"));
+        check(plan.pools()[0][1][0] == 42);
         try {
             plan.roots().clear();
             throw new AssertionError("Mutable resource roots");

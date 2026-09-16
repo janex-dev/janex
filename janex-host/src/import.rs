@@ -11,8 +11,8 @@ use janex_format::{
     cbor::Value,
     condition::Condition,
     content::Content,
+    data_pool::DataPool,
     resource::{Directory, DirectoryEntry, Layer, ResourceRoot},
-    strings::StringPool,
 };
 use janex_java::manifest::Manifest;
 use std::{
@@ -53,11 +53,11 @@ pub struct ImportedRoot {
 }
 
 impl ImportedRoot {
-    /// Creates a resource root whose string pool will be stored at the supplied reference.
-    pub fn into_resource_root(self, string_pool: BlobRef) -> Result<ResourceRoot> {
+    /// Creates a resource root whose data pool will be stored at the supplied reference.
+    pub fn into_resource_root(self, data_pool: BlobRef) -> Result<ResourceRoot> {
         Ok(ResourceRoot {
-            string_pool,
-            strings: StringPool::new(),
+            data_pool,
+            data: DataPool::new(),
             metadata: Value::map([(
                 Value::text("janex.java.jar_name"),
                 Value::text(&self.jar_name),
@@ -340,8 +340,8 @@ fn build_layers(
     }
     // The format validator also catches implicit-parent conflicts across matching version layers.
     let resource = ResourceRoot {
-        string_pool: BlobRef { pool: 0, index: 0 },
-        strings: StringPool::new(),
+        data_pool: BlobRef { pool: 0, index: 0 },
+        data: DataPool::new(),
         metadata: Value::empty_map(),
         layers,
     };

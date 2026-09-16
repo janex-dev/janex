@@ -35,13 +35,9 @@ public final class CodecTest {
                 boolean valid = input.readBoolean();
                 byte[] encoded = bytes(input);
                 byte[] expected = bytes(input);
-                String[] pool = new String[input.readInt()];
+                byte[][] pool = new byte[input.readInt()][];
                 for (int j = 0; j < pool.length; j++) {
-                    char[] text = new char[input.readInt()];
-                    for (int k = 0; k < text.length; k++) {
-                        text[k] = input.readChar();
-                    }
-                    pool[j] = new String(text);
+                    pool[j] = bytes(input);
                 }
                 byte[] actual;
                 try {

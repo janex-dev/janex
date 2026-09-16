@@ -61,7 +61,7 @@ public final class PackOptions {
     /// Ignored when compression is disabled.
     public int compressionLevel = 3;
     /// Whether to try shared CLASSFILE strings; defaults to true.
-    /// Each resource root uses its own string pool. A root retains ordinary class bytes when
+    /// Each resource root uses its own data pool. A root retains ordinary class bytes when
     /// the complete transformed representation, including its encoding overhead, would not shrink.
     public boolean transformClassfiles = true;
     /// Whether to remove unreachable classes from embedded classpath dependencies; defaults to false.

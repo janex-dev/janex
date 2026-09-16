@@ -4,9 +4,7 @@
 package org.glavo.janex.writer;
 
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
-import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.charset.CharacterCodingException;
 import java.util.Arrays;
@@ -21,9 +19,9 @@ final class ClassFileEncoder {
     private ClassFileEncoder() { }
 
     /// Returns transformed bytes or null for malformed or unprofitable class files.
-    /// Retains original entries for strings that cannot round-trip through the UTF-8 pool.
+    /// Retains original entries whose UTF-8 and Modified UTF-8 bytes differ.
     /// Rejected transformations leave the pool unchanged; allocation-limit failures propagate.
-    static byte[] transform(byte[] bytes, StringPool strings, ReadLimits limits) throws IOException {
+    static byte[] transform(byte[] bytes, DataPool strings, ReadLimits limits) throws IOException {
         try {
             ClassFile.validate(bytes, limits);
         } catch (Input.Invalid invalid) {
@@ -66,19 +64,17 @@ final class ClassFileEncoder {
                     String text = utf.readUTF();
                     int before = strings.size();
                     try {
-                        Encoding.utf8(text);
-                        ByteArrayOutputStream modified = new ByteArrayOutputStream();
-                        new DataOutputStream(modified).writeUTF(text);
-                        if (Arrays.equals(modified.toByteArray(), Arrays.copyOfRange(bytes, starts[i] + 1, ends[i]))) {
+                        byte[] raw = Encoding.utf8(text);
+                        if (Arrays.equals(raw, Arrays.copyOfRange(bytes, starts[i] + 3, ends[i]))) {
                             Encoding entry = new Encoding();
                             if (classes[i] && !text.startsWith("[") && !text.isEmpty() && !text.endsWith("/")) {
                                 int slash = text.lastIndexOf('/');
                                 entry.write(0xfe);
-                                entry.uint(strings.intern(slash < 0 ? "" : text.substring(0, slash)));
-                                entry.uint(strings.intern(text.substring(slash + 1)));
+                                entry.uint(strings.intern(Encoding.utf8(slash < 0 ? "" : text.substring(0, slash))));
+                                entry.uint(strings.intern(Encoding.utf8(text.substring(slash + 1))));
                             } else {
                                 entry.write(0xff);
-                                entry.uint(strings.intern(text));
+                                entry.uint(strings.intern(raw));
                             }
                             if (entry.size() < ends[i] - starts[i]) replacement = entry.toByteArray();
                         }
