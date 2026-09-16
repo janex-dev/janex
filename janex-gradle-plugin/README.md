@@ -6,7 +6,7 @@ and makes `assemble` depend on the package. Packages include a `java -jar` launc
 publisher signing is optional.
 
 The published plugin JAR bundles `janex-reader` and `janex-writer`, including the writer's embedded
-bootstrap JAR. Aircompressor and Bouncy Castle remain ordinary Maven dependencies. The source modules
+bootstrap JAR. Aircompressor, Bouncy Castle, and ASM remain ordinary Maven dependencies. The source modules
 remain separate; using the plugin does not require separate Janex library publications.
 
 The plugin is built with JDK 25, targets Java 17, and is tested with the repository's Gradle 9.7.1
@@ -84,6 +84,49 @@ CLASSFILE transforms default to enabled. They share constant-pool strings and cl
 with resource names; each root uses the smaller complete encoded pool. Set `transformClassfiles = false`
 to retain ordinary class bytes. Resource contents remain byte-for-byte reproducible after decoding.
 
+### Dependency minimization and resource filtering
+
+Minimization is disabled by default. Enable it to remove dependency classes that are not reachable
+from the application's classes. Explicit keep rules retain reflection or native entry points **and
+the classes they reference**, without retaining their entire JAR:
+
+```kotlin
+janex {
+    minimize {
+        keep("example.spi.ReflectiveProvider")
+        keep("example.plugins.**")
+        // keepJar("dynamic-library-*.jar")
+    }
+    resources {
+        exclude("META-INF/maven/**")
+        excludeFrom("jna-*.jar", "com/sun/jna/aix-*/**")
+    }
+}
+```
+
+`minimize()` enables analysis without additional keep rules. All primary-input and module-path
+classes, package annotations, and declared service providers are retained as analysis roots.
+References from all Multi-Release variants are combined, independently of the build JVM.
+Only whole classes are removed; retained bytecode is not rewritten and members are not stripped.
+Computed reflection, JNI lookups, and external configuration can require explicit keep rules.
+Ordinary resources remain unless explicitly excluded. Analysis requires embedded dependencies;
+the Java writer rejects minimization with remote dependency references.
+
+Class patterns use binary names (`example.Outer$Inner` for nested classes): `*` matches within one
+name component, `?` matches one character, and `**` crosses components. `example.**` includes
+subpackages. Patterns are case-sensitive; unmatched keep rules are permitted.
+`keepJar(...)` matches original input filenames and retains all remaining classes in matching inputs.
+
+Resource patterns use `/` separators and apply to logical paths in every Multi-Release layer.
+`**/` matches zero or more directories; a trailing `/` excludes a subtree. `excludeFrom(...)`
+selects inputs by filename glob; directory inputs use `resources.jar`. Exclusions also work with
+minimization disabled. They run first, and a class removed by an exclusion cannot be restored by
+`keep(...)`. When minimization finds that a required embedded class was excluded, packaging fails.
+
+The same DSL is available on `JanexPack` tasks. Its `minimization` and `resources` properties support
+Gradle providers; `minimization.enabled = false` disables analysis. Selection rules are task inputs
+and participate in up-to-date checks, the configuration cache, and the build cache.
+
 ### Publisher signing
 
 ```kotlin
@@ -156,7 +199,7 @@ Publish the bundled plugin, its sources and Javadoc, and the plugin marker to a 
 
 The repository is generated under `janex-gradle-plugin/build/repository`. All binary outputs stay
 in ignored build directories. To consume a published plugin, add that repository under
-`pluginManagement.repositories` alongside `mavenCentral()` for compression and signing dependencies, and use
+`pluginManagement.repositories` alongside `mavenCentral()` for library dependencies, and use
 `id("org.glavo.janex") version "0.1.0-SNAPSHOT"`.
 
 All Java modules and the plugin marker use `workspace.package.version` from the root `Cargo.toml`,

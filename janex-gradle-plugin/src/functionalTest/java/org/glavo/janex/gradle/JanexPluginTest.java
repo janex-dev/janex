@@ -46,6 +46,7 @@ public final class JanexPluginTest {
         bundledPlugin();
         javaVersionPackaging(Files.createTempDirectory(directory, "java-version-"), executable);
         classpathPackaging(Files.createTempDirectory(directory, "classpath-"), executable);
+        minimizedPackaging(Files.createTempDirectory(directory, "minimized-"), executable);
         modularPackaging(Files.createTempDirectory(directory, "modules-"), executable);
         publishedPlugin(Files.createTempDirectory(directory, "published-"));
         javaOnlyPackaging(Files.createTempDirectory(directory, "java-only-"));
@@ -297,7 +298,8 @@ public final class JanexPluginTest {
                 require(jar.getJarEntry(entry) != null, "Missing bundled plugin entry: " + entry);
             }
             require(jar.stream().noneMatch(entry -> entry.getName().startsWith("org/bouncycastle/")
-                    || entry.getName().startsWith("io/airlift/") || entry.getName().startsWith("org/gradle/")),
+                    || entry.getName().startsWith("io/airlift/") || entry.getName().startsWith("org/gradle/")
+                    || entry.getName().startsWith("org/objectweb/asm/")),
                     "Plugin unexpectedly bundles external libraries or Gradle APIs");
         }
         Path publication = Path.of(System.getProperty("janex.test.publicationDirectory"));
@@ -305,7 +307,7 @@ public final class JanexPluginTest {
             String metadata = Files.readString(publication.resolve(name));
             require(!metadata.contains("janex-reader") && !metadata.contains("janex-writer"),
                     "Published plugin depends on internal Janex modules: " + name);
-            for (String dependency : List.of("aircompressor", "bcpkix-jdk18on", "bcpg-jdk18on")) {
+            for (String dependency : List.of("aircompressor", "bcpkix-jdk18on", "bcpg-jdk18on", "asm-commons")) {
                 require(metadata.contains(dependency), "Missing published dependency: " + dependency);
             }
         }
@@ -337,7 +339,7 @@ public final class JanexPluginTest {
             Path script = consumer.resolve("build.gradle.kts");
             Files.writeString(script, Files.readString(script)
                     .replace("id(\"org.glavo.janex\")", "id(\"org.glavo.janex\") version \""
-                            + System.getProperty("janex.test.version") + "\""));
+                            + System.getProperty("janex.test.version") + "\"") + "\njanex { minimize() }\n");
             GradleRunner.create().withProjectDir(consumer.toFile())
                     .withArguments("janexPack", "--configuration-cache", "--stacktrace")
                     .build();
@@ -372,6 +374,92 @@ public final class JanexPluginTest {
                 .withArguments(arguments).build();
         require(recompressed.task(":janexPack").getOutcome() == TaskOutcome.FROM_CACHE, recompressed.getOutput());
         require(Arrays.equals(original, Files.readAllBytes(output)), "Compression cache key changed the package");
+    }
+
+    /// Verifies explicit reflection roots, resource filtering, and selection inputs in both Gradle caches.
+    private static void minimizedPackaging(Path project, Path executable) throws Exception {
+        fixture(project, false);
+        write(project, "dependency/src/main/java/dependency/Reflective.java", """
+                package dependency;
+                public class Reflective {
+                    public static String value() { return Support.value(); }
+                }
+                """);
+        write(project, "dependency/src/main/java/dependency/Support.java", """
+                package dependency;
+                public class Support {
+                    public static String value() { return "reflection-ok"; }
+                }
+                """);
+        write(project, "dependency/src/main/java/dependency/Unused.java", """
+                package dependency;
+                public class Unused { }
+                """);
+        Path main = project.resolve("src/main/java/demo/Main.java");
+        Files.writeString(main, Files.readString(main).replace("public static void main(String[] args) throws Exception {", """
+                public static void main(String[] args) throws Exception {
+                    System.out.println(Class.forName("dependency.Reflective").getMethod("value").invoke(null));
+                """));
+        write(project, "dependency/src/main/resources/scoped.txt", "dependency");
+        write(project, "src/main/resources/scoped.txt", "primary");
+        write(project, "dependency/src/main/resources/META-INF/maven/fixture/pom.xml", "unused");
+        String script = Files.readString(project.resolve("build.gradle.kts"));
+        String selection = """
+                janex {
+                    minimize { keep("dependency.Reflective") }
+                    resources {
+                        exclude("META-INF/maven/**")
+                        excludeFrom("dependency*.jar", "scoped.txt")
+                    }
+                }
+                """;
+        write(project, "build.gradle.kts", script + selection);
+        List<String> arguments = List.of("janexPack", "--build-cache", "--configuration-cache",
+                "--configuration-cache-problems=fail", "--stacktrace");
+        GradleRunner.create().withProjectDir(project.toFile()).withPluginClasspath().withArguments(arguments).build();
+        Path output = project.resolve("build/distributions/fixture.janex");
+        byte[] minimized = Files.readAllBytes(output);
+        try (JanexReader reader = new JanexReader(output)) {
+            var roots = reader.launch("main").resources.roots();
+            var files = roots.get(1).files();
+            require(files.containsKey("dependency/Reflective.class") && files.containsKey("dependency/Support.class"),
+                    "Explicit keep did not retain its reference closure");
+            require(!files.containsKey("dependency/Unused.class"), "Unused dependency class was retained");
+            require(!files.containsKey("scoped.txt") && !files.containsKey("META-INF/maven/fixture/pom.xml"),
+                    "Resource exclusions were ignored");
+            require(roots.get(0).files().containsKey("scoped.txt"), "Scoped exclusion affected the primary input");
+        }
+        require(runJar(output).contains("reflection-ok"), "Explicitly retained reflective entry failed");
+        String java8Home = System.getenv("JANEX_TEST_JAVA8_HOME");
+        if (java8Home != null) {
+            Path java8 = Path.of(java8Home, "bin", System.getProperty("os.name").startsWith("Windows") ? "java.exe" : "java");
+            require(run(List.of(java8.toString(), "-jar", output.toString())).contains("reflection-ok"),
+                    "Java 8 could not launch the minimized package");
+        }
+        BuildResult repeated = build(project, executable, false, "janexPack");
+        require(repeated.getOutput().contains("Reusing configuration cache"), repeated.getOutput());
+        require(repeated.task(":janexPack").getOutcome() == TaskOutcome.UP_TO_DATE, repeated.getOutput());
+        for (String extra : List.of(
+                "tasks.named<org.glavo.janex.gradle.JanexPack>(\"janexPack\") { minimize { keep(\"dependency.Unused\") } }",
+                "tasks.named<org.glavo.janex.gradle.JanexPack>(\"janexPack\") { minimization.enabled = false }",
+                "janex { resources { exclude(\"scoped.txt\") } }",
+                "janex { resources { excludeFrom(\"dependency*.jar\", \"dependency.txt\") } }")) {
+            write(project, "build.gradle.kts", script + selection + extra);
+            BuildResult changed = GradleRunner.create().withProjectDir(project.toFile()).withPluginClasspath()
+                    .withArguments(arguments).build();
+            require(changed.task(":janexPack").getOutcome() != TaskOutcome.UP_TO_DATE, changed.getOutput());
+            require(!Arrays.equals(minimized, Files.readAllBytes(output)), "Selection change did not affect the package");
+        }
+        write(project, "build.gradle.kts", script + selection);
+        BuildResult restored = GradleRunner.create().withProjectDir(project.toFile()).withPluginClasspath()
+                .withArguments(arguments).build();
+        require(restored.task(":janexPack").getOutcome() == TaskOutcome.FROM_CACHE, restored.getOutput());
+        require(Arrays.equals(minimized, Files.readAllBytes(output)), "Selection cache restored a different package");
+        write(project, "build.gradle.kts", script + selection
+                + "janex { resources { exclude(\"dependency/Support.class\") } }");
+        BuildResult failed = build(project, executable, true, "janexPack");
+        require(failed.getOutput().contains("Resource exclusions remove a required class: dependency.Support"), failed.getOutput());
+        require(Arrays.equals(minimized, Files.readAllBytes(output)), "Failed minimization replaced the previous output");
     }
 
     /// Writes a Kotlin DSL application with a project dependency and duplicate dependency resources.

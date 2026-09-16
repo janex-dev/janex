@@ -19,12 +19,18 @@ import org.gradle.api.provider.Property;
 public abstract class JanexExtension {
     /// Lazily configured publisher-signing settings.
     private final JanexSigning signing;
+    /// Optional dependency minimization and explicit class roots.
+    private final JanexMinimization minimization;
+    /// Explicit global and per-JAR resource exclusions.
+    private final JanexResources resources;
 
     /// Creates the extension; conventions are supplied by [JanexPlugin].
     /// @param objects Gradle's managed-object factory
     @Inject
     public JanexExtension(ObjectFactory objects) {
         signing = objects.newInstance(JanexSigning.class);
+        minimization = objects.newInstance(JanexMinimization.class);
+        resources = objects.newInstance(JanexResources.class);
     }
 
     /// Returns optional publisher-signing settings.
@@ -34,6 +40,28 @@ public abstract class JanexExtension {
     /// Configures optional publisher signing; signed packages require `withLauncher = false`.
     /// @param action configuration action applied immediately
     public void signing(Action<? super JanexSigning> action) { action.execute(signing); }
+
+    /// Returns dependency minimization settings; disabled by default.
+    /// @return mutable managed minimization settings
+    public JanexMinimization getMinimization() { return minimization; }
+
+    /// Enables whole-class dependency minimization with the current keep rules.
+    public void minimize() { minimization.getEnabled().set(true); }
+
+    /// Enables minimization and then configures keep rules or overrides enablement.
+    /// @param action configuration applied immediately
+    public void minimize(Action<? super JanexMinimization> action) {
+        minimize();
+        action.execute(minimization);
+    }
+
+    /// Returns resource exclusions, applied independently of minimization.
+    /// @return mutable managed resource-filter settings
+    public JanexResources getResources() { return resources; }
+
+    /// Configures resource exclusions.
+    /// @param action configuration applied immediately
+    public void resources(Action<? super JanexResources> action) { action.execute(resources); }
 
     /// Returns the primary JAR, defaulting to the Java plugin's `jar` output.
     ///

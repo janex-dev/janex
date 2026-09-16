@@ -69,6 +69,8 @@ public final class JanexPlugin implements Plugin<Project> {
             task.getCompression().convention(extension.getCompression());
             task.getTransformClassfiles().convention(extension.getTransformClassfiles());
             task.getSigning().convention(extension.getSigning());
+            task.getMinimization().convention(extension.getMinimization());
+            task.getResources().convention(extension.getResources());
             task.getNativeLauncher().convention(extension.getNativeLauncher());
             task.getNativeLaunchMode().convention(extension.getNativeLaunchMode());
             task.getOutputFile().convention(extension.getOutputFile());

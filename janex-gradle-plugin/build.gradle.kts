@@ -21,6 +21,7 @@ dependencies {
     shadow(libs.aircompressor)
     shadow(libs.bouncycastle.pkix)
     shadow(libs.bouncycastle.pgp)
+    shadow(libs.asm.commons)
     add(functionalTest.implementationConfigurationName, testFixtures(project(":janex-writer")))
 }
 

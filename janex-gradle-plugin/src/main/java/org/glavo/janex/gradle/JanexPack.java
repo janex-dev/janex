@@ -43,6 +43,10 @@ import org.gradle.api.tasks.CacheableTask;
 public abstract class JanexPack extends DefaultTask {
     /// Managed settings containing key locations but no secret key material.
     private final JanexSigning signing = getProject().getObjects().newInstance(JanexSigning.class);
+    /// Optional minimization settings tracked as nested task inputs.
+    private final JanexMinimization minimization = getProject().getObjects().newInstance(JanexMinimization.class);
+    /// Resource filters tracked as nested task inputs.
+    private final JanexResources resources = getProject().getObjects().newInstance(JanexResources.class);
 
     /// Creates a packaging task. [JanexPlugin] supplies conventions for `janexPack`.
     public JanexPack() {
@@ -68,6 +72,30 @@ public abstract class JanexPack extends DefaultTask {
     /// Configures publisher-signing settings for this task.
     /// @param action configuration action applied immediately
     public void signing(Action<? super JanexSigning> action) { action.execute(signing); }
+
+    /// Returns dependency minimization settings; disabled by default.
+    /// @return mutable managed minimization settings
+    @Nested
+    public JanexMinimization getMinimization() { return minimization; }
+
+    /// Enables whole-class dependency minimization with the current keep rules.
+    public void minimize() { minimization.getEnabled().set(true); }
+
+    /// Enables minimization and then configures keep rules or overrides enablement.
+    /// @param action configuration applied immediately
+    public void minimize(Action<? super JanexMinimization> action) {
+        minimize();
+        action.execute(minimization);
+    }
+
+    /// Returns resource exclusions, applied independently of minimization.
+    /// @return mutable managed resource-filter settings
+    @Nested
+    public JanexResources getResources() { return resources; }
+
+    /// Configures resource exclusions.
+    /// @param action configuration applied immediately
+    public void resources(Action<? super JanexResources> action) { action.execute(resources); }
 
     /// Returns the required primary JAR, preserving its filename during packaging.
     ///
@@ -244,6 +272,8 @@ public abstract class JanexPack extends DefaultTask {
             options.withLauncher = getWithLauncher().get();
             options.compression = getCompression().get();
             options.transformClassfiles = getTransformClassfiles().get();
+            minimization.configure(options);
+            resources.configure(options);
             Instant time = signing.getTime().isPresent() ? Instant.parse(signing.getTime().get()) : Instant.now();
             options.signingClock = Clock.fixed(time, ZoneOffset.UTC);
             options.signer = signing.load(time);

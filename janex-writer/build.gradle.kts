@@ -15,6 +15,7 @@ dependencies {
     implementation(libs.aircompressor)
     implementation(libs.bouncycastle.pkix)
     implementation(libs.bouncycastle.pgp)
+    implementation(libs.asm.commons)
 }
 
 java {
@@ -81,4 +82,12 @@ tasks.register<JavaExec>("checkNativePrefix") {
     maxHeapSize = "128m"
 }
 
-tasks.check { dependsOn("checkWriter", "checkSignatures", "checkNativePrefix") }
+tasks.register<JavaExec>("checkMinimization") {
+    group = "verification"
+    description = "Checks dependency minimization, keep rules, and resource filtering."
+    classpath = sourceSets.testFixtures.get().runtimeClasspath
+    mainClass = "org.glavo.janex.writer.MinimizationTest"
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+}
+
+tasks.check { dependsOn("checkWriter", "checkSignatures", "checkNativePrefix", "checkMinimization") }

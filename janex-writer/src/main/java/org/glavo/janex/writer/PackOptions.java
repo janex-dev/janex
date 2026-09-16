@@ -8,6 +8,8 @@ import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Map;
+import java.util.LinkedHashMap;
 
 import org.glavo.janex.reader.Checksum;
 import org.glavo.janex.reader.ReadLimits;
@@ -45,6 +47,29 @@ public final class PackOptions {
     /// Whether to try shared CLASSFILE strings; defaults to true.
     /// A root retains ordinary class bytes when the complete encoded pool would not shrink.
     public boolean transformClassfiles = true;
+    /// Whether to remove unreachable classes from embedded classpath dependencies; defaults to false.
+    /// All primary-input and module-path classes, package annotations, service providers, and explicit keep matches are roots.
+    /// Analysis includes every Multi-Release variant and retains whole classes without rewriting bytecode.
+    /// Computed reflection and JNI entry points require explicit keep rules. External dependencies are
+    /// incompatible with minimization because their references cannot be analyzed.
+    public boolean minimize;
+    /// Additional reachability roots matched against binary class names, including `$` for nested classes.
+    /// `*` matches within one package component, `?` one character, and `**` across components.
+    /// Keeping a class also retains the embedded classes it references; unmatched rules are permitted.
+    /// Matching is case-sensitive. These rules have no effect when minimization is disabled.
+    public final List<String> keepClasses = new ArrayList<>();
+    /// Original JAR filenames whose remaining classes are all reachability roots; directories use resources.jar.
+    /// Patterns support `*`, `?`, and `**`. Resource exclusions still apply.
+    public final List<String> keepJars = new ArrayList<>();
+    /// Resource paths to omit from all inputs, matched against logical paths in every Multi-Release layer.
+    /// Paths use `/`; `*` matches within a component, `?` one character, `**` across components,
+    /// and `**/` zero or more directory components. A trailing `/` excludes the entire subtree.
+    /// Ordinary resources are otherwise retained, even when no retained class references them.
+    /// When minimization is enabled, excluding a reachable embedded class causes packaging to fail.
+    public final List<String> excludes = new ArrayList<>();
+    /// Additional resource exclusions keyed by original JAR filename glob; directories use resources.jar.
+    /// Every matching filename rule applies. Paths follow the same syntax as [#excludes].
+    public final Map<String, List<String>> jarExcludes = new LinkedHashMap<>();
     /// Optional publisher signer; null writes checksum verification.
     /// Signed packages require an authenticating Host and cannot use the standalone JAR launcher.
     public PackageSigner signer;

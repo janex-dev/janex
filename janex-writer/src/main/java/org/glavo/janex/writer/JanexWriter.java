@@ -66,6 +66,7 @@ public final class JanexWriter {
             }
         }
         require(mainClass != null || options.mainModule != null, "Cannot determine application entry point");
+        ResourceSelection.apply(roots, options, mainClass);
         Map<Integer, Object> entry = new HashMap<>();
         if (mainClass != null) entry.put(0, mainClass);
         if (options.mainModule != null) entry.put(1, options.mainModule);

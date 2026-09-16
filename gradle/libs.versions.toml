@@ -4,8 +4,10 @@
 [versions]
 aircompressor = "2.0.3"
 bouncycastle = "1.86"
+asm = "9.10.1"
 
 [libraries]
 aircompressor = { module = "io.airlift:aircompressor", version.ref = "aircompressor" }
 bouncycastle-pkix = { module = "org.bouncycastle:bcpkix-jdk18on", version.ref = "bouncycastle" }
 bouncycastle-pgp = { module = "org.bouncycastle:bcpg-jdk18on", version.ref = "bouncycastle" }
+asm-commons = { module = "org.ow2.asm:asm-commons", version.ref = "asm" }
