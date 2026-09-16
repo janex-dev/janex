@@ -12,7 +12,7 @@ use janex_format::{
     condition::{Condition, Context},
     container::{BLOB_POOL, Reader, Writer},
     content::Content,
-    data_pool::DataPool,
+    data_pool::{DataPool, DataPoolBuilder},
     resource::{Directory, DirectoryEntry, Layer, Node, ResourceRoot},
 };
 use std::io::Cursor;
@@ -100,6 +100,26 @@ fn root(layers: Vec<Layer>) -> ResourceRoot {
 }
 
 #[test]
+fn encoding_failure_retains_the_pool_and_can_be_retried() {
+    let mut root = root(vec![layer(vec![directory("p", vec![file("f", &[7; 64])])])]);
+    let mut data = DataPoolBuilder::new();
+    assert_eq!(data.intern("existing"), 1);
+    root.data = data.finish();
+    let limits = Limits {
+        max_bytes: 16,
+        ..Limits::default()
+    };
+    assert!(root.encode(limits).is_err());
+    assert_eq!(root.data.get(1).unwrap(), b"existing");
+    assert_eq!(root.data.get(2).unwrap(), b"p");
+    assert_eq!(root.data.get(3).unwrap(), b"f");
+    let encoded = root.encode(Limits::default()).unwrap();
+    let pool = root.data.encode().unwrap();
+    assert_eq!(root.encode(Limits::default()).unwrap(), encoded);
+    assert_eq!(root.data.encode().unwrap(), pool);
+}
+
+#[test]
 fn independent_root_bytes_read_inline_and_blob_backed_directory_entries() {
     // Inline name "foo", inline content "hello", no transforms or metadata.
     let entries = b"RES\0\0\x03foo\0\x05hello\0\0".to_vec();
@@ -161,7 +181,9 @@ fn root_round_trip_shares_names_and_retains_metadata() {
         ),
         directory("empty", vec![]),
     ])]);
-    root.data.intern("Object");
+    let mut data = DataPoolBuilder::new();
+    data.intern("Object");
+    root.data = data.finish();
     root.metadata = Value::map([
         (
             Value::text("janex.java.jar_name"),
@@ -171,7 +193,9 @@ fn root_round_trip_shares_names_and_retains_metadata() {
     ])
     .unwrap();
     let encoded = root.encode(Limits::default()).unwrap();
-    assert_eq!(root.data.find("Object.class"), None);
+    assert!(
+        (0..root.data.len()).all(|index| root.data.get(index as u64).unwrap() != b"Object.class")
+    );
     let mut blobs = store(&[root.data.encode().unwrap(), b"class bytes".to_vec()]);
     let mut decoded = ResourceRoot::decode(&encoded, &mut blobs).unwrap();
     assert_eq!(decoded.encode(Limits::default()).unwrap(), encoded);

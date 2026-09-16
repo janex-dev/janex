@@ -6,7 +6,7 @@
 use crate::{
     Result,
     binary::{Decoder, write_vuint},
-    data_pool::DataPool,
+    data_pool::{DataPool, DataPoolBuilder},
     error::invalid,
 };
 
@@ -57,7 +57,7 @@ pub fn read_nonempty(pool: &DataPool, decoder: &mut Decoder<'_>) -> Result<Strin
 ///
 /// An existing full-string index is preferred. Otherwise an existing basename and
 /// the `.class` suffix may be concatenated; other names are interned as full strings.
-pub fn write_nonempty(pool: &mut DataPool, value: &str, bytes: &mut Vec<u8>) -> Result<()> {
+pub fn write_nonempty(pool: &mut DataPoolBuilder, value: &str, bytes: &mut Vec<u8>) -> Result<()> {
     if value.is_empty() {
         return Err(invalid("name must not be empty"));
     }

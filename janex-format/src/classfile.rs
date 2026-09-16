@@ -9,7 +9,7 @@
 use crate::{
     Result,
     binary::{Decoder, Limits, write_vuint},
-    data_pool::DataPool,
+    data_pool::{DataPool, DataPoolBuilder},
     error::invalid,
 };
 use std::{borrow::Cow, collections::BTreeSet};
@@ -71,7 +71,11 @@ pub fn inspect(bytes: &[u8], limits: Limits) -> Result<ClassInfo> {
 /// and the final transformation saves the minimum transform-descriptor overhead.
 /// Existing constant-pool indices and body bytes are retained.
 /// Class-file internals are not validated beyond constant-pool framing.
-pub fn transform(bytes: &[u8], strings: &mut DataPool, limits: Limits) -> Result<Option<Vec<u8>>> {
+pub fn transform(
+    bytes: &[u8],
+    strings: &mut DataPoolBuilder,
+    limits: Limits,
+) -> Result<Option<Vec<u8>>> {
     let (constants, body_start) = scan_pool(bytes, limits)?;
     let checkpoint = strings.len();
     let classes: BTreeSet<_> = constants
@@ -214,7 +218,7 @@ pub fn restore(bytes: &[u8], strings: &DataPool, limits: Limits) -> Result<Vec<u
 
 /// Extracts byte-exact class-name fragments from descriptor and signature-shaped strings.
 /// This is a compression heuristic, not a Java grammar validator.
-fn encode_template(bytes: &[u8], pool: &mut DataPool) -> Result<Option<Vec<u8>>> {
+fn encode_template(bytes: &[u8], pool: &mut DataPoolBuilder) -> Result<Option<Vec<u8>>> {
     if !matches!(bytes.first(), Some(b'(' | b'[' | b'L' | b'<')) {
         return Ok(None);
     }

@@ -6,7 +6,7 @@
 use janex_format::{
     binary::{self, Limits},
     classfile,
-    data_pool::DataPool,
+    data_pool::{DataPool, DataPoolBuilder},
 };
 use std::{
     fs,
@@ -175,7 +175,7 @@ public class Fixture implements Runnable {
         let mut trailing = original.clone();
         trailing.push(0);
         ordinary(&mut vectors, &trailing, limits);
-        let mut pool = DataPool::new();
+        let mut pool = DataPoolBuilder::new();
         if let Some(transformed) = classfile::transform(&original, &mut pool, limits).unwrap() {
             vector(
                 &mut vectors,
@@ -230,7 +230,7 @@ public class Fixture implements Runnable {
         extra.extend_from_slice(&modified);
         let original = minimal(&extra, false);
         ordinary(&mut vectors, &original, limits);
-        let mut pool = DataPool::new();
+        let mut pool = DataPoolBuilder::new();
         let index = pool.intern(&modified);
         let mut transformed = minimal(&[0xff, index as u8], false);
         transformed[..4].copy_from_slice(&[0xca, 0xfe, 0xca, 0x70]);
@@ -265,7 +265,7 @@ public class Fixture implements Runnable {
         "\0".repeat(32768),
         "🚀".repeat(10923),
     ] {
-        let mut pool = DataPool::new();
+        let mut pool = DataPoolBuilder::new();
         let name = pool.intern(&text);
         let package = pool.intern("sample");
         for prefix in [None, Some(0), Some(package)] {
@@ -298,7 +298,7 @@ public class Fixture implements Runnable {
         vec![b'x'; 65536],
     ] {
         for name in [b"String".to_vec(), vec![0, 1, 2], vec![b'x'; 65535]] {
-            let mut pool = DataPool::new();
+            let mut pool = DataPoolBuilder::new();
             pool.intern("java/lang");
             pool.intern(name);
             let index = pool.intern(&template);

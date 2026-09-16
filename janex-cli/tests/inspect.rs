@@ -84,7 +84,9 @@ fn fixture(signed: bool, missing_root: bool) -> Vec<u8> {
             },
         ],
     };
-    root.data.intern(b"\xff\xc0\x80");
+    let mut data = janex_format::data_pool::DataPoolBuilder::from(root.data);
+    data.intern(b"\xff\xc0\x80");
+    root.data = data.finish();
     let encoded = root.encode(Limits::default()).unwrap();
     let mut pool = PoolBuilder::new();
     pool.push(&root.data.encode().unwrap(), 3).unwrap();

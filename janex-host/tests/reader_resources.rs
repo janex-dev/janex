@@ -12,7 +12,7 @@ use janex_format::{
     condition::Context,
     container::{APPLICATION, BLOB_POOL, Reader, Writer},
     content::{Content, Transform},
-    data_pool::DataPool,
+    data_pool::DataPoolBuilder,
     resource::{Node, ResourceRoot, ResourceTree},
 };
 use std::{
@@ -34,7 +34,7 @@ enum Name {
 
 impl Name {
     /// Encodes the chosen form without normalizing malformed fixture values.
-    fn write(&self, output: &mut Vec<u8>, pool: &mut DataPool) {
+    fn write(&self, output: &mut Vec<u8>, pool: &mut DataPoolBuilder) {
         match self {
             Self::Raw(value) => binary::write_vuint(output, pool.intern(value)).unwrap(),
             Self::Index(value) => binary::write_vuint(output, pool.intern(value)).unwrap(),
@@ -161,7 +161,7 @@ fn stored_pool(blobs: &[Vec<u8>]) -> BuiltPool {
 
 /// Encodes a container while leaving resource validation to each implementation.
 fn package(layers: &[Layer]) -> Vec<u8> {
-    let mut strings = DataPool::new();
+    let mut strings = DataPoolBuilder::new();
     let mut root = vec![0, 0, 0]; // Data-pool reference and empty root metadata.
     binary::write_vuint(&mut root, layers.len() as u64).unwrap();
     for layer in layers {

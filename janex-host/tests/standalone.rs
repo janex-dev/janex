@@ -362,7 +362,7 @@ fn java_reader_matches_rust_for_extents_transforms_layers_and_links() {
         condition::Condition,
         container::{APPLICATION, BLOB_POOL, Writer},
         content::{Content, Source, Transform},
-        data_pool::DataPool,
+        data_pool::DataPoolBuilder,
         resource::{Directory, DirectoryEntry, Layer, ResourceRoot},
     };
     let temp = tempfile::tempdir().unwrap();
@@ -412,7 +412,7 @@ public class Main {
         ])
         .unwrap();
     let class = fs::read(temp.path().join("classes/Main.class")).unwrap();
-    let mut class_strings = DataPool::new();
+    let mut class_strings = DataPoolBuilder::new();
     let mut transformed = classfile::transform(&class, &mut class_strings, limits)
         .unwrap()
         .unwrap();
@@ -434,11 +434,11 @@ public class Main {
     );
     let class_source = pool.push(&transformed, 3).unwrap();
     let class_pool = pool.push(&class_strings.encode().unwrap(), 3).unwrap();
-    let mut names = DataPool::new();
+    let mut names = DataPoolBuilder::new();
     names.intern("Main");
     let mut root = ResourceRoot {
         data_pool: reference(pool.len() as u64),
-        data: names,
+        data: names.finish(),
         metadata: Value::empty_map(),
         layers: vec![
             Layer {

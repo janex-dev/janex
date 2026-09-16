@@ -17,7 +17,7 @@ use janex_format::{
     classfile,
     container::{APPLICATION, BLOB_POOL, Writer},
     content::{Content, Source, Transform},
-    data_pool::DataPool,
+    data_pool::DataPoolBuilder,
     resource::{Directory, DirectoryEntry, Layer, ResourceRoot},
     version::JavaRange,
 };
@@ -469,7 +469,7 @@ fn build_pool(
     transform: bool,
 ) -> Result<(janex_format::blob::BuiltPool, BlobRef, usize)> {
     let mut pool = PoolBuilder::new();
-    let mut strings = DataPool::new();
+    let mut strings = DataPoolBuilder::new();
     let mut shared = BTreeMap::<Vec<u8>, Vec<SharedFile<'_>>>::new();
     let mut layers = Vec::new();
     let mut transformed = 0;
@@ -567,7 +567,7 @@ fn build_pool(
     };
     let mut root = ResourceRoot {
         data_pool,
-        data: strings,
+        data: strings.finish(),
         layers,
         metadata: Value::map([(
             Value::text("janex.java.jar_name"),

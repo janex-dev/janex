@@ -6,15 +6,43 @@
 use janex_format::{
     ErrorKind,
     binary::{Decoder, Limits},
-    data_pool::DataPool,
+    data_pool::{DataPool, DataPoolBuilder},
 };
+
+#[test]
+fn freezing_and_reopening_a_builder_preserves_indices_and_owned_bytes() {
+    let mut builder = DataPoolBuilder::new();
+    let mut input = vec![0xff, 0xc0, 0x80];
+    assert_eq!(builder.intern(&input), 1);
+    input.fill(0);
+    assert_eq!(builder.intern("Object"), 2);
+    assert_eq!(builder.intern("Object"), 2);
+    let pool = builder.finish();
+    let wire = pool.encode().unwrap();
+    assert_eq!(pool.get(1).unwrap(), b"\xff\xc0\x80");
+    assert!(pool.get(u64::MAX).is_err());
+    assert!(pool.get(3).is_err());
+    let mut builder = DataPoolBuilder::from(pool);
+    assert_eq!(builder.intern("Object"), 2);
+    assert_eq!(builder.intern(".class"), 3);
+    let pool = builder.finish();
+    assert_eq!(pool.get(3).unwrap(), b".class");
+    assert_eq!(DataPool::decode(&wire, Limits::default()).unwrap().len(), 3);
+    assert_eq!(
+        DataPool::decode(&pool.encode().unwrap(), Limits::default())
+            .unwrap()
+            .get(3)
+            .unwrap(),
+        b".class"
+    );
+}
 
 #[test]
 fn opaque_entries_are_valid_until_interpreted_as_text() {
     let wire = b"\x03\x00\x01\xff\x02\xc0\x80";
-    let mut pool = DataPool::decode(wire, Limits::default()).unwrap();
+    let pool = DataPool::decode(wire, Limits::default()).unwrap();
     assert_eq!(pool.get(1).unwrap(), b"\xff");
-    assert_eq!(pool.intern(b"\xc0\x80"), 2);
+    assert_eq!(pool.get(2).unwrap(), b"\xc0\x80");
     assert_eq!(pool.encode().unwrap(), wire);
     for value in [b"\x01".as_slice(), b"\x00\x00\x02\x00\x02"] {
         assert!(
@@ -30,7 +58,9 @@ fn opaque_entries_are_valid_until_interpreted_as_text() {
 
 #[test]
 fn pool_and_three_name_forms_share_class_basenames() {
-    let mut pool = DataPool::decode(b"\x03\x00\x06Object\x06.class", Limits::default()).unwrap();
+    let mut pool = DataPoolBuilder::from(
+        DataPool::decode(b"\x03\x00\x06Object\x06.class", Limits::default()).unwrap(),
+    );
     assert_eq!(pool.intern("Object"), 1);
     assert_eq!(pool.get(0).unwrap(), b"");
     assert!(!pool.is_empty());
@@ -64,7 +94,7 @@ fn invalid_pools_references_and_concatenation_limits() {
     ] {
         assert!(DataPool::decode(invalid, Limits::default()).is_err());
     }
-    let mut pool = DataPool::new();
+    let mut pool = DataPoolBuilder::new();
     pool.intern("hello");
     for invalid in [
         &b"\x02"[..],

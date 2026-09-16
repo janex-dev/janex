@@ -3,7 +3,12 @@
 
 //! Independent class-file bytes and real JDK transformation fixtures.
 
-use janex_format::{ErrorKind, binary::Limits, classfile, data_pool::DataPool};
+use janex_format::{
+    ErrorKind,
+    binary::Limits,
+    classfile,
+    data_pool::{DataPool, DataPoolBuilder},
+};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -21,7 +26,7 @@ fn string_class(text: &[u8]) -> Vec<u8> {
 
 #[test]
 fn descriptors_and_generic_signatures_share_byte_templates() {
-    let mut pool = DataPool::new();
+    let mut pool = DataPoolBuilder::new();
     pool.intern("java/lang");
     pool.intern("String");
     pool.intern("Object");
@@ -96,7 +101,7 @@ fn templates_bound_expansion_and_do_not_interpret_referenced_bytes() {
         (vec![0, 1, 2], b"p".to_vec(), vec![b'x'; 65535], None),
         (vec![b'x'; 65536], b"p".to_vec(), b"Name".to_vec(), None),
     ] {
-        let mut pool = DataPool::new();
+        let mut pool = DataPoolBuilder::new();
         // Keep stable indices even for the unnamed-package vector.
         pool.intern(if package.is_empty() {
             b"unused".as_slice()
@@ -140,7 +145,7 @@ fn class_transform_restores_exact_bytes_and_preserves_unpaired_surrogates() {
         classfile::inspect(&bytes, Limits::default()).unwrap().name,
         "sample/Example"
     );
-    let mut pool = DataPool::new();
+    let mut pool = DataPoolBuilder::new();
     let encoded = classfile::transform(&bytes, &mut pool, Limits::default())
         .unwrap()
         .unwrap();
@@ -193,13 +198,13 @@ fn class_transform_restores_exact_bytes_and_preserves_unpaired_surrogates() {
 #[test]
 fn external_strings_check_modified_utf8_length_and_empty_class_names() {
     let bytes = fixture();
-    let mut pool = DataPool::new();
+    let mut pool = DataPoolBuilder::new();
     let mut encoded = classfile::transform(&bytes, &mut pool, Limits::default())
         .unwrap()
         .unwrap();
     encoded[12] = 0;
     assert!(classfile::restore(&encoded, &pool, Limits::default()).is_err());
-    let mut oversized = DataPool::new();
+    let mut oversized = DataPoolBuilder::new();
     oversized.intern("sample");
     oversized.intern([0xc0, 0x80].repeat(40000));
     encoded[12] = 2;
@@ -229,7 +234,7 @@ fn external_constants_copy_raw_modified_utf8_without_transcoding() {
         ordinary.extend_from_slice(&raw);
         ordinary.extend_from_slice(&base[position + 6..]);
         classfile::inspect(&ordinary, Limits::default()).unwrap();
-        let mut pool = DataPool::new();
+        let mut pool = DataPoolBuilder::new();
         pool.intern(&raw);
         let mut transformed = base[..position].to_vec();
         transformed[..4].copy_from_slice(b"\xca\xfe\xca\x70");
@@ -240,7 +245,7 @@ fn external_constants_copy_raw_modified_utf8_without_transcoding() {
             ordinary
         );
         for invalid in [vec![0], vec![0xf0, 0x9f, 0x98, 0x80]] {
-            let mut bad_pool = DataPool::new();
+            let mut bad_pool = DataPoolBuilder::new();
             bad_pool.intern(&invalid);
             let restored = classfile::restore(&transformed, &bad_pool, Limits::default()).unwrap();
             assert_eq!(
@@ -249,7 +254,7 @@ fn external_constants_copy_raw_modified_utf8_without_transcoding() {
             );
             assert!(classfile::inspect(&restored, Limits::default()).is_err());
         }
-        let mut oversized = DataPool::new();
+        let mut oversized = DataPoolBuilder::new();
         oversized.intern(vec![b'x'; 65536]);
         assert!(classfile::restore(&transformed, &oversized, Limits::default()).is_err());
     }
@@ -263,7 +268,7 @@ fn transform_preserves_uninterpreted_versions_references_and_class_bodies() {
     original[body_start..].fill(0xff);
     // Retain an uninterpreted class name that cannot use the split-name form.
     original[13..27].copy_from_slice(b"/ample_Example");
-    let mut pool = DataPool::new();
+    let mut pool = DataPoolBuilder::new();
     let encoded = classfile::transform(&original, &mut pool, Limits::default())
         .unwrap()
         .unwrap();
@@ -355,7 +360,7 @@ public class Example {
             "src/sample/Example.java",
         ],
     );
-    let mut pool = DataPool::new();
+    let mut pool = DataPoolBuilder::new();
     for path in ["classes/sample/Example.class", "classes/module-info.class"] {
         let original = fs::read(root.join(path)).unwrap();
         let encoded = classfile::transform(&original, &mut pool, Limits::default())

@@ -501,7 +501,7 @@ public class Main {
             String::from_utf8_lossy(&compiled.stderr)
         );
         let original = fs::read(temp.path().join("Main.class")).unwrap();
-        let mut strings = DataPool::new();
+        let mut strings = janex_format::data_pool::DataPoolBuilder::new();
         let transformed = classfile::transform(&original, &mut strings, Limits::default())
             .unwrap()
             .unwrap();

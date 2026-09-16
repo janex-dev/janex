@@ -12,7 +12,7 @@ use crate::{
     condition::{Condition, Context, nonempty},
     container::integer_keys,
     content::Content,
-    data_pool::DataPool,
+    data_pool::{DataPool, DataPoolBuilder},
     error::invalid,
 };
 use std::{
@@ -79,7 +79,7 @@ impl DirectoryEntry {
     }
 
     /// Writes one entry, interning names into the root pool as needed.
-    fn write(&self, bytes: &mut Vec<u8>, strings: &mut DataPool) -> Result<()> {
+    fn write(&self, bytes: &mut Vec<u8>, strings: &mut DataPoolBuilder) -> Result<()> {
         let tag: u32 = match self {
             Self::File { .. } => 0x00534552,
             Self::SymbolicLink { .. } => 0x4c4d5953,
@@ -197,6 +197,14 @@ impl ResourceRoot {
     /// indices remain stable. Failure may leave newly interned strings in the pool.
     pub fn encode(&mut self, limits: Limits) -> Result<Vec<u8>> {
         self.validate(limits)?;
+        let mut data = DataPoolBuilder::from(std::mem::take(&mut self.data));
+        let result = self.encode_with_pool(limits, &mut data);
+        self.data = data.finish();
+        result
+    }
+
+    /// Encodes names using an encoding-only reverse index prepared by the caller.
+    fn encode_with_pool(&self, limits: Limits, data: &mut DataPoolBuilder) -> Result<Vec<u8>> {
         let mut bytes = Vec::new();
         self.data_pool.write(&mut bytes)?;
         cbor::write_sized(&mut bytes, &self.metadata)?;
@@ -205,12 +213,12 @@ impl ResourceRoot {
             cbor::write_sized(&mut bytes, layer.condition.value())?;
             write_vuint(&mut bytes, layer.directories.len() as u64)?;
             for directory in &layer.directories {
-                write_vuint(&mut bytes, self.data.intern(&directory.path))?;
+                write_vuint(&mut bytes, data.intern(&directory.path))?;
                 cbor::write_sized(&mut bytes, &directory.metadata)?;
                 write_vuint(&mut bytes, directory.entries.len() as u64)?;
                 let mut entries = Vec::new();
                 for entry in &directory.entries {
-                    entry.write(&mut entries, &mut self.data)?;
+                    entry.write(&mut entries, data)?;
                     limits.bytes(entries.len() as u64)?;
                 }
                 Content::inline(entries).write(&mut bytes)?;

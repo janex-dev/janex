@@ -9,13 +9,13 @@ use janex_format::{
     cbor::Value,
     container::{BLOB_POOL, Reader, Writer},
     content::{Content, Source, Transform},
-    data_pool::DataPool,
+    data_pool::{DataPool, DataPoolBuilder},
 };
 use std::io::Cursor;
 
 /// Creates a container with a valid explicit pool, a malformed pool, and transformed bytes.
 fn fixture() -> Fixture {
-    let mut strings = DataPool::new();
+    let mut strings = DataPoolBuilder::new();
     for text in ["sample", "Example", "java/lang", "Object"] {
         strings.intern(text);
     }
@@ -46,7 +46,7 @@ fn fixture() -> Fixture {
     .unwrap();
     Fixture {
         blobs: BlobStore::new(reader),
-        strings,
+        strings: strings.finish(),
         original,
         transformed,
     }
