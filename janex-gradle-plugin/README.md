@@ -43,15 +43,52 @@ The composite build compiles the Java reader, writer, and bootstrap automaticall
 installation or architecture selection is required for ordinary packaging.
 
 Run `janexPack` or `assemble`; the default output is `build/distributions/<project-name>.janex`.
-The primary input defaults to the project's `jar` output. Runtime dependencies, including project
-dependencies, are resolved by Gradle and embedded in order; they are not flattened into the primary
-JAR or converted to remote dependency references.
+The primary input defaults to `sourceSets.main.output`: compiled classes and processed resources
+are merged directly into one ResourceRoot, without creating an intermediate JAR. Producer tasks are
+inferred from these inputs. Runtime dependencies, including project dependencies, are resolved by
+Gradle and embedded in order as separate roots; they are not converted to remote references.
+`janexPack` does not depend on the primary `jar` task. Standard Java `assemble` dependencies remain
+unchanged; disable `jar` explicitly if the project should distribute only Janex output.
 
 When the application plugin is present, its `mainClass`, `mainModule`, and
 `applicationDefaultJvmArgs` supply conventions. Explicit Janex values take precedence.
 With `mainModule` set, runtime dependencies default to the module path. Otherwise they default to
 the classpath. Both path collections can be replaced using `setFrom(...)`, or extended using
-`from(...)`. Without an explicit main class, the writer attempts to infer the entry point from the JAR.
+`from(...)`. Without an explicit main class, the writer attempts to infer the entry point from the
+primary manifest or module descriptor.
+
+### Primary inputs and manifest
+
+```kotlin
+janex {
+    manifestAttributes.putAll(mapOf(
+        "Implementation-Version" to project.version.toString(),
+        "Multi-Release" to "true",
+    ))
+    // inputDirectories.from(tasks.named("generateAdditionalResources"))
+    // source = tasks.jar.flatMap { it.archiveFile }
+}
+
+tasks.processResources {
+    from("extra-assets") { into("assets") }
+}
+```
+
+`inputDirectories` accepts directories and their producer providers; use `setFrom(...)` to replace
+the defaults. Missing output directories are skipped. Duplicate directories merge, but duplicate
+file or link paths fail rather than silently selecting one input. Primary files use 0644 permissions
+and directories 0755; symbolic-link identities and targets participate in the task's cache inputs.
+Dependency-directory permissions retain their original behavior.
+
+`sourceName` defaults to `<project-name>.jar` and supplies the merged root's identity, not an output
+file. `manifestAttributes` overrides the primary manifest's main attributes and defaults to
+`Manifest-Version: 1.0`; existing named sections remain. `Multi-Release` takes effect before versioned
+resources are interpreted. Attribute names must be valid and unique ignoring case; values cannot
+contain CR, LF, or NUL. All three properties are also available on `JanexPack` tasks.
+
+An explicit `source` selects a JAR and ignores `inputDirectories`, preserving its filename.
+Customizations to `tasks.jar` are not automatically imported in direct mode: move resources and path
+mappings to `processResources` and manifest attributes to `janex`, or select that JAR explicitly.
 
 ## Packaging options
 

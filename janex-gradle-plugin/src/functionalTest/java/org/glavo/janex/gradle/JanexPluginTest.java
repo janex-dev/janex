@@ -44,6 +44,7 @@ public final class JanexPluginTest {
         Path directory = Path.of(System.getProperty("janex.test.directory"));
         Files.createDirectories(directory);
         bundledPlugin();
+        directInputs(Files.createTempDirectory(directory, "direct-inputs-"), executable);
         javaVersionPackaging(Files.createTempDirectory(directory, "java-version-"), executable);
         classpathPackaging(Files.createTempDirectory(directory, "classpath-"), executable);
         minimizedPackaging(Files.createTempDirectory(directory, "minimized-"), executable);
@@ -52,6 +53,68 @@ public final class JanexPluginTest {
         javaOnlyPackaging(Files.createTempDirectory(directory, "java-only-"));
         signingPackaging(Files.createTempDirectory(directory, "signing-"), executable);
         System.out.println("Janex Gradle plugin functional checks passed.");
+    }
+
+    /// Verifies direct outputs, generated resources, manifests, both caches, conflicts, and explicit JAR inputs.
+    private static void directInputs(Path project, Path executable) throws Exception {
+        fixture(project, false);
+        String base = Files.readString(project.resolve("build.gradle.kts"));
+        String script = base + """
+
+                val generated = tasks.register<Copy>("generatedResources") {
+                    from("custom")
+                    into(layout.buildDirectory.dir("generated/custom"))
+                }
+                tasks.processResources { from(generated) { into("assets") } }
+                janex {
+                    inputDirectories.from(layout.projectDirectory.dir("extra"))
+                    manifestAttributes.put("Custom-Attribute", "one")
+                }
+                """;
+        write(project, "build.gradle.kts", script);
+        write(project, "custom/generated.txt", "generated");
+        write(project, "extra/demo/additional.txt", "additional");
+        BuildResult first = build(project, executable, false, "janexPack");
+        require(first.task(":jar") == null && !Files.exists(project.resolve("build/libs/fixture.jar")),
+                "Direct packaging built an intermediate application JAR");
+        require(first.task(":generatedResources") != null, "Generated resource dependency was lost");
+        Path output = project.resolve("build/distributions/fixture.janex");
+        try (JanexReader reader = new JanexReader(output)) {
+            var roots = reader.launch("main").resources.roots();
+            require(roots.size() == 3 && roots.get(0).name().equals("fixture.jar"), "Primary outputs were not merged");
+            require(roots.get(0).files().containsKey("assets/generated.txt"), "Generated resource was lost");
+            require(roots.get(0).files().containsKey("demo/additional.txt"), "Additional directory was ignored");
+            require(roots.get(0).files().containsKey("META-INF/MANIFEST.MF"), "Manifest was not generated");
+        }
+        require(runJar(output).contains("hello|resource|configured|4"), "Direct package failed to launch");
+        BuildResult repeated = build(project, executable, false, "janexPack");
+        require(repeated.getOutput().contains("Reusing configuration cache"), repeated.getOutput());
+        require(repeated.task(":janexPack").getOutcome() == TaskOutcome.UP_TO_DATE, repeated.getOutput());
+        byte[] original = Files.readAllBytes(output);
+        write(project, "build.gradle.kts", script.replace("\"one\"", "\"two\""));
+        BuildResult changed = build(project, executable, false, "janexPack");
+        require(changed.task(":janexPack").getOutcome() == TaskOutcome.SUCCESS, changed.getOutput());
+        byte[] previous = Files.readAllBytes(output);
+        require(!Arrays.equals(original, previous), "Manifest change did not invalidate packaging");
+        write(project, "extra/packed.txt", "duplicate");
+        BuildResult failed = build(project, executable, true, "janexPack");
+        require(failed.getOutput().contains("Duplicate resource path: packed.txt"), failed.getOutput());
+        require(Arrays.equals(previous, Files.readAllBytes(output)), "Duplicate input replaced the previous package");
+        write(project, "build.gradle.kts", script + """
+
+                val inputJar = tasks.register<Jar>("inputJar") {
+                    archiveFileName = "explicit.jar"
+                    from(sourceSets.main.get().output)
+                }
+                janex { source = inputJar.flatMap { it.archiveFile } }
+                """);
+        BuildResult explicit = build(project, executable, false, "janexPack");
+        require(explicit.task(":inputJar") != null && explicit.task(":jar") == null, explicit.getOutput());
+        try (JanexReader reader = new JanexReader(output)) {
+            var root = reader.launch("main").resources.roots().get(0);
+            require(root.name().equals("explicit.jar"), "Explicit JAR identity was lost");
+            require(!root.files().containsKey("demo/additional.txt"), "Explicit JAR did not override directories");
+        }
     }
 
     /// Verifies minimum-version methods, string properties, equivalent VERS output, and invalid-value rejection.
@@ -201,6 +264,7 @@ public final class JanexPluginTest {
     /// Verifies signed task execution, every algorithm through Rust, native pins, and tamper rejection.
     private static void signingPackaging(Path project, Path executable) throws Exception {
         fixture(project, false);
+        build(project, executable, false, "jar");
         Path fixtures = Path.of(System.getProperty("janex.test.fixtures"));
         Path cert = fixtures.resolve("cms/rsa256.cert.pem");
         Files.copy(fixtures.resolve("cms/rsa256.encrypted.pem"), project.resolve("signing.key"));

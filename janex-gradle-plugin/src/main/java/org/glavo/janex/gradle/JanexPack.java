@@ -8,9 +8,11 @@ import java.io.IOException;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.LinkOption;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -23,12 +25,16 @@ import org.glavo.janex.writer.PackOptions;
 import org.gradle.api.DefaultTask;
 import org.gradle.api.GradleException;
 import org.gradle.api.file.ConfigurableFileCollection;
+import org.gradle.api.file.FileCollection;
+import org.gradle.api.file.FileSystemLocation;
 import org.gradle.api.file.RegularFileProperty;
 import org.gradle.api.provider.ListProperty;
+import org.gradle.api.provider.MapProperty;
 import org.gradle.api.provider.Property;
 import org.gradle.api.tasks.Input;
 import org.gradle.api.tasks.InputFile;
 import org.gradle.api.tasks.InputFiles;
+import org.gradle.api.tasks.Internal;
 import org.gradle.api.tasks.Optional;
 import org.gradle.api.tasks.OutputFile;
 import org.gradle.api.tasks.PathSensitive;
@@ -36,7 +42,7 @@ import org.gradle.api.tasks.PathSensitivity;
 import org.gradle.api.tasks.TaskAction;
 import org.gradle.api.tasks.CacheableTask;
 
-/// Packages a primary JAR and ordered dependency paths using the Java writer.
+/// Packages merged primary directories or an explicit JAR and ordered dependency paths.
 /// A temporary sibling replaces the previous output only after successful packaging.
 /// Gradle tracks input contents, path order, and launch settings for incremental and cached builds.
 @CacheableTask
@@ -47,9 +53,16 @@ public abstract class JanexPack extends DefaultTask {
     private final JanexMinimization minimization = getProject().getObjects().newInstance(JanexMinimization.class);
     /// Resource filters tracked as nested task inputs.
     private final JanexResources resources = getProject().getObjects().newInstance(JanexResources.class);
+    /// Effective directory inputs whose producer tasks are omitted when a primary JAR is selected.
+    private final ConfigurableFileCollection inputDirectoryFiles = getProject().getObjects().fileCollection();
 
     /// Creates a packaging task. [JanexPlugin] supplies conventions for `janexPack`.
     public JanexPack() {
+        getSourceName().convention("resources.jar");
+        getManifestAttributes().convention(Map.of("Manifest-Version", "1.0"));
+        inputDirectoryFiles.from(getSource().map(file -> List.<File>of()).orElse(
+                getInputDirectories().getElements().map(elements -> elements.stream()
+                        .map(FileSystemLocation::getAsFile).toList())));
         getApplicationId().convention("main");
         getJvmOptions().convention(List.of());
         getArguments().convention(List.of());
@@ -98,12 +111,67 @@ public abstract class JanexPack extends DefaultTask {
     /// @param action configuration applied immediately
     public void resources(Action<? super JanexResources> action) { action.execute(resources); }
 
-    /// Returns the required primary JAR, preserving its filename during packaging.
+    /// Returns an optional primary JAR overriding the merged directory inputs.
     ///
-    /// @return the primary JAR file property
+    /// @return the optional primary JAR file property
     @InputFile
+    @Optional
     @PathSensitive(PathSensitivity.NAME_ONLY)
     public abstract RegularFileProperty getSource();
+
+    /// Returns directories configured for the merged primary root; ignored for an explicit JAR.
+    /// Missing directories are skipped. Duplicate files or links fail. Producer tasks are inferred.
+    /// File and directory permissions are normalized to 0644 and 0755 respectively.
+    /// @return the ordered configurable directory collection
+    @Internal
+    public abstract ConfigurableFileCollection getInputDirectories();
+
+    /// Returns effective directory inputs, empty when [#getSource()] is present.
+    /// @return the tracked directory collection
+    @InputFiles
+    @PathSensitive(PathSensitivity.RELATIVE)
+    public FileCollection getInputDirectoryFiles() { return inputDirectoryFiles; }
+
+    /// Returns effective directory order so changes invalidate the output.
+    /// @return absolute directory locations in merge order
+    @Input
+    public List<String> getInputDirectoryOrder() {
+        return inputDirectoryFiles.getFiles().stream().map(File::getAbsolutePath).toList();
+    }
+
+    /// Returns symbolic-link identities and targets, which file-content snapshots alone do not preserve.
+    /// Paths are relative to each input directory and qualified by its ordinal; traversal does not follow links.
+    /// @return sorted link descriptions in directory order
+    /// @throws IOException if traversing an existing input or reading a link fails
+    @Input
+    public List<String> getInputDirectoryLinks() throws IOException {
+        List<String> links = new ArrayList<>();
+        int index = 0;
+        for (File directory : inputDirectoryFiles) {
+            Path root = directory.toPath();
+            if (Files.exists(root, LinkOption.NOFOLLOW_LINKS)) {
+                final String prefix = index + ":";
+                try (var paths = Files.walk(root)) {
+                    for (Path path : paths.filter(Files::isSymbolicLink).sorted().toList()) {
+                        links.add(prefix + root.relativize(path) + "\0" + Files.readSymbolicLink(path));
+                    }
+                }
+            }
+            index++;
+        }
+        return links;
+    }
+
+    /// Returns the merged root's metadata filename; explicit JAR inputs retain their own name.
+    /// @return a filename ending in `.jar`
+    @Input
+    public abstract Property<String> getSourceName();
+
+    /// Returns main manifest attribute overrides, independent of the Java `jar` task.
+    /// Defaults to `Manifest-Version: 1.0`; values cannot contain CR, LF, or NUL.
+    /// @return the tracked main-attribute map
+    @Input
+    public abstract MapProperty<String, String> getManifestAttributes();
 
     /// Returns additional classpath JARs or directories in lookup order.
     ///
@@ -142,7 +210,7 @@ public abstract class JanexPack extends DefaultTask {
     @Optional
     public abstract Property<String> getMainClass();
 
-    /// Returns the optional main module; when set, the primary JAR enters the module path.
+    /// Returns the optional main module; when set, the primary resource root enters the module path.
     ///
     /// @return the optional main-module property
     @Input
@@ -249,7 +317,8 @@ public abstract class JanexPack extends DefaultTask {
     public void pack() throws IOException {
         Path output = getOutputFile().get().getAsFile().toPath().toAbsolutePath().normalize();
         List<File> inputs = new ArrayList<>();
-        inputs.add(getSource().get().getAsFile());
+        if (getSource().isPresent()) inputs.add(getSource().get().getAsFile());
+        inputs.addAll(inputDirectoryFiles.getFiles());
         inputs.addAll(getClassPath().getFiles());
         inputs.addAll(getModulePath().getFiles());
         if (getNativeLauncher().isPresent()) {
@@ -260,7 +329,7 @@ public abstract class JanexPack extends DefaultTask {
         }
         for (File input : inputs) {
             Path path = input.toPath().toAbsolutePath().normalize();
-            if (output.equals(path) || (Files.exists(output) && Files.isSameFile(output, path))
+            if (output.equals(path) || (Files.exists(output) && Files.exists(path) && Files.isSameFile(output, path))
                     || (Files.isDirectory(path) && output.startsWith(path))) {
                 throw new GradleException("Janex output must not replace or be inside an input: " + output);
             }
@@ -269,7 +338,16 @@ public abstract class JanexPack extends DefaultTask {
         Path temporaryDirectory = Files.createTempDirectory(output.getParent(), ".janex-");
         Path temporaryOutput = temporaryDirectory.resolve(output.getFileName());
         try {
-            PackOptions options = new PackOptions(getSource().get().getAsFile().toPath(), temporaryOutput);
+            PackOptions options;
+            if (getSource().isPresent()) {
+                options = new PackOptions(getSource().get().getAsFile().toPath(), temporaryOutput);
+            } else {
+                options = new PackOptions(inputDirectoryFiles.getFiles().stream().map(File::toPath)
+                        .filter(path -> Files.exists(path, LinkOption.NOFOLLOW_LINKS)).toList(), temporaryOutput);
+                options.sourceName = getSourceName().get();
+                options.normalizeSourcePermissions = true;
+            }
+            options.manifestAttributes.putAll(getManifestAttributes().get());
             options.applicationId = getApplicationId().get();
             options.mainClass = getMainClass().getOrNull();
             options.mainModule = getMainModule().getOrNull();

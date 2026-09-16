@@ -41,12 +41,12 @@ public final class JanexWriter {
         Path output = options.output.toAbsolutePath().normalize();
         if (Files.exists(output, LinkOption.NOFOLLOW_LINKS)) throw new FileAlreadyExistsException(output.toString());
         List<Path> paths = new ArrayList<>();
-        paths.add(options.source);
         paths.addAll(options.classPath);
         paths.addAll(options.modulePath);
-        options.limits.elements(paths.size());
+        options.limits.elements((long) paths.size() + 1);
         List<Resources> roots = new ArrayList<>();
         long[] total = {0};
+        roots.add(Resources.primary(options, total));
         for (Path path : paths) roots.add(new Resources(path, options, total));
         String mainClass = options.mainClass;
         if (mainClass == null && roots.get(0).manifest != null) mainClass = roots.get(0).manifest.getMainAttributes().getValue("Main-Class");

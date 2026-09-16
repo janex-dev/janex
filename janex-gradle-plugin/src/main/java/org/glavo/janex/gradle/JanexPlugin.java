@@ -4,6 +4,7 @@
 package org.glavo.janex.gradle;
 
 import java.util.Collections;
+import java.util.Map;
 
 import org.gradle.api.Plugin;
 import org.gradle.api.Project;
@@ -11,7 +12,8 @@ import org.gradle.api.plugins.JavaApplication;
 import org.gradle.api.plugins.JavaPlugin;
 import org.gradle.api.provider.Provider;
 import org.gradle.api.tasks.TaskProvider;
-import org.gradle.api.tasks.bundling.Jar;
+import org.gradle.api.tasks.SourceSet;
+import org.gradle.api.tasks.SourceSetContainer;
 
 /// Applies the Java plugin and registers the `janex` extension and `janexPack` task.
 /// The package participates in `assemble`. Applying the application plugin supplies
@@ -28,7 +30,10 @@ public final class JanexPlugin implements Plugin<Project> {
     public void apply(Project project) {
         project.getPluginManager().apply(JavaPlugin.class);
         JanexExtension extension = project.getExtensions().create("janex", JanexExtension.class);
-        extension.getSource().convention(project.getTasks().named("jar", Jar.class).flatMap(Jar::getArchiveFile));
+        extension.getInputDirectories().from(project.getExtensions().getByType(SourceSetContainer.class)
+                .named("main").map(SourceSet::getOutput));
+        extension.getSourceName().convention(project.getName() + ".jar");
+        extension.getManifestAttributes().convention(Map.of("Manifest-Version", "1.0"));
         extension.getApplicationId().convention("main");
         extension.getJvmOptions().convention(Collections.emptyList());
         extension.getArguments().convention(Collections.emptyList());
@@ -58,6 +63,9 @@ public final class JanexPlugin implements Plugin<Project> {
             task.setGroup("distribution");
             task.setDescription("Packages the application and its runtime dependencies as a Janex file.");
             task.getSource().convention(extension.getSource());
+            task.getInputDirectories().from(extension.getInputDirectories());
+            task.getSourceName().convention(extension.getSourceName());
+            task.getManifestAttributes().convention(extension.getManifestAttributes());
             task.getClassPath().from(extension.getClassPath());
             task.getModulePath().from(extension.getModulePath());
             task.getMainClass().convention(extension.getMainClass());

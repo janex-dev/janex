@@ -18,6 +18,16 @@ empty directories, relative symbolic links, and available permission bits. Times
 Multi-Release JARs become ordered Java-version layers. Inputs are bounded and must remain unchanged
 during writing. Repeated file contents share blobs after byte-for-byte comparison.
 
+`new PackOptions(List<Path> directories, Path output)` merges directories into one primary root.
+The list is copied, missing directories fail, duplicate directories merge, and duplicate files or
+links fail. `sourceName` sets this root's JAR identity without creating an archive. An empty list
+permits a manifest-only root. `normalizeSourcePermissions` uses 0644 for primary files and 0755 for
+directories; dependencies and symbolic links retain their original handling.
+
+`manifestAttributes` overrides main attributes before Multi-Release layers and entry-point inference
+are processed. Existing named sections are preserved; an empty map leaves the manifest unchanged.
+Names must be valid and unique ignoring case, and values must not contain CR, LF, or NUL.
+
 `externalClassPath` and `externalModulePath` accept `PackOptions.ExternalDependency` declarations;
 these are recorded without downloading or resolving transitive dependencies. The application reader
 validates URI and module-requirement syntax. A `mainModule` places the primary input on the module path.
@@ -26,7 +36,8 @@ The writer emits format 0.1 with XXH3-64 file checksums and SHA-256 coverage for
 table pages, and nonempty wrappers. Metadata uses a SHA-256 checksum or the configured publisher
 signature. Blobs and table pages use dictionary-free Zstandard
 when compressed bytes plus encoding overhead are smaller. Set `options.compression = false` to
-disable compression. The encoder uses Aircompressor's Java implementation; no native library is needed.
+disable compression. The encoder uses zstd-jni at build time, with `compressionLevel` defaulting to 3;
+the generated application's decoder remains portable Java.
 CLASSFILE transforms share constant-pool strings and class-name components with resource names.
 The writer compares complete pools with and without transforms, retaining the smaller representation.
 Set `options.transformClassfiles = false` to disable this step. Malformed class resources and Modified

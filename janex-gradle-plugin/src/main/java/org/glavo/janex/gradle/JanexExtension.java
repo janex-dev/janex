@@ -9,6 +9,7 @@ import org.gradle.api.model.ObjectFactory;
 import org.gradle.api.file.ConfigurableFileCollection;
 import org.gradle.api.file.RegularFileProperty;
 import org.gradle.api.provider.ListProperty;
+import org.gradle.api.provider.MapProperty;
 import org.gradle.api.provider.Property;
 
 /// Configures the application's Janex package using lazy Gradle properties.
@@ -63,10 +64,29 @@ public abstract class JanexExtension {
     /// @param action configuration applied immediately
     public void resources(Action<? super JanexResources> action) { action.execute(resources); }
 
-    /// Returns the primary JAR, defaulting to the Java plugin's `jar` output.
+    /// Returns an optional primary JAR overriding [#getInputDirectories()].
     ///
-    /// @return the primary JAR file property
+    /// @return the optional primary JAR file property
     public abstract RegularFileProperty getSource();
+
+    /// Returns directories merged into one primary root, defaulting to `sourceSets.main.output`.
+    /// Missing output directories are skipped. Duplicate files or links fail packaging.
+    /// Files use 0644 permissions and directories 0755, independent of build-host permissions.
+    /// Configure `processResources` for additional files, path mappings, and generated resources.
+    /// Ignored when [#getSource()] is present.
+    /// @return the ordered directory collection with producer task dependencies
+    public abstract ConfigurableFileCollection getInputDirectories();
+
+    /// Returns the merged root's JAR identity, defaulting to the project name plus `.jar`.
+    /// This is metadata, not an intermediate output file. Explicit JAR inputs retain their filename.
+    /// @return the filename property
+    public abstract Property<String> getSourceName();
+
+    /// Returns main manifest attributes merged into the primary input's manifest.
+    /// Defaults to `Manifest-Version: 1.0`. These settings are independent of the `jar` task.
+    /// Names must be valid and unique ignoring case; values must not contain CR, LF, or NUL.
+    /// @return the manifest-attribute map
+    public abstract MapProperty<String, String> getManifestAttributes();
 
     /// Returns additional embedded classpath entries in lookup order.
     ///
@@ -79,13 +99,13 @@ public abstract class JanexExtension {
     public abstract ConfigurableFileCollection getModulePath();
 
     /// Returns the optional binary main-class name, defaulting to `application.mainClass`.
-    /// When absent, the writer attempts to infer the entry point from the primary JAR.
+    /// When absent, the writer attempts to infer the entry point from the primary manifest or module descriptor.
     ///
     /// @return the optional main-class property
     public abstract Property<String> getMainClass();
 
     /// Returns the optional main module, defaulting to `application.mainModule`.
-    /// When present, the primary JAR is placed on the module path.
+    /// When present, the primary resource root is placed on the module path.
     ///
     /// @return the optional main-module property
     public abstract Property<String> getMainModule();

@@ -17,8 +17,20 @@ import org.glavo.janex.reader.ReadLimits;
 /// Configures one application package. Fields and lists may be changed before writing.
 /// Neither these options nor input files may be changed while a write is in progress.
 public final class PackOptions {
-    /// Primary directory or JAR, placed first on the classpath or selected module path.
+    /// Primary directory or JAR, or null when [#sourceDirectories] supplies a merged root.
     public final Path source;
+    /// Directories merged into one primary root when [#source] is null. Missing directories fail.
+    /// Duplicate directory records merge; duplicate file or link paths fail even when bytes match.
+    public final List<Path> sourceDirectories;
+    /// JAR identity for the merged primary root; must be a filename ending in `.jar`.
+    public String sourceName = "resources.jar";
+    /// Main manifest attributes added to or replacing primary-input attributes before layer parsing.
+    /// Attribute names must be valid and unique ignoring case; values cannot contain CR, LF, or NUL.
+    /// Empty leaves an existing manifest unchanged. Named manifest sections are retained.
+    public final Map<String, String> manifestAttributes = new LinkedHashMap<>();
+    /// Whether primary files and directories use fixed 0644 and 0755 permissions.
+    /// Symbolic links remain unchanged. Dependency permissions are unaffected. Defaults to false.
+    public boolean normalizeSourcePermissions;
     /// Destination; writing requires that it does not exist, including as a symbolic link.
     public final Path output;
     /// Additional embedded classpath inputs in lookup order.
@@ -97,6 +109,17 @@ public final class PackOptions {
     /// @param output nonnull destination
     public PackOptions(Path source, Path output) {
         this.source = Objects.requireNonNull(source);
+        this.sourceDirectories = List.of();
+        this.output = Objects.requireNonNull(output);
+    }
+
+    /// Creates options that merge zero or more directories into one primary resource root.
+    /// The directory list is copied; an empty list permits a manifest-only primary root.
+    /// @param sourceDirectories nonnull directory paths, with no null elements
+    /// @param output nonnull destination
+    public PackOptions(List<Path> sourceDirectories, Path output) {
+        this.source = null;
+        this.sourceDirectories = List.copyOf(sourceDirectories);
         this.output = Objects.requireNonNull(output);
     }
 

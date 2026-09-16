@@ -33,7 +33,47 @@ final class Resources {
 
     /// Imports one input and updates the shared aggregate byte counter.
     Resources(Path path, PackOptions options, long[] total) throws IOException {
+        this(importPath(path, options, total), options, total, Map.of());
+    }
+
+    /// Imported names and bytes before manifest-driven Multi-Release layer interpretation.
+    /// @param name root JAR identity
+    /// @param entries owned mutable unlayered resource map
+    private record Imported(String name, SortedMap<String, Node> entries) { }
+
+    /// Imports the primary input, merging directory outputs and applying manifest overrides.
+    static Resources primary(PackOptions options, long[] total) throws IOException {
+        Imported imported;
+        if (options.source != null) {
+            imported = importPath(options.source, options, total);
+        } else {
+            Input.require(options.sourceName != null && options.sourceName.endsWith(".jar")
+                    && !options.sourceName.contains("/") && !options.sourceName.contains("\\")
+                    && options.sourceName.indexOf(0) < 0, "Invalid primary JAR filename");
+            options.limits.elements(options.sourceDirectories.size());
+            SortedMap<String, Node> entries = tree();
+            for (Path path : options.sourceDirectories) {
+                Input.require(Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS), "Primary input must be a directory: " + path);
+                Imported input = importPath(path, options, total);
+                for (var entry : input.entries.entrySet()) {
+                    Node previous = entries.get(entry.getKey());
+                    if (previous != null && previous.directory() && entry.getValue().directory()) continue;
+                    put(entries, entry.getKey(), entry.getValue(), options);
+                }
+            }
+            imported = new Imported(options.sourceName, entries);
+        }
+        if (options.normalizeSourcePermissions) {
+            imported.entries.replaceAll((path, node) -> node.target == null
+                    ? new Node(node.bytes, null, node.directory() ? 0755 : 0644) : node);
+        }
+        return new Resources(imported, options, total, options.manifestAttributes);
+    }
+
+    /// Imports unlayered resources from one directory or archive.
+    private static Imported importPath(Path path, PackOptions options, long[] total) throws IOException {
         SortedMap<String, Node> entries = tree();
+        String name;
         BasicFileAttributes attributes = Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
         if (attributes.isDirectory()) {
             name = "resources.jar";
@@ -55,9 +95,45 @@ final class Resources {
                         target != null || entry.mode() < 0 ? -1 : entry.mode() & 07777), options);
             }
         }
+        return new Imported(name, entries);
+    }
+
+    /// Applies primary manifest attributes, then resolves Multi-Release layers and path conflicts.
+    private Resources(Imported imported, PackOptions options, long[] total,
+                      Map<String, String> attributes) throws IOException {
+        name = imported.name;
+        SortedMap<String, Node> entries = imported.entries;
         Node main = entries.get("META-INF/MANIFEST.MF");
         Input.require(main == null || main.bytes != null, "JAR manifest must be a regular file");
-        manifest = main == null ? null : new Manifest(new ByteArrayInputStream(main.bytes));
+        Manifest parsedManifest = main == null ? null : new Manifest(new ByteArrayInputStream(main.bytes));
+        if (!attributes.isEmpty()) {
+            if (parsedManifest == null) parsedManifest = new Manifest();
+            Set<String> names = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+            for (var entry : new TreeMap<>(attributes).entrySet()) {
+                String value = entry.getValue();
+                Input.require(names.add(entry.getKey()), "Duplicate manifest attribute: " + entry.getKey());
+                Input.require(value != null && value.indexOf('\r') < 0 && value.indexOf('\n') < 0
+                        && value.indexOf(0) < 0, "Invalid manifest attribute value");
+                try {
+                    parsedManifest.getMainAttributes().putValue(entry.getKey(), value);
+                } catch (IllegalArgumentException failure) {
+                    throw new IOException("Invalid manifest attribute name: " + entry.getKey(), failure);
+                }
+            }
+            if (parsedManifest.getMainAttributes().getValue("Manifest-Version") == null) {
+                parsedManifest.getMainAttributes().putValue("Manifest-Version", "1.0");
+            }
+            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+            parsedManifest.write(buffer);
+            byte[] bytes = buffer.toByteArray();
+            options.limits.bytes(bytes.length);
+            if (main != null) total[0] -= main.bytes.length;
+            addSize(total, bytes.length, options);
+            entries.put("META-INF/MANIFEST.MF", new Node(bytes, null,
+                    options.normalizeSourcePermissions ? 0644 : main == null ? -1 : main.mode));
+            options.limits.elements(entries.size());
+        }
+        manifest = parsedManifest;
         boolean multi = manifest != null && "true".equalsIgnoreCase(manifest.getMainAttributes().getValue("Multi-Release"));
         layers.put(0, tree());
         for (var entry : entries.entrySet()) {

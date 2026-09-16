@@ -28,6 +28,7 @@ public final class WriterTest {
         try {
             jar(root);
             directory(root);
+            mergedDirectories(root);
             compression(root);
             compressionLevels(root);
             classfiles(root);
@@ -40,6 +41,55 @@ public final class WriterTest {
                 for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);
             }
         }
+    }
+
+    /// Checks direct directory merging, generated manifests, normalized modes, and conflict failures.
+    private static void mergedDirectories(Path root) throws Exception {
+        Path classes = Files.createDirectories(root.resolve("merged-classes/shared"));
+        Path resources = Files.createDirectories(root.resolve("merged-resources/shared"));
+        Files.writeString(classes.resolve("class.txt"), "compiled");
+        Files.writeString(resources.resolve("resource.txt"), "resource");
+        Path versioned = Files.createDirectories(resources.getParent().resolve("META-INF/versions/9/shared"));
+        Files.writeString(versioned.resolve("resource.txt"), "versioned");
+        Path manifestFile = resources.getParent().resolve("META-INF/MANIFEST.MF");
+        Files.writeString(manifestFile, "Manifest-Version: 1.0\r\nOriginal: retained\r\n\r\nName: shared/class.txt\r\nCustom: section\r\n\r\n");
+        PackOptions options = new PackOptions(List.of(classes.getParent(), resources.getParent()), root.resolve("merged.janex"));
+        options.sourceName = "direct.jar";
+        options.normalizeSourcePermissions = true;
+        options.manifestAttributes.putAll(Map.of("Main-Class", "demo.Main", "Multi-Release", "true"));
+        JanexWriter.write(options);
+        try (JanexReader reader = new JanexReader(options.output)) {
+            var launch = reader.launch("main");
+            require(launch.mainClass.equals("demo.Main"), "Generated manifest inference failed");
+            require(launch.resources.roots().size() == 1, "Primary directories became separate roots");
+            require(launch.resources.roots().get(0).name().equals("direct.jar"), "Primary root name changed");
+            require(text(launch.resources, "shared/class.txt").equals("compiled"), "Classes input was lost");
+            require(text(launch.resources, "shared/resource.txt").equals("versioned"), "Manifest override did not enable version layers");
+            var manifest = new java.util.jar.Manifest(new ByteArrayInputStream(text(launch.resources, "META-INF/MANIFEST.MF").getBytes(StandardCharsets.UTF_8)));
+            require("retained".equals(manifest.getMainAttributes().getValue("Original")), "Existing attributes were lost");
+            require("section".equals(manifest.getAttributes("shared/class.txt").getValue("Custom")), "Named manifest section was lost");
+            require(launch.resources.roots().get(0).files().get("shared/class.txt").permissions() == 0644, "File modes were not normalized");
+        }
+        PackOptions duplicate = new PackOptions(options.sourceDirectories, root.resolve("merged-copy.janex"));
+        duplicate.sourceName = options.sourceName;
+        duplicate.normalizeSourcePermissions = true;
+        duplicate.manifestAttributes.putAll(options.manifestAttributes);
+        JanexWriter.write(duplicate);
+        require(Arrays.equals(Files.readAllBytes(options.output), Files.readAllBytes(duplicate.output)), "Merged output is not reproducible");
+        Files.writeString(resources.resolve("class.txt"), "compiled");
+        PackOptions conflict = new PackOptions(options.sourceDirectories, root.resolve("merged-conflict.janex"));
+        conflict.mainClass = "demo.Main";
+        fails(() -> JanexWriter.write(conflict));
+        require(!Files.exists(conflict.output), "Duplicate input published a package");
+        Files.delete(resources.resolve("class.txt"));
+        PackOptions invalid = new PackOptions(options.sourceDirectories, root.resolve("merged-invalid.janex"));
+        invalid.manifestAttributes.put("Main-Class", "demo.Main\r\nInjected: true");
+        fails(() -> JanexWriter.write(invalid));
+        invalid.manifestAttributes.clear();
+        invalid.manifestAttributes.putAll(Map.of("Main-Class", "demo.Main", "main-class", "demo.Other"));
+        fails(() -> JanexWriter.write(invalid));
+        invalid.sourceName = "../bad.jar";
+        fails(() -> JanexWriter.write(invalid));
     }
 
     /// Checks paging, duplicate blobs, Multi-Release selection, inference, and both wrapper forms.
