@@ -68,6 +68,8 @@ fn exercise(shell: &str, script: &str, extension: &str) {
     let second = temp.path().join("SDK's second $value");
     register(&first, &home, "8.14.2");
     register(&second, &home, "8.14.3");
+    let first = janex_java::runtime::java_path(&first.canonicalize().unwrap());
+    let second = janex_java::runtime::java_path(&second.canonicalize().unwrap());
     let binaries = temp.path().join("Program's $value @JANEX_BIN@ @JANEX_EXE@");
     fs::create_dir_all(&binaries).unwrap();
     let executable = binaries.join(if cfg!(windows) { "janex.exe" } else { "janex" });

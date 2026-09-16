@@ -72,4 +72,13 @@ tasks.register<JavaExec>("checkSignatures") {
     systemProperty("janex.test.fixtures", layout.projectDirectory.dir("../janex-signature/tests/fixtures").asFile.absolutePath)
 }
 
-tasks.check { dependsOn("checkWriter", "checkSignatures") }
+tasks.register<JavaExec>("checkNativePrefix") {
+    group = "verification"
+    description = "Checks native launcher prefixes with a bounded Java heap."
+    classpath = sourceSets.testFixtures.get().runtimeClasspath
+    mainClass = "org.glavo.janex.writer.NativePrefixTest"
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = "128m"
+}
+
+tasks.check { dependsOn("checkWriter", "checkSignatures", "checkNativePrefix") }

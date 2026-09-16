@@ -159,11 +159,30 @@ All Java modules and the plugin marker use `workspace.package.version` from the 
 including standalone and composite plugin builds. See [project versioning](../docs/BuildArtifacts.md#versioning)
 for the development and release workflow.
 
-For a CNB Maven repository, pass its actual address using `-PjanexPublishUrl=...` and supply publishing
-credentials through `ORG_GRADLE_PROJECT_cnbUsername=cnb` and
-`ORG_GRADLE_PROJECT_cnbPassword=<publishing-token>` in the CI environment. Then run
-`:janex-gradle-plugin:publishAllPublicationsToCnbRepository`. The publishing repository is configured
-only when its URL is supplied. Public consumers need only its URL, without credentials.
+The CI workflow publishes snapshots to `https://maven.cnb.cool/Glavo/maven/-/packages/` after all
+platform tests pass on `main`. It also supports manual runs on `main`, with the same test requirement.
+Publishing uses the repository secret `CNB_PUBLISH_TOKEN`; jobs run serially and skip superseded
+commits and versions without the `-SNAPSHOT` suffix. The plugin, marker, reader, and writer are published
+together; the writer includes the bootstrap JAR.
+
+To consume a snapshot, configure `settings.gradle.kts`:
+
+```kotlin
+pluginManagement {
+    repositories {
+        maven { url = uri("https://maven.cnb.cool/Glavo/maven/-/packages/") }
+        gradlePluginPortal()
+        mavenCentral()
+    }
+}
+```
+
+Then use `id("org.glavo.janex") version "0.1.0-SNAPSHOT"` in `build.gradle.kts`.
+Public consumers do not need publishing credentials.
+
+For local publishing, pass `-PjanexPublishUrl=https://maven.cnb.cool/Glavo/maven/-/packages/` to
+`:janex-gradle-plugin:publishAllPublicationsToCnbRepository`, with credentials supplied through
+`ORG_GRADLE_PROJECT_cnbUsername=cnb` and `ORG_GRADLE_PROJECT_cnbPassword=<publishing-token>`.
 
 ## Verification
 

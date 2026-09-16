@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -50,3 +51,45 @@ jobs:
         run: python janex-signature/tests/fixtures/cms/check_generated.py
       - name: Verify generated OpenPGP signatures with GnuPG
         run: python janex-signature/tests/fixtures/openpgp/check_generated.py
+
+  publish-snapshot:
+    name: Publish Maven snapshot
+    needs: test
+    if: >-
+      github.repository == 'janex-dev/janex' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: publish-cnb-maven-snapshot
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-java@v6
+        with:
+          distribution: liberica
+          java-version: '25'
+      - name: Publish snapshot to CNB
+        shell: bash
+        env:
+          ORG_GRADLE_PROJECT_cnbUsername: cnb
+          ORG_GRADLE_PROJECT_cnbPassword: ${{ secrets.CNB_PUBLISH_TOKEN }}
+        run: |
+          main_sha="$(git ls-remote "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" refs/heads/main | cut -f1)"
+          if [[ "$GITHUB_SHA" != "$main_sha" ]]; then
+            echo "::notice::Skipping superseded commit $GITHUB_SHA"
+            exit 0
+          fi
+          version="$(bash ./gradlew --no-daemon --console=plain -q properties | sed -n 's/^version: //p')"
+          if [[ "$version" != *-SNAPSHOT ]]; then
+            echo "::notice::Skipping non-snapshot version: $version"
+            exit 0
+          fi
+          : "${ORG_GRADLE_PROJECT_cnbPassword:?CNB_PUBLISH_TOKEN is required}"
+          bash ./gradlew --no-daemon --console=plain \
+            :janex-gradle-plugin:publishAllPublicationsToCnbRepository \
+            -PjanexPublishUrl=https://maven.cnb.cool/Glavo/maven/-/packages/
