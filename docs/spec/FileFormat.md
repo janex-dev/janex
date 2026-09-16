@@ -833,6 +833,9 @@ may use `CONSTANT_External_String` or remain unchanged.
 Both entries decode to `CONSTANT_Utf8` (tag `0x01`), followed by a big-endian `u16` byte length and
 the restored bytes without transcoding. The result must be valid Modified UTF-8 and fit in 65,535 bytes.
 
+Decoders check transform framing, pool references, and byte lengths. Validation of class-file
+internals, including Modified UTF-8, may be deferred to the JVM when the class is loaded.
+
 ## Resource Roots
 
 A `ResourceRoot` is a resource tree built from ordered layers. Using the consumer's

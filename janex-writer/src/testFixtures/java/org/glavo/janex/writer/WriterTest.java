@@ -289,6 +289,26 @@ public final class WriterTest {
         require(ClassFileEncoder.transform(new byte[]{1, 2, 3}, strings, ReadLimits.DEFAULT) == null,
                 "Malformed class was transformed");
         require(strings.size() == checkpoint, "Rejected class polluted the data pool");
+        for (byte[] opaque : new byte[][]{original.clone(), Arrays.copyOf(original, original.length - 1)}) {
+            opaque[6] = 0;
+            opaque[7] = 0;
+            byte[] className = "shared/Example0".getBytes(StandardCharsets.UTF_8);
+            for (int i = 0; i <= opaque.length - className.length; i++) {
+                if (Arrays.equals(opaque, i, i + className.length, className, 0, className.length)) {
+                    opaque[i] = '/';
+                    opaque[i + 6] = '_';
+                }
+            }
+            fails(() -> ClassFile.validate(opaque));
+            DataPool opaquePool = new DataPool(ReadLimits.DEFAULT);
+            byte[] encoded = ClassFileEncoder.transform(opaque, opaquePool, ReadLimits.DEFAULT);
+            require(encoded != null, "Transform unnecessarily validated class-file internals");
+            Input poolInput = new Input(opaquePool.encode());
+            byte[][] entries = new byte[Math.toIntExact(poolInput.uint())][];
+            for (int i = 0; i < entries.length; i++) entries[i] = poolInput.sized();
+            require(Arrays.equals(opaque, ClassFile.restore(encoded, entries, opaque.length)),
+                    "Transform changed uninterpreted class-file bytes");
+        }
         Files.write(classes.resolve("broken.class"), new byte[]{1, 2, 3});
         for (boolean compression : new boolean[]{true, false}) {
             long rawSize = 0;

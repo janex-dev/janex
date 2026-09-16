@@ -3,8 +3,8 @@
 
 //! Lossless constant-pool string sharing and Java class/module descriptor inspection.
 //!
-//! Parsing checks framing, constant-pool references, code boundaries, and module
-//! descriptors. JVM bytecode type verification remains the runtime's responsibility.
+//! Transformation checks only constant-pool framing. Explicit inspection also checks
+//! references, code boundaries, and module descriptors. The JVM validates loaded classes.
 
 use crate::{
     Result,
@@ -60,19 +60,9 @@ struct Constant<'a> {
     body: &'a [u8],
 }
 
-/// A class-file view with original constant-pool record boundaries.
-struct Parsed<'a> {
-    /// Constant-pool slots, including unusable slot zero and long/double second slots.
-    constants: Vec<Option<Constant<'a>>>,
-    /// First byte after the constant pool.
-    body_start: usize,
-    /// Extracted class information.
-    info: ClassInfo,
-}
-
 /// Parses one ordinary class file, rejecting trailing bytes and malformed structural references.
 pub fn inspect(bytes: &[u8], limits: Limits) -> Result<ClassInfo> {
-    Ok(parse(bytes, limits)?.info)
+    parse(bytes, limits)
 }
 
 /// Produces a smaller transformed class file, or returns `None` without modifying the pool.
@@ -80,11 +70,11 @@ pub fn inspect(bytes: &[u8], limits: Limits) -> Result<ClassInfo> {
 /// Entries are externalized only when their Modified UTF-8 bytes are also valid UTF-8
 /// and the final transformation saves the minimum transform-descriptor overhead.
 /// Existing constant-pool indices and body bytes are retained.
+/// Class-file internals are not validated beyond constant-pool framing.
 pub fn transform(bytes: &[u8], strings: &mut DataPool, limits: Limits) -> Result<Option<Vec<u8>>> {
-    let parsed = parse(bytes, limits)?;
+    let (constants, body_start) = scan_pool(bytes, limits)?;
     let checkpoint = strings.len();
-    let classes: BTreeSet<_> = parsed
-        .constants
+    let classes: BTreeSet<_> = constants
         .iter()
         .flatten()
         .filter(|constant| constant.tag == 7)
@@ -92,16 +82,21 @@ pub fn transform(bytes: &[u8], strings: &mut DataPool, limits: Limits) -> Result
         .collect();
     let mut output = bytes[..10].to_vec();
     output[..4].copy_from_slice(&[0xca, 0xfe, 0xca, 0x70]);
-    for (index, constant) in parsed.constants.iter().enumerate().skip(1) {
+    for (index, constant) in constants.iter().enumerate().skip(1) {
         let Some(constant) = constant else {
             continue;
         };
         let mut replacement = Vec::new();
         if constant.tag == 1 {
             let original = &constant.body[2..];
-            if let Ok(text) = std::str::from_utf8(original) {
+            if let Ok(text) = std::str::from_utf8(original)
+                && text.chars().all(|ch| ch != '\0' && ch <= '\u{ffff}')
+            {
                 let before = strings.len();
-                if classes.contains(&(index as u16)) && !text.starts_with('[') {
+                if classes.contains(&(index as u16))
+                    && !text.starts_with('[')
+                    && !text.starts_with('/')
+                {
                     let (package, name) = text.rsplit_once('/').unwrap_or(("", text));
                     if !name.is_empty() {
                         replacement.push(0xfe);
@@ -125,7 +120,7 @@ pub fn transform(bytes: &[u8], strings: &mut DataPool, limits: Limits) -> Result
             output.extend(replacement);
         }
     }
-    output.extend_from_slice(&bytes[parsed.body_start..]);
+    output.extend_from_slice(&bytes[body_start..]);
     let mut descriptor_size = Vec::new();
     write_vuint(&mut descriptor_size, bytes.len() as u64)?;
     if output.len() + descriptor_size.len() + 2 >= bytes.len() {
@@ -137,8 +132,9 @@ pub fn transform(bytes: &[u8], strings: &mut DataPool, limits: Limits) -> Result
 
 /// Restores an ordinary class file from a Janex CLASSFILE transform using the selected pool.
 ///
-/// Checks every external index, Modified UTF-8 length, and final class-file framing.
-/// Output allocation is bounded by `limits.max_bytes`.
+/// Checks constant-pool framing, external indices, and encoded string lengths.
+/// The remaining class body and Modified UTF-8 contents are copied without validation.
+/// Output allocation is bounded by `limits.max_bytes`; callers check the declared decoded size.
 pub fn restore(bytes: &[u8], strings: &DataPool, limits: Limits) -> Result<Vec<u8>> {
     let mut decoder = Decoder::new(bytes, limits)?;
     if decoder.take(4)? != [0xca, 0xfe, 0xca, 0x70] {
@@ -204,21 +200,16 @@ pub fn restore(bytes: &[u8], strings: &DataPool, limits: Limits) -> Result<Vec<u
     }
     limits.bytes(output.len() as u64 + decoder.remaining() as u64)?;
     output.extend_from_slice(decoder.take(decoder.remaining())?);
-    inspect(&output, limits)?;
     Ok(output)
 }
 
-/// Parses constant-pool slots and the framed class body.
-fn parse(bytes: &[u8], limits: Limits) -> Result<Parsed<'_>> {
+/// Scans only the constant-pool framing required for a lossless transformation.
+fn scan_pool(bytes: &[u8], limits: Limits) -> Result<(Vec<Option<Constant<'_>>>, usize)> {
     let mut decoder = Decoder::new(bytes, limits)?;
     if decoder.take(4)? != [0xca, 0xfe, 0xba, 0xbe] {
         return Err(invalid("incorrect class magic"));
     }
-    let minor = read_u16(&mut decoder)?;
-    let major = read_u16(&mut decoder)?;
-    if major < 45 || (major >= 56 && minor != 0 && minor != 65535) {
-        return Err(invalid("invalid class-file version"));
-    }
+    decoder.take(4)?;
     let count = usize::from(read_u16(&mut decoder)?);
     limits.elements(count as u64)?;
     if count == 0 {
@@ -240,8 +231,21 @@ fn parse(bytes: &[u8], limits: Limits) -> Result<Parsed<'_>> {
             constants.push(None);
         }
     }
-    check_constants(&constants, major)?;
     let body_start = decoder.position();
+    Ok((constants, body_start))
+}
+
+/// Parses and explicitly validates constant-pool references and the framed class body.
+fn parse(bytes: &[u8], limits: Limits) -> Result<ClassInfo> {
+    let (constants, body_start) = scan_pool(bytes, limits)?;
+    let minor = be_u16(bytes, 4);
+    let major = be_u16(bytes, 6);
+    if major < 45 || (major >= 56 && minor != 0 && minor != 65535) {
+        return Err(invalid("invalid class-file version"));
+    }
+    check_constants(&constants, major)?;
+    let mut decoder = Decoder::new(bytes, limits)?;
+    decoder.take(body_start)?;
     let flags = read_u16(&mut decoder)?;
     let name = indirect_text(&constants, read_u16(&mut decoder)?, 7)?;
     let superclass = read_u16(&mut decoder)?;
@@ -293,24 +297,20 @@ fn parse(bytes: &[u8], limits: Limits) -> Result<Parsed<'_>> {
             ));
         }
     }
-    Ok(Parsed {
-        constants,
-        body_start,
-        info: ClassInfo {
-            major,
-            minor,
-            name,
-            module,
-        },
+    Ok(ClassInfo {
+        major,
+        minor,
+        name,
+        module,
     })
 }
 
-/// Consumes one ordinary constant-pool body and validates Modified UTF-8 bytes.
+/// Consumes one ordinary constant-pool body without interpreting its contents.
 fn read_constant(tag: u8, decoder: &mut Decoder<'_>) -> Result<()> {
     match tag {
         1 => {
             let length = usize::from(read_u16(decoder)?);
-            decode_modified(decoder.take(length)?)?;
+            decoder.take(length)?;
         }
         3 | 4 | 9 | 10 | 11 | 12 | 17 | 18 => {
             decoder.take(4)?;
@@ -333,6 +333,9 @@ fn read_constant(tag: u8, decoder: &mut Decoder<'_>) -> Result<()> {
 fn check_constants(constants: &[Option<Constant<'_>>], major: u16) -> Result<()> {
     for item in constants.iter().flatten() {
         match item.tag {
+            1 => {
+                decode_modified(&item.body[2..])?;
+            }
             7 | 8 | 16 | 19 | 20 => {
                 constant(constants, be_u16(item.body, 0), &[1])?;
             }

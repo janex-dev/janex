@@ -40,8 +40,9 @@ disable compression. The encoder uses zstd-jni at build time, with `compressionL
 the generated application's decoder remains portable Java.
 CLASSFILE transforms share constant-pool strings and class-name components with resource names.
 The writer compares complete pools with and without transforms, retaining the smaller representation.
-Set `options.transformClassfiles = false` to disable this step. Malformed class resources remain
-unchanged. The writer externalizes strings only when their UTF-8 and Modified UTF-8 bytes are identical;
+Set `options.transformClassfiles = false` to disable this step. The transform scans only constant-pool
+framing; unsupported or truncated framing leaves the resource unchanged. The writer externalizes strings
+only when their UTF-8 and Modified UTF-8 bytes are identical;
 other constants retain their original entries. Readers restore pooled bytes without transcoding.
 
 `options.signer` accepts `CmsSigner`, `OpenPgpSigner`, or a caller implementation of `PackageSigner`.

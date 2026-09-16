@@ -5,11 +5,10 @@ package org.glavo.janex.writer;
 
 import java.io.ByteArrayInputStream;
 import java.io.DataInputStream;
+import java.io.EOFException;
 import java.io.IOException;
-import java.nio.charset.CharacterCodingException;
 import java.util.Arrays;
 
-import org.glavo.janex.reader.ClassFile;
 import org.glavo.janex.reader.ReadLimits;
 import org.glavo.janex.reader.internal.Input;
 
@@ -18,36 +17,46 @@ final class ClassFileEncoder {
     /// Prevents instantiation.
     private ClassFileEncoder() { }
 
-    /// Returns transformed bytes or null for malformed or unprofitable class files.
+    /// Returns transformed bytes or null for unsupported framing or unprofitable class files.
+    /// Only constant-pool framing is parsed; class-file internals are not validated.
     /// Retains original entries whose UTF-8 and Modified UTF-8 bytes differ.
     /// Rejected transformations leave the pool unchanged; allocation-limit failures propagate.
     static byte[] transform(byte[] bytes, DataPool strings, ReadLimits limits) throws IOException {
-        try {
-            ClassFile.validate(bytes, limits);
-        } catch (Input.Invalid invalid) {
-            return null;
-        }
+        limits.bytes(bytes.length);
+        if (bytes.length < 10) return null;
         DataInputStream input = new DataInputStream(new ByteArrayInputStream(bytes));
-        input.skipNBytes(8);
+        if (input.readInt() != 0xcafebabe) return null;
+        input.skipNBytes(4);
         int count = input.readUnsignedShort();
+        if (count == 0) return null;
+        limits.elements(count);
         int[] starts = new int[count];
         int[] ends = new int[count];
         boolean[] classes = new boolean[count];
-        for (int i = 1; i < count; i++) {
-            starts[i] = bytes.length - input.available();
-            int tag = input.readUnsignedByte();
-            int size = switch (tag) {
-                case 1 -> input.readUnsignedShort();
-                case 3, 4, 9, 10, 11, 12, 17, 18 -> 4;
-                case 5, 6 -> 8;
-                case 7 -> { classes[input.readUnsignedShort()] = true; yield 0; }
-                case 8, 16, 19, 20 -> 2;
-                case 15 -> 3;
-                default -> throw new IOException("Unknown constant-pool tag");
-            };
-            input.skipNBytes(size);
-            ends[i] = bytes.length - input.available();
-            if (tag == 5 || tag == 6) i++;
+        try {
+            for (int i = 1; i < count; i++) {
+                starts[i] = bytes.length - input.available();
+                int tag = input.readUnsignedByte();
+                int size = switch (tag) {
+                    case 1 -> input.readUnsignedShort();
+                    case 3, 4, 9, 10, 11, 12, 17, 18 -> 4;
+                    case 5, 6 -> 8;
+                    case 7 -> {
+                        int reference = input.readUnsignedShort();
+                        if (reference < count) classes[reference] = true;
+                        yield 0;
+                    }
+                    case 8, 16, 19, 20 -> 2;
+                    case 15 -> 3;
+                    default -> -1;
+                };
+                if (size < 0) return null;
+                input.skipNBytes(size);
+                ends[i] = bytes.length - input.available();
+                if ((tag == 5 || tag == 6) && ++i >= count) return null;
+            }
+        } catch (EOFException truncated) {
+            return null;
         }
         int body = bytes.length - input.available();
         int checkpoint = strings.size();
@@ -59,15 +68,14 @@ final class ClassFileEncoder {
                 if (starts[i] == 0) continue;
                 byte[] replacement = null;
                 if (bytes[starts[i]] == 1) {
-                    DataInputStream utf = new DataInputStream(new ByteArrayInputStream(bytes, starts[i] + 1,
-                            ends[i] - starts[i] - 1));
-                    String text = utf.readUTF();
+                    byte[] raw = Arrays.copyOfRange(bytes, starts[i] + 3, ends[i]);
                     int before = strings.size();
                     try {
-                        byte[] raw = Encoding.utf8(text);
-                        if (Arrays.equals(raw, Arrays.copyOfRange(bytes, starts[i] + 3, ends[i]))) {
+                        String text = Input.utf8(raw);
+                        if (sharedEncoding(text)) {
                             Encoding entry = new Encoding();
-                            if (classes[i] && !text.startsWith("[") && !text.isEmpty() && !text.endsWith("/")) {
+                            if (classes[i] && !text.startsWith("[") && !text.startsWith("/")
+                                    && !text.isEmpty() && !text.endsWith("/")) {
                                 int slash = text.lastIndexOf('/');
                                 entry.write(0xfe);
                                 entry.uint(strings.intern(Encoding.utf8(slash < 0 ? "" : text.substring(0, slash))));
@@ -78,8 +86,8 @@ final class ClassFileEncoder {
                             }
                             if (entry.size() < ends[i] - starts[i]) replacement = entry.toByteArray();
                         }
-                    } catch (CharacterCodingException ignored) {
-                        // Unpaired surrogates retain their original Modified UTF-8 entry.
+                    } catch (Input.Invalid ignored) {
+                        // Entries not representable as UTF-8 retain their original bytes.
                     }
                     if (replacement == null) strings.truncate(before);
                 }
@@ -98,5 +106,14 @@ final class ClassFileEncoder {
         } finally {
             if (!accepted) strings.truncate(checkpoint);
         }
+    }
+
+    /// Tests whether UTF-8 and Modified UTF-8 use the same bytes for this decoded text.
+    private static boolean sharedEncoding(String text) {
+        for (int i = 0; i < text.length(); i++) {
+            char ch = text.charAt(i);
+            if (ch == 0 || Character.isSurrogate(ch)) return false;
+        }
+        return true;
     }
 }

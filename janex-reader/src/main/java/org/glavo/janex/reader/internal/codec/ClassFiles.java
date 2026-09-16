@@ -5,7 +5,6 @@ package org.glavo.janex.reader.internal.codec;
 
 import java.io.*;
 
-import org.glavo.janex.reader.ClassFile;
 import org.glavo.janex.reader.ReadLimits;
 
 /// Restores external CONSTANT_Utf8 entries by copying pooled Modified UTF-8 bytes.
@@ -25,7 +24,7 @@ public final class ClassFiles {
         return restore(bytes, pool, length, ReadLimits.DEFAULT);
     }
 
-    /// Restores and structurally validates class bytes under the inherited resource limits.
+    /// Restores bytes with bounded transform framing; class-file validation belongs to the JVM.
     public static byte[] restore(byte[] bytes, byte[][] pool, int length, ReadLimits limits) throws IOException {
         if (length < 0 || length > limits.maxBytes() || bytes.length > limits.maxBytes()) {
             throw new IOException("CLASSFILE byte limit exceeded");
@@ -106,19 +105,24 @@ public final class ClassFiles {
                     default:
                         throw new IOException("Unknown constant pool tag");
                 }
-                for (int j = 0; j < size; j++) {
-                    data.writeByte(input.readUnsignedByte());
-                }
+                copy(input, bytes, output, size);
             }
         }
-        while (input.available() != 0) {
-            data.writeByte(input.readUnsignedByte());
-        }
+        copy(input, bytes, output, input.available());
         if (output.position != result.length) {
             throw new IOException("CLASSFILE decoded size mismatch");
         }
-        ClassFile.validate(result, limits);
         return result;
+    }
+
+    /// Copies a framed input range without interpreting unchanged class-file bytes.
+    private static void copy(DataInputStream input, byte[] bytes, ByteArrayOutput output, int length) throws IOException {
+        int remaining = input.available();
+        if (length > remaining) {
+            throw new EOFException("Truncated constant-pool entry");
+        }
+        output.write(bytes, bytes.length - remaining, length);
+        input.skipBytes(length);
     }
 
     /// Reads a bounded ULEB128 data index, accepting zero padding permitted by the format.

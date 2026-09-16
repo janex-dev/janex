@@ -65,9 +65,10 @@ changing other aliases of the same file. Resource timestamps retain all signed 1
 permission zero remains distinct from unspecified permissions.
 
 `ClassFile.validate` checks ordinary class framing, constant-pool references and Modified UTF-8,
-code and attribute boundaries, and module descriptors under the supplied reader limits. The
-bootstrap applies the same validation after reversing CLASSFILE transforms, including the indexed
-constant-pool limit. Bytecode type verification remains the runtime's responsibility.
+code and attribute boundaries, and module descriptors under the supplied reader limits when explicitly
+requested. CLASSFILE restoration checks only transform framing, pool references, and byte lengths;
+it copies unchanged fields and the class body without parsing them. The JVM validates restored classes
+when loading them. Module descriptors are parsed when needed to construct the launch graph.
 
 `ContainerReader` owns a seekable channel or opens a local file. It supports automatic standalone
 and JAR/ZIP64 boundary discovery, or an explicit external-tail length. Opening validates framing

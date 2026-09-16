@@ -60,11 +60,16 @@ fn class_transform_restores_exact_bytes_and_preserves_unpaired_surrogates() {
             "prefix {end}"
         );
     }
-    for end in 0..encoded.len() {
+    let body_start = encoded.len() - 14;
+    for end in 0..body_start {
         assert!(
             classfile::restore(&encoded[..end], &pool, Limits::default()).is_err(),
             "transformed prefix {end}"
         );
+    }
+    for end in body_start..encoded.len() {
+        let restored = classfile::restore(&encoded[..end], &pool, Limits::default()).unwrap();
+        assert!(classfile::inspect(&restored, Limits::default()).is_err());
     }
     let mut trailing = bytes.clone();
     trailing.push(0);
@@ -130,12 +135,39 @@ fn external_constants_copy_raw_modified_utf8_without_transcoding() {
             classfile::restore(&transformed, &pool, Limits::default()).unwrap(),
             ordinary
         );
-        for invalid in [vec![0], vec![0xf0, 0x9f, 0x98, 0x80], vec![b'x'; 65536]] {
+        for invalid in [vec![0], vec![0xf0, 0x9f, 0x98, 0x80]] {
             let mut bad_pool = DataPool::new();
-            bad_pool.intern(invalid);
-            assert!(classfile::restore(&transformed, &bad_pool, Limits::default()).is_err());
+            bad_pool.intern(&invalid);
+            let restored = classfile::restore(&transformed, &bad_pool, Limits::default()).unwrap();
+            assert_eq!(
+                &restored[position + 3..position + 3 + invalid.len()],
+                invalid
+            );
+            assert!(classfile::inspect(&restored, Limits::default()).is_err());
         }
+        let mut oversized = DataPool::new();
+        oversized.intern(vec![b'x'; 65536]);
+        assert!(classfile::restore(&transformed, &oversized, Limits::default()).is_err());
     }
+}
+
+#[test]
+fn transform_preserves_uninterpreted_versions_references_and_class_bodies() {
+    let mut original = fixture();
+    original[6..8].fill(0);
+    let body_start = original.len() - 14;
+    original[body_start..].fill(0xff);
+    // Retain an uninterpreted class name that cannot use the split-name form.
+    original[13..27].copy_from_slice(b"/ample_Example");
+    let mut pool = DataPool::new();
+    let encoded = classfile::transform(&original, &mut pool, Limits::default())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        classfile::restore(&encoded, &pool, Limits::default()).unwrap(),
+        original
+    );
+    assert!(classfile::inspect(&original, Limits::default()).is_err());
 }
 
 /// Owns an exclusively created scratch directory for one JDK test.
