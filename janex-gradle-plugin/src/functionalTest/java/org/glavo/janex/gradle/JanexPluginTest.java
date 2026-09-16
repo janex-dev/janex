@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.jar.JarFile;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -42,10 +43,11 @@ public final class JanexPluginTest {
         require(Files.isRegularFile(executable), "Build the Janex CLI first: " + executable);
         Path directory = Path.of(System.getProperty("janex.test.directory"));
         Files.createDirectories(directory);
+        bundledPlugin();
         javaVersionPackaging(Files.createTempDirectory(directory, "java-version-"), executable);
         classpathPackaging(Files.createTempDirectory(directory, "classpath-"), executable);
         modularPackaging(Files.createTempDirectory(directory, "modules-"), executable);
-        publishedPlugin(Files.createTempDirectory(directory, "published-"), executable);
+        publishedPlugin(Files.createTempDirectory(directory, "published-"));
         javaOnlyPackaging(Files.createTempDirectory(directory, "java-only-"));
         signingPackaging(Files.createTempDirectory(directory, "signing-"), executable);
         System.out.println("Janex Gradle plugin functional checks passed.");
@@ -286,28 +288,62 @@ public final class JanexPluginTest {
         }
     }
 
-    /// Resolves the plugin marker and implementation through an ordinary Maven repository.
-    private static void publishedPlugin(Path project, Path executable) throws Exception {
-        fixture(project, false);
-        Path settings = project.resolve("settings.gradle.kts");
+    /// Checks that the published plugin embeds Janex code while retaining third-party dependencies.
+    private static void bundledPlugin() throws Exception {
+        try (JarFile jar = new JarFile(System.getProperty("janex.test.pluginJar"))) {
+            for (String entry : List.of("org/glavo/janex/gradle/JanexPlugin.class",
+                    "org/glavo/janex/reader/JanexReader.class", "org/glavo/janex/writer/JanexWriter.class",
+                    "org/glavo/janex/writer/janex-bootstrap.jar", "META-INF/gradle-plugins/org.glavo.janex.properties")) {
+                require(jar.getJarEntry(entry) != null, "Missing bundled plugin entry: " + entry);
+            }
+            require(jar.stream().noneMatch(entry -> entry.getName().startsWith("org/bouncycastle/")
+                    || entry.getName().startsWith("io/airlift/") || entry.getName().startsWith("org/gradle/")),
+                    "Plugin unexpectedly bundles external libraries or Gradle APIs");
+        }
+        Path publication = Path.of(System.getProperty("janex.test.publicationDirectory"));
+        for (String name : List.of("pom-default.xml", "module.json")) {
+            String metadata = Files.readString(publication.resolve(name));
+            require(!metadata.contains("janex-reader") && !metadata.contains("janex-writer"),
+                    "Published plugin depends on internal Janex modules: " + name);
+            for (String dependency : List.of("aircompressor", "bcpkix-jdk18on", "bcpg-jdk18on")) {
+                require(metadata.contains(dependency), "Missing published dependency: " + dependency);
+            }
+        }
+    }
+
+    /// Resolves both Gradle metadata and POM-only publications without access to internal Janex modules.
+    private static void publishedPlugin(Path project) throws Exception {
         String repository = System.getProperty("janex.test.repository");
-        Files.writeString(settings, """
+        for (boolean pomOnly : List.of(false, true)) {
+            Path consumer = project.resolve(pomOnly ? "pom" : "module");
+            fixture(consumer, false);
+            Path settings = consumer.resolve("settings.gradle.kts");
+            Files.writeString(settings, """
                 pluginManagement {
                     repositories {
-                        maven { url = uri("%s") }
-                        mavenCentral()
+                        maven {
+                            url = uri("%s")
+                            content {
+                                includeModule("org.glavo.janex", "org.glavo.janex.gradle.plugin")
+                                includeModule("org.glavo.janex", "janex-gradle-plugin")
+                            }
+                            %s
+                        }
+                        mavenCentral { content { excludeGroup("org.glavo.janex") } }
                     }
                 }
-                """.formatted(repository) + Files.readString(settings));
-        Path script = project.resolve("build.gradle.kts");
-        Files.writeString(script, Files.readString(script)
-                .replace("id(\"org.glavo.janex\")", "id(\"org.glavo.janex\") version \""
-                        + System.getProperty("janex.test.version") + "\""));
-        GradleRunner.create().withProjectDir(project.toFile())
-                .withArguments("janexPack", "--configuration-cache", "--stacktrace")
-                .build();
-        require(runJar(project.resolve("build/distributions/fixture.janex"))
-                .contains("hello|resource|configured|4"), "Published plugin produced an invalid package");
+                """.formatted(repository, pomOnly
+                    ? "metadataSources { mavenPom(); ignoreGradleMetadataRedirection() }" : "") + Files.readString(settings));
+            Path script = consumer.resolve("build.gradle.kts");
+            Files.writeString(script, Files.readString(script)
+                    .replace("id(\"org.glavo.janex\")", "id(\"org.glavo.janex\") version \""
+                            + System.getProperty("janex.test.version") + "\""));
+            GradleRunner.create().withProjectDir(consumer.toFile())
+                    .withArguments("janexPack", "--configuration-cache", "--stacktrace")
+                    .build();
+            require(runJar(consumer.resolve("build/distributions/fixture.janex"))
+                    .contains("hello|resource|configured|4"), "Published plugin produced an invalid package");
+        }
     }
 
     /// Verifies that packaging needs no CLI and can restore a package from Gradle's build cache.

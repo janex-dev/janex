@@ -5,6 +5,10 @@ The `org.glavo.janex` plugin packages a Java application and its runtime depende
 and makes `assemble` depend on the package. Packages include a `java -jar` launcher by default;
 publisher signing is optional.
 
+The published plugin JAR bundles `janex-reader` and `janex-writer`, including the writer's embedded
+bootstrap JAR. Aircompressor and Bouncy Castle remain ordinary Maven dependencies. The source modules
+remain separate; using the plugin does not require separate Janex library publications.
+
 The plugin is built with JDK 25, targets Java 17, and is tested with the repository's Gradle 9.7.1
 wrapper. Application bytecode can target an older Java version independently.
 
@@ -144,7 +148,7 @@ The demo uses `includeBuild`, so it requires no published plugin or repository c
 
 ## Publishing
 
-Publish the implementation, Java libraries, sources, Javadoc, and plugin marker to a local Maven repository:
+Publish the bundled plugin, its sources and Javadoc, and the plugin marker to a local Maven repository:
 
 ```shell
 ./gradlew :janex-gradle-plugin:publishAllPublicationsToLocalRepository
@@ -162,8 +166,12 @@ for the development and release workflow.
 The CI workflow publishes snapshots to `https://maven.cnb.cool/Glavo/maven/-/packages/` after all
 platform tests pass on `main`. It also supports manual runs on `main`, with the same test requirement.
 Publishing uses the repository secret `CNB_PUBLISH_TOKEN`; jobs run serially and skip superseded
-commits and versions without the `-SNAPSHOT` suffix. The plugin, marker, reader, and writer are published
-together; the writer includes the bootstrap JAR.
+commits and versions without the `-SNAPSHOT` suffix. Only `org.glavo.janex:janex-gradle-plugin` and
+the marker `org.glavo.janex:org.glavo.janex.gradle.plugin` are published. The marker is a POM that
+maps the plugin ID to its implementation, not another plugin JAR.
+
+Packaging uses Shadow with the official Gradle Plugin Publish plugin, so Maven publishing and a future
+Plugin Portal release use the same bundled implementation. CI only invokes CNB Maven publishing.
 
 To consume a snapshot, configure `settings.gradle.kts`:
 
@@ -189,7 +197,9 @@ For local publishing, pass `-PjanexPublishUrl=https://maven.cnb.cool/Glavo/maven
 The root `check` includes `:janex-gradle-plugin:check`, which builds the CLI and runs TestKit
 fixtures using the Java writer, with the CLI used for interoperability checks. The checks cover classpath and module applications, project dependencies,
 resources, preset arguments, both launcher forms, configuration-cache and build-cache reuse, dependency changes,
-and preservation of previous output on a failed repack.
+and preservation of previous output on a failed repack. TestKit loads the bundled plugin JAR;
+publication tests resolve both Gradle metadata and POM-only metadata with internal Janex modules
+excluded from all repositories.
 
 For a standalone plugin checkout, use the repository wrapper with
 `-p janex-gradle-plugin check -PjanexTestExecutable=/absolute/path/to/janex`. The native launcher

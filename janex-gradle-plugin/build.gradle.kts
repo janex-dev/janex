@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
 plugins {
-    `java-gradle-plugin`
-    `maven-publish`
+    id("com.gradle.plugin-publish") version "2.1.1"
+    id("com.gradleup.shadow") version "9.6.1"
 }
 
 group = "org.glavo.janex"
@@ -17,6 +17,10 @@ val functionalTest = sourceSets.create("functionalTest")
 
 dependencies {
     implementation(project(":janex-writer"))
+    implementation(project(":janex-reader"))
+    shadow(libs.aircompressor)
+    shadow(libs.bouncycastle.pkix)
+    shadow(libs.bouncycastle.pgp)
     add(functionalTest.implementationConfigurationName, testFixtures(project(":janex-writer")))
 }
 
@@ -40,7 +44,25 @@ tasks.withType<Jar>().configureEach {
     isReproducibleFileOrder = true
 }
 
+tasks.jar {
+    archiveClassifier = "thin"
+}
+
+tasks.shadowJar {
+    archiveClassifier = ""
+    dependencies {
+        include(project(":janex-reader"))
+        include(project(":janex-writer"))
+    }
+}
+
+tasks.pluginUnderTestMetadata {
+    pluginClasspath.setFrom(tasks.shadowJar, configurations.shadow)
+}
+
 gradlePlugin {
+    website = "https://github.com/janex-dev/janex"
+    vcsUrl = "https://github.com/janex-dev/janex.git"
     testSourceSets(functionalTest)
     plugins {
         create("janex") {
@@ -48,6 +70,7 @@ gradlePlugin {
             implementationClass = "org.glavo.janex.gradle.JanexPlugin"
             displayName = "Janex packaging"
             description = "Packages Java applications directly using the portable Java writer."
+            tags = listOf("java", "packaging", "janex")
         }
     }
 }
@@ -68,13 +91,6 @@ publishing {
     }
 }
 
-tasks.matching { it.name.startsWith("publish") && it.name.endsWith("ToLocalRepository") }.configureEach {
-    dependsOn(":janex-writer:publishAllPublicationsToLocalRepository", ":janex-reader:publishAllPublicationsToLocalRepository")
-}
-tasks.matching { it.name.startsWith("publish") && it.name.endsWith("ToCnbRepository") }.configureEach {
-    dependsOn(":janex-writer:publishAllPublicationsToCnbRepository", ":janex-reader:publishAllPublicationsToCnbRepository")
-}
-
 val windows = System.getProperty("os.name").startsWith("Windows")
 val janexExecutable = providers.gradleProperty("janexTestExecutable").orElse(
     layout.projectDirectory.file("../target/debug/janex${if (windows) ".exe" else ""}").asFile.absolutePath
@@ -85,7 +101,6 @@ tasks.register<JavaExec>("checkPlugin") {
     description = "Tests the Gradle plugin with TestKit and the native Janex CLI."
     dependsOn(tasks.named(functionalTest.classesTaskName), tasks.pluginUnderTestMetadata)
     dependsOn("publishAllPublicationsToLocalRepository")
-    dependsOn(":janex-writer:publishAllPublicationsToLocalRepository", ":janex-reader:publishAllPublicationsToLocalRepository")
     if (project != rootProject) {
         dependsOn(":cargoBuild")
     }
@@ -96,6 +111,8 @@ tasks.register<JavaExec>("checkPlugin") {
     systemProperty("janex.test.directory", layout.buildDirectory.dir("functional-tests").get().asFile.absolutePath)
     systemProperty("janex.test.repository", layout.buildDirectory.dir("repository").get().asFile.toURI().toString())
     systemProperty("janex.test.version", project.version.toString())
+    systemProperty("janex.test.pluginJar", tasks.shadowJar.get().archiveFile.get().asFile.absolutePath)
+    systemProperty("janex.test.publicationDirectory", layout.buildDirectory.dir("publications/pluginMaven").get().asFile.absolutePath)
     systemProperty("janex.test.fixtures", layout.projectDirectory.dir("../janex-signature/tests/fixtures").asFile.absolutePath)
     environment("JANEX_TEST_KEY_PASSWORD", "public-fixture-password")
 }

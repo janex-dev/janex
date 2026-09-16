@@ -5,6 +5,9 @@ rootProject.name = "janex-gradle-plugin"
 
 dependencyResolutionManagement {
     repositories { mavenCentral() }
+    versionCatalogs {
+        create("libs") { from(files("../gradle/libs.versions.toml")) }
+    }
 }
 include("janex-reader", "janex-bootstrap", "janex-writer")
 for (name in listOf("janex-reader", "janex-bootstrap", "janex-writer")) {

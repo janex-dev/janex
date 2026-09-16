@@ -12,9 +12,9 @@ version = rootProject.version
 
 dependencies {
     api(project(":janex-reader"))
-    implementation("io.airlift:aircompressor:2.0.3")
-    implementation("org.bouncycastle:bcpkix-jdk18on:1.86")
-    implementation("org.bouncycastle:bcpg-jdk18on:1.86")
+    implementation(libs.aircompressor)
+    implementation(libs.bouncycastle.pkix)
+    implementation(libs.bouncycastle.pgp)
 }
 
 java {

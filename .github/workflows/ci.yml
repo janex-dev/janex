@@ -53,7 +53,7 @@ jobs:
         run: python janex-signature/tests/fixtures/openpgp/check_generated.py
 
   publish-snapshot:
-    name: Publish Maven snapshot
+    name: Publish plugin snapshot
     needs: test
     if: >-
       github.repository == 'janex-dev/janex' &&
@@ -73,7 +73,7 @@ jobs:
         with:
           distribution: liberica
           java-version: '25'
-      - name: Publish snapshot to CNB
+      - name: Publish plugin snapshot to CNB
         shell: bash
         env:
           ORG_GRADLE_PROJECT_cnbUsername: cnb
