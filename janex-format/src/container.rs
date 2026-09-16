@@ -312,6 +312,17 @@ impl<R: Read + Seek> Reader<R> {
             .map(|(info, _)| info)
             .ok_or_else(|| invalid(format!("missing section {id}")))
     }
+    /// Returns a section's absolute file range, including its magic when present.
+    ///
+    /// This reads no section bytes and does not establish checksum or signature validity.
+    pub fn section_range(&self, id: u64) -> Result<std::ops::Range<u64>> {
+        let (info, offset) = self
+            .sections
+            .iter()
+            .find(|(info, _)| info.id == id)
+            .ok_or_else(|| invalid(format!("missing section {id}")))?;
+        Ok(*offset..*offset + info.length)
+    }
     /// Returns the verification payload without implying it has been authenticated.
     pub fn verification(&self) -> &Verification {
         &self.verification

@@ -183,14 +183,27 @@ pub enum Entry {
 }
 
 /// One table page's metadata descriptor, without a claim of publisher authentication.
-#[derive(Clone)]
-struct Page {
+#[derive(Clone, Debug)]
+pub struct PageInfo {
     /// Offset relative to bytes after the pool magic.
-    offset: u64,
+    pub offset: u64,
     /// Length and self-contained filters.
-    encoding: Encoding,
+    pub encoding: Encoding,
     /// Optional checksum of the decoded table bytes.
-    checksum: Option<Checksum>,
+    pub checksum: Option<Checksum>,
+}
+
+/// An owned snapshot of a pool's page directory, without loading its pages or blob payloads.
+#[derive(Clone, Debug)]
+pub struct PoolInfo {
+    /// Number of logical blob entries, including unsupported entry kinds.
+    pub count: u64,
+    /// Base-two logarithm of the number of entries per table page.
+    pub page_entry_shift: u8,
+    /// Absolute file offset of the bytes immediately after the pool's eight-byte magic.
+    pub payload_offset: u64,
+    /// Pages in logical table order; their offsets are relative to the pool payload.
+    pub pages: Vec<PageInfo>,
 }
 
 /// Metadata and validated pages for one pool.
@@ -202,7 +215,7 @@ struct Pool {
     /// Bytes available after the pool magic.
     size: u64,
     /// Physical page descriptors in logical page order.
-    pages: Vec<Page>,
+    pages: Vec<PageInfo>,
     /// Decoded pages keyed by their logical page number.
     cache: BTreeMap<usize, Vec<Entry>>,
     /// Validated nonempty page and Stored ranges, keyed by offset with exclusive ends.
@@ -236,6 +249,21 @@ impl<R: Read + Seek> BlobStore<R> {
     /// Returns the underlying reader, dropping the page caches.
     pub fn into_reader(self) -> Reader<R> {
         self.reader
+    }
+
+    /// Returns validated pool metadata without loading table pages or verifying their checksums.
+    ///
+    /// Section metadata and filters must be supported. Returned offsets describe encoded
+    /// file bytes; extent offsets and decoded page positions use a different coordinate space.
+    pub fn pool_info(&mut self, id: u64) -> Result<PoolInfo> {
+        self.open_pool(id)?;
+        let pool = &self.pools[&id];
+        Ok(PoolInfo {
+            count: pool.count,
+            page_entry_shift: pool.shift,
+            payload_offset: self.reader.section_range(id)?.start + 8,
+            pages: pool.pages.clone(),
+        })
     }
 
     /// Returns a logical entry, loading only its table page if it is not cached.
@@ -326,7 +354,7 @@ impl<R: Read + Seek> BlobStore<R> {
                 .map(|value| Checksum::decode(value.as_byte_string()?))
                 .transpose()?;
             register_ranges(&mut ranges, vec![(offset, encoding.stored_size)], size)?;
-            pages.push(Page {
+            pages.push(PageInfo {
                 offset,
                 encoding,
                 checksum,

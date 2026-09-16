@@ -3,6 +3,7 @@
 
 //! Janex command-line entry point.
 
+mod inspect;
 mod sdk;
 mod shell;
 
@@ -43,6 +44,8 @@ struct Cli {
 /// Supported command implementations.
 #[derive(Subcommand)]
 enum Command {
+    /// Inspect local container structure without launching or acquiring dependencies.
+    Inspect(inspect::InspectArgs),
     /// Manage installed SDK versions and execution environments.
     #[command(flatten)]
     Sdk(sdk::SdkCommand),
@@ -255,6 +258,7 @@ fn main() {
 /// Executes a parsed command without interpreting argument contents as shell text.
 fn run(cli: Cli) -> janex_host::Result<i32> {
     match cli.command {
+        Command::Inspect(args) => return inspect::run(args),
         Command::Sdk(command) => return sdk::run(command),
         Command::Pack(args) => {
             let args = *args;

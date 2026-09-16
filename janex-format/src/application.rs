@@ -419,6 +419,35 @@ impl Application {
     pub fn value(&self) -> &Value {
         &self.value
     }
+    /// Returns unique local resource-root references from every Java configuration branch.
+    ///
+    /// Includes classpath, module-path, and agent declarations in inactive or later-cleared
+    /// lists, without evaluating conditions or resolving external dependencies. References
+    /// are sorted by pool and index. Unknown application types return an empty list.
+    pub fn resource_references(&self) -> Vec<BlobRef> {
+        let mut references = BTreeSet::new();
+        let mut pending: Vec<_> = self.launch.iter().collect();
+        while let Some(config) = pending.pop() {
+            for change in [&config.module_path, &config.class_path] {
+                if let ListChange::Append(entries) = change {
+                    for entry in entries {
+                        if let PathEntry::Local(reference) = entry {
+                            references.insert(*reference);
+                        }
+                    }
+                }
+            }
+            if let ListChange::Append(agents) = &config.agents {
+                for agent in agents {
+                    if let PathEntry::Local(reference) = &agent.reference {
+                        references.insert(*reference);
+                    }
+                }
+            }
+            pending.extend(&config.overlays);
+        }
+        references.into_iter().collect()
+    }
     /// Returns whether this application requests windowed launching.
     pub fn windowed(&self) -> bool {
         self.windowed

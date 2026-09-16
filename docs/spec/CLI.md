@@ -12,6 +12,7 @@ directly executable.
 The CLI should separate software acquisition from software execution:
 
 - `janex pack`: build a Janex application from local directories and JARs.
+- `janex inspect`: inspect a local container without launching it or acquiring dependencies.
 - `janex install`: acquire and register software; SDK installation is implemented, while Janex application installation remains planned.
 - `janex run`: start an installed application or a local Janex file without implicitly treating remote content as trusted software.
 - `janex available`, `list`, `update`, `uninstall`, `default`, `use`, `exec`, and `env`: manage SDK versions and execution environments.
@@ -21,6 +22,66 @@ This split keeps trust decisions at acquisition time and keeps the run path simp
 `janex run` may use a managed Java installation installed by `janex install`, but it must not download or install a Java runtime implicitly.
 If no suitable runtime is available, `janex run` should report the missing requirement and point the user to the appropriate
 `janex install` command.
+
+## `janex inspect`
+
+```text
+janex inspect <FILE>
+    [--sections] [--blobs] [--resources] [--strings]
+    [--json] [--verify] [--external-tail-length <BYTES>]
+```
+
+The default summary reports container and external-region sizes, section and pool counts,
+application identities, and verification status. Standalone files, native prefixes, and appended
+JAR/ZIP64 launchers are detected automatically. An explicit trailing length supports other wrappers.
+Inspection never launches code, selects a runtime, or acquires external dependencies.
+
+- `--sections` includes physical ranges, section types, recorded checksums, and metadata.
+- `--blobs` includes every pool, table page, Stored entry, and Extents entry, including unused blobs.
+  It decodes and validates table pages but does not decompress ordinary blob payloads.
+- `--resources` includes local roots declared anywhere in supported application configurations,
+  including agents and inactive or later-cleared path lists. All resource layers, conditions,
+  directories, files, links, and tombstones remain unmerged. External references remain in application
+  metadata. Unknown application descriptors are preserved but do not contribute inferred roots.
+- `--strings` implies `--resources` and includes the root string pools and explicitly referenced
+  CLASSFILE override pools. Reading resource structure decodes roots, directory-entry blobs, and
+  default string pools; it does not restore ordinary file contents.
+- `--verify` checks recorded metadata, section, and external-region checksums. Missing checksums
+  reduce reported coverage; they are not failures. This does not authenticate CMS/OpenPGP signatures
+  or check every restored file checksum. Table-page checksums are always checked when pages are read.
+
+Malformed requested structures, unsupported required features, limit violations, and checksum
+failures exit nonzero. There is no damaged-file recovery mode. No report is emitted before requested
+parsing and verification succeed. Opening and inspecting a signed container does not require a
+trusted signer; the report explicitly leaves signature authentication unchecked.
+
+### Machine Output
+
+`--json` emits one document with `schema_version: 1`. It uses the same detail selectors as text output.
+Unrequested `sections`, `blob_pools`, `resource_roots`, and `string_pools` members are omitted.
+Applications and original file metadata are included in the summary. Consumers should tolerate
+additional members.
+
+Opaque IDs, byte sizes, physical offsets, and logical blob indices are decimal strings, preserving
+unsigned 64-bit values in JavaScript. Ordinary bounded counts and method IDs are JSON numbers.
+Physical ranges use absolute file offsets and byte lengths; `decoded_offset` in an extent is relative
+to its decoded Stored blob and never identifies a physical file position.
+
+CBOR metadata preserves key types and unknown fields: integers use `{"integer":"123"}`, byte strings
+use `{"bytes_hex":"..."}`, and maps use `{"map":[[key,value],...]}`. Text, arrays, booleans, and null
+use their JSON counterparts. Tags, floats, and other simple values use their exact original encoding
+as `{"cbor_hex":"..."}`. `not_checked` is distinct from `passed`; successful checksum verification
+does not imply complete secure coverage or trusted signatures.
+
+### Library Access
+
+Tools can use `janex-format` directly: `Reader::section_range` returns absolute section ranges;
+`BlobStore::pool_info` exposes the page directory without loading its pages; `BlobStore::entry`
+returns Stored or Extents descriptions. `Application::resource_references` enumerates unique local
+roots across all Java configuration branches without evaluating conditions. Existing
+`ResourceRoot::decode` and `StringPool` APIs expose unmerged resources and indexed strings.
+These operations use the normal format parser and reader limits; the CLI does not maintain a
+separate binary parser. They do not establish publisher trust.
 
 ## `janex pack`
 
