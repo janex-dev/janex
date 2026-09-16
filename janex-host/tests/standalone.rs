@@ -376,8 +376,11 @@ public class Main {
         if (!Files.isDirectory(Paths.get(Main.class.getResource("/replaced/").toURI()))) throw new AssertionError();
         Path path = Paths.get(Main.class.getResource("/alias/value.txt").toURI());
         if (!new String(Files.readAllBytes(path), "UTF-8").equals("abcd")) throw new AssertionError();
-        Object time = Files.getAttribute(path, "janex:creationTimeNanos");
-        if (!time.equals(java.math.BigInteger.ONE.shiftLeft(80))) throw new AssertionError(time);
+        Object time = Files.getAttribute(path, "janex:creationTimeInstant");
+        if (!time.equals(java.time.Instant.ofEpochSecond(1208925819614629L, 174706176))) throw new AssertionError(time);
+        if (!Files.getLastModifiedTime(path).toInstant().equals(java.time.Instant.ofEpochSecond(-1, 999999999))) throw new AssertionError();
+        if (!Files.getAttribute(path, "janex:lastAccessTimeInstant").equals(java.time.Instant.MAX)) throw new AssertionError();
+        if (!((java.nio.file.attribute.FileTime) Files.getAttribute(path, "basic:lastAccessTime")).toInstant().equals(java.time.Instant.MAX)) throw new AssertionError();
         if (!Files.getAttribute(path, "janex:permissions").equals(0)) throw new AssertionError();
         try (java.io.InputStream in = Main.class.getResourceAsStream("/Main.class")) {
             if (in.read() != 0xca || in.read() != 0xfe || in.read() != 0xba || in.read() != 0xbe) throw new AssertionError();
@@ -479,6 +482,11 @@ public class Main {
                             content: Content::blob(reference(extents)),
                             metadata: Value::map([
                                 (Value::uint(2), Value::integer(1i128 << 80)),
+                                (Value::uint(3), Value::integer(-1)),
+                                (
+                                    Value::uint(4),
+                                    Value::integer(janex_format::resource::MAX_TIMESTAMP_NANOS),
+                                ),
                                 (Value::uint(5), Value::uint(0)),
                             ])
                             .unwrap(),

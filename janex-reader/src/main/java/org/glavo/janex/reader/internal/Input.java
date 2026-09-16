@@ -9,12 +9,16 @@ import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
+import java.time.DateTimeException;
+import java.time.Instant;
 import java.util.*;
 
 import org.glavo.janex.reader.ReadLimits;
 
 /// Reads bounded binary fields and deterministic CBOR without interpreting application schemas.
 public final class Input {
+    /// Nanoseconds per POSIX second for decoding integer resource timestamps.
+    private static final BigInteger NANOS_PER_SECOND = BigInteger.valueOf(1_000_000_000);
     /// Maximum size of a buffered value.
     public static final int MAX_BYTES = ReadLimits.DEFAULT.maxBytes();
     /// Maximum number of collection elements.
@@ -382,8 +386,11 @@ public final class Input {
         }
     }
 
-    /// Decodes an integer or canonical bignum as signed 128-bit nanoseconds.
-    public static BigInteger timestamp(Object value) throws IOException {
+    /// Decodes integer POSIX nanoseconds within the format's Instant range.
+    /// @param value a CBOR integer or canonical bignum
+    /// @return the exact timestamp, retaining nanosecond precision
+    /// @throws IOException if the encoding is invalid or the timestamp is out of range
+    public static Instant timestamp(Object value) throws IOException {
         if (value instanceof Opaque) {
             Opaque tag = (Opaque) value;
             require(BigInteger.valueOf(2).equals(tag.type) || BigInteger.valueOf(3).equals(tag.type), "Invalid timestamp tag");
@@ -393,7 +400,12 @@ public final class Input {
             value = BigInteger.valueOf(2).equals(tag.type) ? integer : integer.negate().subtract(BigInteger.ONE);
         }
         require(value instanceof BigInteger && ((BigInteger) value).bitLength() <= 127, "Invalid resource timestamp");
-        return (BigInteger) value;
+        BigInteger[] parts = ((BigInteger) value).divideAndRemainder(NANOS_PER_SECOND);
+        try {
+            return Instant.ofEpochSecond(parts[0].longValueExact(), parts[1].longValue());
+        } catch (ArithmeticException | DateTimeException invalid) {
+            throw new IOException("Resource timestamp out of range", invalid);
+        }
     }
 
     /// Requires complete consumption of this byte boundary.

@@ -582,6 +582,12 @@ impl<'a> ResourceTree<'a> {
     }
 }
 
+/// Earliest resource timestamp, in POSIX nanoseconds, matching Java Instant.MIN.
+pub const MIN_TIMESTAMP_NANOS: i128 = -31_557_014_167_219_200_000_000_000;
+
+/// Latest resource timestamp, in POSIX nanoseconds, matching Java Instant.MAX.
+pub const MAX_TIMESTAMP_NANOS: i128 = 31_556_889_864_403_199_999_999_999;
+
 /// Validates metadata fields according to the kind of resource carrying them.
 fn validate_metadata(value: &Value, file: bool, permissions: bool) -> Result<()> {
     integer_keys(value)?;
@@ -595,8 +601,10 @@ fn validate_metadata(value: &Value, file: bool, permissions: bool) -> Result<()>
         comment.as_text()?;
     }
     for key in [2, 3, 4] {
-        if let Some(time) = value.get(key)? {
-            time.as_i128()?;
+        if let Some(time) = value.get(key)?
+            && !(MIN_TIMESTAMP_NANOS..=MAX_TIMESTAMP_NANOS).contains(&time.as_i128()?)
+        {
+            return Err(invalid("resource timestamp out of range"));
         }
     }
     if let Some(mode) = value.get(5)?

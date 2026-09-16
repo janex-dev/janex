@@ -6,6 +6,7 @@ package org.glavo.janex.reader;
 import java.io.*;
 import java.math.BigInteger;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.*;
 
 import org.glavo.janex.reader.internal.Conditions;
@@ -1173,9 +1174,9 @@ public final class JanexReader implements Closeable {
                     transforms[i][0] = node.transforms[i][0];
                     transforms[i][1] = poolIds.get(node.transforms[i][1]);
                 }
-                BigInteger[] times = new BigInteger[3];
+                Instant[] times = new Instant[3];
                 for (int i = 0; i < times.length; i++) {
-                    times[i] = has(node.metadata, i + 2) ? (BigInteger) get(node.metadata, i + 2) : null;
+                    times[i] = has(node.metadata, i + 2) ? (Instant) get(node.metadata, i + 2) : null;
                 }
                 Integer permissions = has(node.metadata, 5) ? (int) number(get(node.metadata, 5)) : null;
                 files.put(node.source == -1 ? entry.getKey() + "/" : entry.getKey(),

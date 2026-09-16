@@ -3,8 +3,8 @@
 
 package org.glavo.janex.reader;
 
-import java.math.BigInteger;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.*;
 
 /// Immutable selected resources referencing an unchanged snapshot, independent of a launch transport.
@@ -151,13 +151,13 @@ public final class ResourcePlan {
         private final int source;
         /// CLASSFILE decoded length and data-pool index pairs.
         private final int[][] transforms;
-        /// Creation, modification, and access nanoseconds; absent values are null.
-        private final BigInteger[] times;
+        /// Creation, modification, and access instants; absent values are null.
+        private final Instant[] times;
         /// POSIX permission bits, or null when unspecified.
         private final Integer permissions;
 
         /// Retains validated preparation data without exposing mutable input arrays or collections.
-        File(int source, int[][] transforms, BigInteger[] times, Integer permissions) {
+        File(int source, int[][] transforms, Instant[] times, Integer permissions) {
             this.source = source;
             this.transforms = copy(transforms);
             this.times = times == null ? null : times.clone();
@@ -174,8 +174,9 @@ public final class ResourcePlan {
             return copy(transforms);
         }
 
-        /// Returns creation, modification, and access nanoseconds; absent values are null.
-        public BigInteger[] times() {
+        /// Returns an independent copy of creation, modification, and access instants, or null if no array was supplied.
+        /// Null array elements denote absent timestamps.
+        public Instant[] times() {
             return times == null ? null : times.clone();
         }
 

@@ -1055,7 +1055,9 @@ the nine POSIX read/write/execute bits and the setuid, setgid, and sticky bits (
 excluding file-type bits. Omission leaves permissions unspecified; `0` means no permission bits are set.
 Consumers apply permissions according to platform capabilities and local policy.
 
-Time values are signed `i128` POSIX timestamps in nanoseconds. Values in CBOR's basic integer range use
+Time values are signed `i128` POSIX timestamps in nanoseconds, restricted to
+`-31557014167219200000000000..31556889864403199999999999` (inclusive), the range of Java `Instant`.
+Values in CBOR's basic integer range use
 major type `0` or `1`. Larger values use tag `2` or `3` with a minimal 9-to-16-byte big-endian
 magnitude; tag `3` encodes `-1 - value`.
 

@@ -4,7 +4,8 @@
 package org.glavo.janex.bootstrap.loader;
 
 import java.io.*;
-import java.math.BigInteger;
+import java.time.DateTimeException;
+import java.time.Instant;
 import java.util.*;
 
 import org.glavo.janex.reader.ReadLimits;
@@ -312,8 +313,8 @@ public final class ResourceIndex implements Closeable {
         final int[][] transforms;
         /// Logical resource length, zero for directories.
         final int length;
-        /// Nullable creation, modification, and access timestamps in exact nanoseconds.
-        final BigInteger[] times = new BigInteger[3];
+        /// Nullable creation, modification, and access instants with nanosecond precision.
+        final Instant[] times = new Instant[3];
         /// POSIX permission bits, or -1 when unspecified.
         final int permissions;
 
@@ -327,9 +328,9 @@ public final class ResourceIndex implements Closeable {
             return length;
         }
 
-        /// Returns creation (0), modification (1), or access (2) nanoseconds, or null when absent.
+        /// Returns the creation (0), modification (1), or access (2) instant, or null when absent.
         /// Invalid indices throw IndexOutOfBoundsException.
-        public BigInteger time(int index) {
+        public Instant time(int index) {
             return times[index];
         }
 
@@ -372,9 +373,16 @@ public final class ResourceIndex implements Closeable {
             }
             for (int i = 0; i < 3; i++) {
                 if ((flags & (1 << i)) != 0) {
-                    byte[] value = new byte[16];
-                    input.readFully(value);
-                    times[i] = new BigInteger(value);
+                    long seconds = input.readLong();
+                    int nanos = input.readInt();
+                    if (nanos < 0 || nanos >= 1_000_000_000) {
+                        throw new IOException("Invalid resource timestamp nanoseconds");
+                    }
+                    try {
+                        times[i] = Instant.ofEpochSecond(seconds, nanos);
+                    } catch (DateTimeException invalid) {
+                        throw new IOException("Resource timestamp out of range", invalid);
+                    }
                 }
             }
             permissions = (flags & 8) == 0 ? -1 : input.readInt();

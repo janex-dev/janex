@@ -5,6 +5,7 @@ package org.glavo.janex.bootstrap.loader;
 
 import java.io.*;
 import java.math.BigInteger;
+import java.time.Instant;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
@@ -21,6 +22,7 @@ public final class ResourcesTest {
 
     /// Reads trusted native vectors and compares the complete expanded resource map.
     public static void main(String[] arguments) throws Exception {
+        timestampIndex();
         Path snapshot = Paths.get(arguments[0]).resolveSibling("resource.janex");
         try (DataInputStream input = new DataInputStream(new BufferedInputStream(new FileInputStream(arguments[0])))) {
             int count = input.readInt();
@@ -38,11 +40,12 @@ public final class ResourcesTest {
                         expected.put(name, bytes(input));
                         List<Object> metadata = new ArrayList<Object>();
                         for (int time = 0; time < 3; time++) {
-                            BigInteger value = null;
+                            Instant value = null;
                             if (input.readBoolean()) {
                                 byte[] magnitude = new byte[16];
                                 input.readFully(magnitude);
-                                value = new BigInteger(magnitude);
+                                BigInteger[] parts = new BigInteger(magnitude).divideAndRemainder(BigInteger.valueOf(1_000_000_000));
+                                value = Instant.ofEpochSecond(parts[0].longValueExact(), parts[1].longValue());
                             }
                             metadata.add(value);
                         }
@@ -98,6 +101,64 @@ public final class ResourcesTest {
             }
         }
         Files.delete(snapshot);
+    }
+
+    /// Checks independent private-index timestamp bytes, including rejected normalization and truncation.
+    private static void timestampIndex() throws Exception {
+        Path snapshot = Files.createTempFile("janex-times-", ".bin");
+        try {
+            for (Instant expected : new Instant[]{Instant.MIN, Instant.MAX, Instant.EPOCH, Instant.ofEpochSecond(-1, 999_999_999)}) {
+                byte[] encoded = timestampIndex(snapshot, expected.getEpochSecond(), expected.getNano());
+                try (ResourceIndex index = new ResourceIndex(new ByteArrayInputStream(encoded))) {
+                    ResourceIndex.Resource resource = index.roots.get(0).files.get("dir/");
+                    if (!expected.equals(resource.time(0)) || resource.time(1) != null || resource.time(2) != null) {
+                        throw new AssertionError("Private timestamp differs");
+                    }
+                }
+                rejectTimestampIndex(Arrays.copyOf(encoded, encoded.length - 1));
+            }
+            rejectTimestampIndex(timestampIndex(snapshot, Instant.MIN.getEpochSecond() - 1, 999_999_999));
+            rejectTimestampIndex(timestampIndex(snapshot, Instant.MAX.getEpochSecond() + 1, 0));
+            rejectTimestampIndex(timestampIndex(snapshot, 0, -1));
+            rejectTimestampIndex(timestampIndex(snapshot, 0, 1_000_000_000));
+        } finally {
+            Files.delete(snapshot);
+        }
+    }
+
+    /// Writes a minimal directory index with one timestamp using independent wire bytes.
+    private static byte[] timestampIndex(Path snapshot, long seconds, int nanos) throws IOException {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        DataOutputStream output = new DataOutputStream(bytes);
+        output.write(new byte[]{'J', 'N', 'X', 'R', 'E', 'S', '0', '1'});
+        output.writeInt(1_000_000);
+        output.writeInt(1000);
+        String path = snapshot.toString();
+        output.writeInt(path.length());
+        output.writeChars(path);
+        output.writeInt(0); // Sources.
+        output.writeInt(0); // Pools.
+        output.writeInt(0); // Requirements.
+        output.writeInt(1); // Roots.
+        output.writeInt(0); // Root name.
+        output.writeBoolean(false);
+        output.writeInt(1); // Entries.
+        output.writeInt(4);
+        output.writeChars("dir/");
+        output.writeInt(-1); // Directory.
+        output.writeByte(1); // Creation time only.
+        output.writeLong(seconds);
+        output.writeInt(nanos);
+        return bytes.toByteArray();
+    }
+
+    /// Requires malformed private timestamps to fail with IOException.
+    private static void rejectTimestampIndex(byte[] encoded) throws IOException {
+        try (ResourceIndex index = new ResourceIndex(new ByteArrayInputStream(encoded))) {
+            throw new AssertionError("Invalid timestamp accepted");
+        } catch (IOException expected) {
+            // Malformed data must not escape as an unchecked date or arithmetic exception.
+        }
     }
 
     /// Reads one trusted harness byte sequence.

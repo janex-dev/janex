@@ -137,7 +137,11 @@ pub(crate) fn prepare(
             root_data.push(flags);
             for key in 2..=4 {
                 if let Some(value) = metadata.get(key)? {
-                    root_data.extend(value.as_i128()?.to_be_bytes());
+                    let nanos = value.as_i128()?;
+                    let seconds = i64::try_from(nanos.div_euclid(1_000_000_000))
+                        .map_err(|_| invalid("resource timestamp out of range"))?;
+                    root_data.extend(seconds.to_be_bytes());
+                    root_data.extend((nanos.rem_euclid(1_000_000_000) as u32).to_be_bytes());
                 }
             }
             if let Some(mode) = metadata.get(5)? {
@@ -498,8 +502,8 @@ public class Main {
         System.out.println(new String(read("alias/data.txt"), "UTF-8"));
         java.nio.file.Path folder = java.nio.file.Paths.get(Main.class.getClassLoader().getResource("alias/").toURI());
         java.util.Map<String, Object> attributes = java.nio.file.Files.readAttributes(folder, "janex:*");
-        if (!new java.math.BigInteger("-170141183460469231731687303715884105728").equals(attributes.get("creationTimeNanos"))) throw new AssertionError();
-        if (!new java.math.BigInteger("170141183460469231731687303715884105727").equals(attributes.get("lastAccessTimeNanos"))) throw new AssertionError();
+        if (!java.time.Instant.MIN.equals(attributes.get("creationTimeInstant"))) throw new AssertionError();
+        if (!java.time.Instant.MAX.equals(attributes.get("lastAccessTimeInstant"))) throw new AssertionError();
         if (!Integer.valueOf(493).equals(attributes.get("permissions"))) throw new AssertionError();
         if (((java.nio.file.attribute.FileTime) attributes.get("lastModifiedTime")).to(java.util.concurrent.TimeUnit.NANOSECONDS) != 1234567890123L) throw new AssertionError();
         try { read("unused.txt"); throw new AssertionError("invalid Zstd accepted"); }
@@ -631,9 +635,15 @@ public class Main {
                     Directory {
                         path: "folder".into(),
                         metadata: Value::map([
-                            (Value::uint(2), Value::integer(i128::MIN)),
+                            (
+                                Value::uint(2),
+                                Value::integer(janex_format::resource::MIN_TIMESTAMP_NANOS),
+                            ),
                             (Value::uint(3), Value::integer(1234567890123)),
-                            (Value::uint(4), Value::integer(i128::MAX)),
+                            (
+                                Value::uint(4),
+                                Value::integer(janex_format::resource::MAX_TIMESTAMP_NANOS),
+                            ),
                             (Value::uint(5), Value::uint(0o755)),
                         ])
                         .unwrap(),

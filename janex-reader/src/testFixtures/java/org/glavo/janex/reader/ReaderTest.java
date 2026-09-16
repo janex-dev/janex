@@ -9,6 +9,7 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.math.BigInteger;
+import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -77,6 +78,22 @@ public final class ReaderTest {
         dataPools();
         repeatedPoolEntries();
         poolIndexFraming();
+        timestamps();
+    }
+
+    /// Checks exact negative normalization and both Instant boundaries without saturation.
+    private static void timestamps() throws Exception {
+        BigInteger minimum = new BigInteger("-31557014167219200000000000");
+        BigInteger maximum = new BigInteger("31556889864403199999999999");
+        check(Input.timestamp(minimum).equals(Instant.MIN));
+        check(Input.timestamp(maximum).equals(Instant.MAX));
+        check(Input.timestamp(BigInteger.ZERO).equals(Instant.EPOCH));
+        check(Input.timestamp(BigInteger.valueOf(-1)).equals(Instant.ofEpochSecond(-1, 999_999_999)));
+        check(Input.timestamp(BigInteger.valueOf(-1_000_000_001)).equals(Instant.ofEpochSecond(-2, 999_999_999)));
+        reject(() -> Input.timestamp(minimum.subtract(BigInteger.ONE)));
+        reject(() -> Input.timestamp(maximum.add(BigInteger.ONE)));
+        reject(() -> Input.timestamp(BigInteger.ONE.shiftLeft(127)));
+        reject(() -> Input.timestamp(BigInteger.ONE.shiftLeft(127).negate()));
     }
 
     /// Checks contiguous-pool ownership, read-only views, framing, and stream boundaries.
@@ -214,7 +231,7 @@ public final class ReaderTest {
         ResourcePlan.Source inline = new ResourcePlan.Source(bytes, -1, 0, new int[0], new int[0][3]);
         ResourcePlan.Source extent = new ResourcePlan.Source(null, -1, 0, new int[0], extents);
         int[][] transforms = {{10, 0}};
-        BigInteger[] times = {BigInteger.ONE.shiftLeft(100), null, null};
+        Instant[] times = {Instant.MAX, null, null};
         ResourcePlan.File file = new ResourcePlan.File(1, transforms, times, 0);
         Map<String, ResourcePlan.File> files = new java.util.LinkedHashMap<String, ResourcePlan.File>();
         files.put("value", file);
@@ -232,7 +249,7 @@ public final class ReaderTest {
         check(plan.sources().get(0).inline()[0] == 42);
         check(plan.sources().get(1).extents()[0][2] == 1);
         check(plan.roots().get(0).files().get("value").transforms()[0][0] == 10);
-        check(file.times()[0].equals(BigInteger.ONE.shiftLeft(100)) && file.permissions() == 0);
+        check(file.times()[0].equals(Instant.MAX) && file.permissions() == 0);
         check(plan.pools()[0] == immutable && plan.pools()[0].view(1).get() == 42);
         inline.inline()[0] = 0;
         extent.extents()[0][2] = 0;

@@ -163,8 +163,14 @@ fn root_round_trip_shares_names_and_retains_metadata() {
     let metadata = Value::map([
         (Value::uint(0), Value::bytes(&checksum.encode())),
         (Value::uint(1), Value::text("")),
-        (Value::uint(2), Value::integer(i128::MIN)),
-        (Value::uint(3), Value::integer(i128::MAX)),
+        (
+            Value::uint(2),
+            Value::integer(janex_format::resource::MIN_TIMESTAMP_NANOS),
+        ),
+        (
+            Value::uint(3),
+            Value::integer(janex_format::resource::MAX_TIMESTAMP_NANOS),
+        ),
         (Value::uint(4), Value::integer(-1)),
         (Value::uint(5), Value::uint(0o755)),
         (Value::uint(100), Value::text("extension")),
@@ -456,5 +462,33 @@ fn resource_metadata_is_checked_for_each_node_kind() {
         root.metadata =
             Value::map([(Value::text("janex.java.jar_name"), Value::text(name))]).unwrap();
         assert!(root.encode(Limits::default()).is_err(), "{name}");
+    }
+}
+
+#[test]
+fn resource_timestamps_are_bounded_by_instant_range() {
+    use janex_format::resource::{MAX_TIMESTAMP_NANOS, MIN_TIMESTAMP_NANOS};
+    for (time, valid) in [
+        (MIN_TIMESTAMP_NANOS, true),
+        (MAX_TIMESTAMP_NANOS, true),
+        (-1, true),
+        (-1_000_000_001, true),
+        (0, true),
+        (MIN_TIMESTAMP_NANOS - 1, false),
+        (MAX_TIMESTAMP_NANOS + 1, false),
+        (i128::MIN, false),
+        (i128::MAX, false),
+    ] {
+        for key in 2..=4 {
+            let mut dir = directory("", vec![]);
+            dir.metadata = Value::map([(Value::uint(key), Value::integer(time))]).unwrap();
+            assert_eq!(
+                root(vec![layer(vec![dir])])
+                    .encode(Limits::default())
+                    .is_ok(),
+                valid,
+                "{key}: {time}"
+            );
+        }
     }
 }

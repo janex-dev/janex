@@ -4,7 +4,7 @@
 package org.glavo.janex.bootstrap.loader;
 
 import java.io.*;
-import java.math.BigInteger;
+import java.time.Instant;
 import java.util.*;
 
 import org.glavo.janex.reader.ReadLimits;
@@ -82,7 +82,7 @@ public final class ResourceIndexes {
                         output.writeInt(transform[1]);
                     }
                 }
-                BigInteger[] times = file.times();
+                Instant[] times = file.times();
                 int flags = file.permissions() == null ? 0 : 8;
                 for (int i = 0; i < times.length; i++) {
                     if (times[i] != null) {
@@ -90,13 +90,10 @@ public final class ResourceIndexes {
                     }
                 }
                 output.writeByte(flags);
-                for (BigInteger time : times) {
+                for (Instant time : times) {
                     if (time != null) {
-                        byte[] raw = time.toByteArray();
-                        byte[] padded = new byte[16];
-                        Arrays.fill(padded, time.signum() < 0 ? (byte) -1 : 0);
-                        System.arraycopy(raw, 0, padded, 16 - raw.length, raw.length);
-                        output.write(padded);
+                        output.writeLong(time.getEpochSecond());
+                        output.writeInt(time.getNano());
                     }
                 }
                 if (file.permissions() != null) {
@@ -149,4 +146,3 @@ public final class ResourceIndexes {
         }
     }
 }
-
