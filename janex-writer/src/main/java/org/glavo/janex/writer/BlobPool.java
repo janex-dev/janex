@@ -9,20 +9,10 @@ import java.util.*;
 
 import org.glavo.janex.reader.Checksum;
 
-/// Builds one pool with shared file blobs and independently indexed table pages.
+/// Holds one encoded blob pool and builds local or package-wide string-pool candidates.
 final class BlobPool {
     /// Section identifier assigned by the container writer.
-    private final long id;
-    /// Raw blobs in stable index order.
-    private final List<byte[]> blobs = new ArrayList<>();
-    /// Distinct path strings in insertion order, beginning with the empty string.
-    private final StringPool strings;
-    /// Digest buckets retaining exact bytes to distinguish hash collisions.
-    private final Map<ByteBuffer, List<SharedFile>> shared = new HashMap<>();
-    /// Whether this candidate uses class transforms and split class resource names.
-    private final boolean transform;
-    /// Per-write policy and input limits.
-    private final PackOptions options;
+    final long id;
     /// Index of the complete resource-root blob.
     final int root;
     /// Complete encoded BLOBPOOL section.
@@ -30,156 +20,209 @@ final class BlobPool {
     /// Page-directory metadata stored in the section table.
     final Map<Integer, Object> info;
 
-    /// Builds a resource root, string pool, and blob table from imported layers.
-    BlobPool(long id, Resources resources, PackOptions options) throws IOException {
-        this(id, resources, options, false);
-    }
-
-    /// Builds one candidate representation with an independent shared string pool.
-    BlobPool(long id, Resources resources, PackOptions options, boolean transform) throws IOException {
+    /// Retains the completed encoding without copying its arrays.
+    private BlobPool(long id, int root, byte[] bytes, Map<Integer, Object> info) {
         this.id = id;
-        this.options = options;
-        this.transform = transform;
-        strings = new StringPool(options.limits);
-        Encoding layers = new Encoding();
-        layers.uint(resources.layers.size());
-        for (var layer : resources.layers.entrySet()) {
-            layers.map(layer.getKey() == 0 ? Map.of() : JanexWriter.condition("vers:jep322/>=" + layer.getKey()));
-            SortedMap<String, SortedMap<String, Resources.Node>> directories = Resources.tree();
-            Map<String, Integer> modes = new HashMap<>();
-            for (var entry : layer.getValue().entrySet()) {
-                if (entry.getValue().directory()) {
-                    directories.computeIfAbsent(entry.getKey(), ignored -> Resources.tree());
-                    modes.put(entry.getKey(), entry.getValue().mode());
-                } else {
-                    int slash = entry.getKey().lastIndexOf('/');
-                    String parent = slash < 0 ? "" : entry.getKey().substring(0, slash);
-                    String name = entry.getKey().substring(slash + 1);
-                    directories.computeIfAbsent(parent, ignored -> Resources.tree()).put(name, entry.getValue());
-                }
-            }
-            layers.uint(directories.size());
-            for (var directory : directories.entrySet()) {
-                layers.uint(intern(directory.getKey()));
-                layers.map(mode(modes.getOrDefault(directory.getKey(), -1)));
-                layers.uint(directory.getValue().size());
-                Encoding entries = new Encoding();
-                for (var entry : directory.getValue().entrySet()) {
-                    Resources.Node node = entry.getValue();
-                    entries.little(node.target() == null ? 0x00534552 : 0x4c4d5953, 4);
-                    name(entries, entry.getKey());
-                    Map<Integer, Object> metadata = mode(node.mode());
-                    if (node.target() != null) {
-                        entries.uint(intern(node.target()));
+        this.root = root;
+        this.bytes = bytes;
+        this.info = info;
+    }
+
+    /// Builds one resource root with its own string pool.
+    static BlobPool local(long id, Resources resources, PackOptions options, boolean transform) throws IOException {
+        StringPool strings = new StringPool(options.limits);
+        Builder builder = new Builder(id, resources, options, transform, strings, id);
+        builder.blobs.set(0, strings.encode());
+        return builder.finish();
+    }
+
+    /// Builds ordered roots sharing one string pool in blob zero of the first section.
+    /// All roots are collected before encoding the pool so later roots may append strings safely.
+    static List<BlobPool> global(List<Resources> roots, PackOptions options) throws IOException {
+        StringPool strings = new StringPool(options.limits);
+        List<Builder> builders = new ArrayList<>();
+        for (int index = 0; index < roots.size(); index++) {
+            builders.add(new Builder(index + 1L, roots.get(index), options, options.transformClassfiles, strings, 1));
+        }
+        builders.get(0).blobs.set(0, strings.encode());
+        List<BlobPool> result = new ArrayList<>();
+        for (Builder builder : builders) result.add(builder.finish());
+        return result;
+    }
+
+    /// Returns section bytes, the integrity-covered section-table row, and the application's root reference size.
+    long encodedSize() throws IOException {
+        return (long) bytes.length + Encoding.cbor(Map.of(0, 0x4c4f4f50424f4c42L, 1, id,
+                2, bytes.length, 3, new byte[1 + Checksum.Algorithm.SHA256.digestLength()], 4, info)).length
+                + Encoding.cbor(List.of(id, root)).length;
+    }
+
+    /// Collects stable blob references while the shared string pool can still grow.
+    private static final class Builder {
+        /// Section identifier assigned by the container writer.
+        private final long id;
+        /// Raw blobs in stable index order.
+        private final List<byte[]> blobs = new ArrayList<>();
+        /// Distinct path strings in insertion order, beginning with the empty string.
+        private final StringPool strings;
+        /// Digest buckets retaining exact bytes to distinguish hash collisions.
+        private final Map<ByteBuffer, List<SharedFile>> shared = new HashMap<>();
+        /// Whether this candidate uses class transforms and split class resource names.
+        private final boolean transform;
+        /// Per-write policy and input limits.
+        private final PackOptions options;
+        /// Index of the complete resource-root blob.
+        final int root;
+
+        /// Builds one root with stable references to a local or package-wide string pool.
+        Builder(long id, Resources resources, PackOptions options, boolean transform,
+                StringPool strings, long stringPoolId) throws IOException {
+            this.id = id;
+            this.options = options;
+            this.transform = transform;
+            this.strings = strings;
+            if (id == stringPoolId) append(new byte[0]);
+            Encoding layers = new Encoding();
+            layers.uint(resources.layers.size());
+            for (var layer : resources.layers.entrySet()) {
+                layers.map(layer.getKey() == 0 ? Map.of() : JanexWriter.condition("vers:jep322/>=" + layer.getKey()));
+                SortedMap<String, SortedMap<String, Resources.Node>> directories = Resources.tree();
+                Map<String, Integer> modes = new HashMap<>();
+                for (var entry : layer.getValue().entrySet()) {
+                    if (entry.getValue().directory()) {
+                        directories.computeIfAbsent(entry.getKey(), ignored -> Resources.tree());
+                        modes.put(entry.getKey(), entry.getValue().mode());
                     } else {
-                        byte[] checksum = Checksum.compute(Checksum.Algorithm.XXH3_64, node.bytes()).encode();
-                        if (node.bytes().length == 0) entries.inline(node.bytes());
-                        else entries.writeBytes(file(entry.getKey(), node.bytes(), checksum));
-                        metadata.put(0, checksum);
+                        int slash = entry.getKey().lastIndexOf('/');
+                        String parent = slash < 0 ? "" : entry.getKey().substring(0, slash);
+                        String name = entry.getKey().substring(slash + 1);
+                        directories.computeIfAbsent(parent, ignored -> Resources.tree()).put(name, entry.getValue());
                     }
-                    entries.map(metadata);
-                    options.limits.bytes(entries.size());
                 }
-                layers.inline(entries.toByteArray());
-                options.limits.bytes(layers.size());
+                layers.uint(directories.size());
+                for (var directory : directories.entrySet()) {
+                    layers.uint(intern(directory.getKey()));
+                    layers.map(mode(modes.getOrDefault(directory.getKey(), -1)));
+                    layers.uint(directory.getValue().size());
+                    Encoding entries = new Encoding();
+                    for (var entry : directory.getValue().entrySet()) {
+                        Resources.Node node = entry.getValue();
+                        entries.little(node.target() == null ? 0x00534552 : 0x4c4d5953, 4);
+                        name(entries, entry.getKey());
+                        Map<Integer, Object> metadata = mode(node.mode());
+                        if (node.target() != null) {
+                            entries.uint(intern(node.target()));
+                        } else {
+                            byte[] checksum = Checksum.compute(Checksum.Algorithm.XXH3_64, node.bytes()).encode();
+                            if (node.bytes().length == 0) entries.inline(node.bytes());
+                            else entries.writeBytes(file(entry.getKey(), node.bytes(), checksum));
+                            metadata.put(0, checksum);
+                        }
+                        entries.map(metadata);
+                        options.limits.bytes(entries.size());
+                    }
+                    layers.inline(entries.toByteArray());
+                    options.limits.bytes(layers.size());
+                }
             }
+            Encoding resource = new Encoding();
+            resource.uint(stringPoolId);
+            resource.uint(0);
+            resource.map(Map.of("janex.java.jar_name", resources.name));
+            resource.writeBytes(layers.toByteArray());
+            root = append(resource.toByteArray());
         }
-        int pool = append(strings.encode());
-        Encoding resource = new Encoding();
-        resource.uint(id);
-        resource.uint(pool);
-        resource.map(Map.of("janex.java.jar_name", resources.name));
-        resource.writeBytes(layers.toByteArray());
-        root = append(resource.toByteArray());
 
-        Encoding data = new Encoding();
-        List<byte[]> descriptions = new ArrayList<>();
-        for (byte[] blob : blobs) {
-            StoredBlob stored = StoredBlob.encode(blob, options.compression, data.size(), false);
-            Encoding description = new Encoding();
-            description.uint(data.size());
-            description.writeBytes(stored.encoding());
-            descriptions.add(description.toByteArray());
-            data.writeBytes(stored.bytes());
-        }
-        List<Object> pages = new ArrayList<>();
-        for (int start = 0; start < blobs.size(); start += 256) {
-            Encoding page = new Encoding();
-            for (int index = start; index < Math.min(start + 256, blobs.size()); index++) {
-                page.write(0);
-                page.sized(descriptions.get(index));
+        /// Encodes the completed blobs after the shared string pool has been finalized.
+        BlobPool finish() throws IOException {
+            Encoding data = new Encoding();
+            List<byte[]> descriptions = new ArrayList<>();
+            for (byte[] blob : blobs) {
+                StoredBlob stored = StoredBlob.encode(blob, options.compression, data.size(), false);
+                Encoding description = new Encoding();
+                description.uint(data.size());
+                description.writeBytes(stored.encoding());
+                descriptions.add(description.toByteArray());
+                data.writeBytes(stored.bytes());
             }
-            options.limits.bytes(page.size());
-            byte[] decoded = page.toByteArray();
-            StoredBlob stored = StoredBlob.encode(decoded, options.compression, data.size(), true);
-            pages.add(List.of(data.size(), stored.encoding(), JanexWriter.sha256(decoded)));
-            data.writeBytes(stored.bytes());
+            List<Object> pages = new ArrayList<>();
+            for (int start = 0; start < blobs.size(); start += 256) {
+                Encoding page = new Encoding();
+                for (int index = start; index < Math.min(start + 256, blobs.size()); index++) {
+                    page.write(0);
+                    page.sized(descriptions.get(index));
+                }
+                options.limits.bytes(page.size());
+                byte[] decoded = page.toByteArray();
+                StoredBlob stored = StoredBlob.encode(decoded, options.compression, data.size(), true);
+                pages.add(List.of(data.size(), stored.encoding(), JanexWriter.sha256(decoded)));
+                data.writeBytes(stored.bytes());
+            }
+            Encoding section = new Encoding();
+            section.little(0x4c4f4f50424f4c42L, 8);
+            section.writeBytes(data.toByteArray());
+            return new BlobPool(id, root, section.toByteArray(), Map.of(0, blobs.size(), 1, 8, 2, pages));
         }
-        Encoding section = new Encoding();
-        section.little(0x4c4f4f50424f4c42L, 8);
-        section.writeBytes(data.toByteArray());
-        bytes = section.toByteArray();
-        info = Map.of(0, blobs.size(), 1, 8, 2, pages);
-    }
 
-    /// Interns one string without changing existing indices.
-    private int intern(String value) throws IOException {
-        return strings.intern(value);
-    }
+        /// Interns one string without changing existing indices.
+        private int intern(String value) throws IOException {
+            return strings.intern(value);
+        }
 
-    /// Encodes class filenames by sharing their basename with class constants.
-    private void name(Encoding output, String name) throws IOException {
-        if (transform && name.endsWith(".class") && name.length() > 6) {
-            output.write(0);
-            output.write(0);
-            output.uint(2);
-            output.uint(intern(name.substring(0, name.length() - 6)));
-            output.uint(intern(".class"));
-        } else output.uint(intern(name));
-    }
+        /// Encodes class filenames by sharing their basename with class constants.
+        private void name(Encoding output, String name) throws IOException {
+            if (transform && name.endsWith(".class") && name.length() > 6) {
+                output.write(0);
+                output.write(0);
+                output.uint(2);
+                output.uint(intern(name.substring(0, name.length() - 6)));
+                output.uint(intern(".class"));
+            } else output.uint(intern(name));
+        }
 
-    /// Reuses the same content and transforms only when complete original bytes are equal.
-    private byte[] file(String name, byte[] bytes, byte[] checksum) throws IOException {
-        List<SharedFile> matches = shared.computeIfAbsent(ByteBuffer.wrap(checksum), ignored -> new ArrayList<>());
-        for (SharedFile previous : matches) if (Arrays.equals(previous.original, bytes)) return previous.content;
-        byte[] transformed = transform && name.endsWith(".class")
-                ? ClassFileEncoder.transform(bytes, strings, options.limits) : null;
-        Encoding content = new Encoding();
-        content.write(1);
-        content.uint(id);
-        content.uint(append(transformed == null ? bytes : transformed));
-        content.uint(transformed == null ? 0 : 1);
-        if (transformed != null) {
-            content.uint(bytes.length);
+        /// Reuses the same content and transforms only when complete original bytes are equal.
+        private byte[] file(String name, byte[] bytes, byte[] checksum) throws IOException {
+            List<SharedFile> matches = shared.computeIfAbsent(ByteBuffer.wrap(checksum), ignored -> new ArrayList<>());
+            for (SharedFile previous : matches) if (Arrays.equals(previous.original, bytes)) return previous.content;
+            byte[] transformed = transform && name.endsWith(".class")
+                    ? ClassFileEncoder.transform(bytes, strings, options.limits) : null;
+            Encoding content = new Encoding();
             content.write(1);
-            content.write(0);
+            content.uint(id);
+            content.uint(append(transformed == null ? bytes : transformed));
+            content.uint(transformed == null ? 0 : 1);
+            if (transformed != null) {
+                content.uint(bytes.length);
+                content.write(1);
+                content.write(0);
+            }
+            byte[] result = content.toByteArray();
+            matches.add(new SharedFile(bytes, result));
+            return result;
         }
-        byte[] result = content.toByteArray();
-        matches.add(new SharedFile(bytes, result));
-        return result;
-    }
 
-    /// Retains exact original bytes and their reusable content descriptor.
-    /// @param original unmodified imported file bytes
-    /// @param content encoded Content value
-    private record SharedFile(byte[] original, byte[] content) {
-        /// Retains the arrays for the lifetime of this builder.
-        private SharedFile { }
-    }
+        /// Retains exact original bytes and their reusable content descriptor.
+        /// @param original unmodified imported file bytes
+        /// @param content encoded Content value
+        private record SharedFile(byte[] original, byte[] content) {
+            /// Retains the arrays for the lifetime of this builder.
+            private SharedFile { }
+        }
 
-    /// Adds one bounded blob and returns its stable index.
-    private int append(byte[] bytes) throws IOException {
-        options.limits.bytes(bytes.length);
-        options.limits.elements((long) blobs.size() + 1);
-        int index = blobs.size();
-        blobs.add(bytes);
-        return index;
-    }
+        /// Adds one bounded blob and returns its stable index.
+        private int append(byte[] bytes) throws IOException {
+            options.limits.bytes(bytes.length);
+            options.limits.elements((long) blobs.size() + 1);
+            int index = blobs.size();
+            blobs.add(bytes);
+            return index;
+        }
 
-    /// Creates mutable optional permission metadata.
-    private static Map<Integer, Object> mode(int mode) {
-        Map<Integer, Object> result = new HashMap<>();
-        if (mode >= 0) result.put(5, mode);
-        return result;
+        /// Creates mutable optional permission metadata.
+        private static Map<Integer, Object> mode(int mode) {
+            Map<Integer, Object> result = new HashMap<>();
+            if (mode >= 0) result.put(5, mode);
+            return result;
+        }
     }
 }

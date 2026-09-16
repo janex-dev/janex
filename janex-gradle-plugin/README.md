@@ -81,8 +81,12 @@ Compression defaults to automatic Zstandard for blobs and table pages, including
 in the size comparison. Set `compression = false` to disable it.
 
 CLASSFILE transforms default to enabled. They share constant-pool strings and class-name components
-with resource names; each root uses the smaller complete encoded pool. Set `transformClassfiles = false`
-to retain ordinary class bytes. Resource contents remain byte-for-byte reproducible after decoding.
+with resource names. The writer compares per-root pools with a package-wide string pool shared by
+all embedded roots, counting compressed blobs, table pages, and reference metadata, and chooses the
+smaller representation. Root boundaries, JAR names, resource precedence, and module identity remain
+independent. If the combined pool exceeds encoding limits, valid local pools are retained.
+Set `transformClassfiles = false` to retain ordinary class bytes; resource-path strings may still
+share a pool. Resource contents remain byte-for-byte reproducible after decoding.
 
 ### Dependency minimization and resource filtering
 

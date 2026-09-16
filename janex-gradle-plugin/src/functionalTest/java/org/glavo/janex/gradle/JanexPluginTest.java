@@ -102,8 +102,12 @@ public final class JanexPluginTest {
         require(first.task(":janexPack").getOutcome() == TaskOutcome.SUCCESS, first.getOutput());
         Path output = project.resolve("build/distributions/fixture.janex");
         try (JanexReader reader = new JanexReader(output)) {
-            require(reader.launch("main").resources.roots().get(0).files().get("demo/Shared0.class").transforms().length == 1,
+            var plan = reader.launch("main").resources;
+            require(plan.roots().get(0).files().get("demo/Shared0.class").transforms().length == 1,
                     "Interoperability fixture did not select CLASSFILE transforms");
+            require(plan.pools().length == 1
+                    && plan.roots().get(1).files().get("dependency/Shared0.class").transforms().length == 1,
+                    "Interoperability fixture did not select a cross-JAR string pool");
         }
         require(run(List.of(executable.toString(), "run", "--allow-unsigned", "--java", javaExecutable(), output.toString()))
                 .contains("hello|resource|configured|4"), "Rust could not launch the Java-written package");
@@ -498,7 +502,10 @@ public final class JanexPluginTest {
                     /// Creates the fixture helper.
                     public Greeting() { }
                     /// Returns the fixture message.
-                    public static String message() { return "hello"; }
+                    public static String message() {
+                        if (!Shared0.value().startsWith("Shared CLASSFILE constants")) throw new AssertionError("Dependency class constant changed");
+                        return "hello";
+                    }
                     /// Reads the dependency resource through the owning class loader or module.
                     public static String resource() throws Exception {
                         try (java.io.InputStream input = Greeting.class.getResourceAsStream("/dependency.txt")) {
@@ -525,6 +532,9 @@ public final class JanexPluginTest {
                         }
                     }
                     """.formatted(index, index));
+            write(project, "dependency/src/main/java/dependency/Shared" + index + ".java",
+                    Files.readString(project.resolve("src/main/java/demo/Shared" + index + ".java"))
+                            .replace("package demo;", "package dependency;"));
         }
         write(project, "src/main/java/demo/Main.java", """
                 package demo;

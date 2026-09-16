@@ -30,6 +30,7 @@ public final class WriterTest {
             directory(root);
             compression(root);
             classfiles(root);
+            globalStrings(root);
             external(root);
             failures(root);
             System.out.println("Java writer checks passed.");
@@ -161,7 +162,12 @@ public final class WriterTest {
 
     /// Reads and decompresses a stored or inline resource using the independent reader decoder.
     private static byte[] content(ResourcePlan plan, String name) throws IOException {
-        var file = plan.roots().get(0).files().get(name);
+        return content(plan, plan.roots().get(0), name);
+    }
+
+    /// Reads one root without flattening resources that share a path across dependencies.
+    private static byte[] content(ResourcePlan plan, ResourcePlan.Root root, String name) throws IOException {
+        var file = root.files().get(name);
         require(file != null, "Missing resource: " + name);
         var source = plan.sources().get(file.source());
         byte[] bytes = source.inline();
@@ -261,6 +267,109 @@ public final class WriterTest {
         }
     }
 
+    /// Checks global interning across root boundaries, exact restoration, and deterministic pool selection.
+    private static void globalStrings(Path root) throws Exception {
+        List<Path> jars = new ArrayList<>();
+        for (int part = 0; part < 3; part++) {
+            Path jar = root.resolve("shared-" + part + ".jar");
+            jars.add(jar);
+            try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(jar))) {
+                entry(zip, "META-INF/MANIFEST.MF", "Manifest-Version: 1.0\r\nMulti-Release: true\r\n\r\n");
+                entry(zip, "root.txt", "root-" + part);
+                for (int index = part * 20; index < (part + 1) * 20; index++) {
+                    String name = "shared/Example" + index + ".class";
+                    zip.putNextEntry(new ZipEntry(name));
+                    zip.write(Files.readAllBytes(root.resolve("classes").resolve(name)));
+                    zip.closeEntry();
+                }
+                entry(zip, "META-INF/versions/9/version.txt", "version-" + part);
+                entry(zip, "META-INF/versions/99/future.txt", "unique-future-string-" + part);
+            }
+        }
+        for (boolean compression : new boolean[]{false, true}) {
+            PackOptions options = globalOptions(jars, root.resolve("global-" + compression + ".janex"), compression);
+            JanexWriter.write(options);
+            try (JanexReader reader = new JanexReader(options.output)) {
+                ResourcePlan plan = reader.launch("main").resources;
+                require(plan.roots().size() == 3 && plan.pools().length == 1, "Roots did not share one global string pool");
+                String[] strings = plan.pools()[0];
+                require(strings[0].isEmpty() && new HashSet<>(Arrays.asList(strings)).size() == strings.length,
+                        "Global pool contains duplicate strings or a nonempty index zero");
+                require(Arrays.stream(strings).filter("A shared string constant repeated across class files"::equals).count() == 1,
+                        "Cross-JAR class constant was not interned once");
+                for (int part = 0; part < jars.size(); part++) {
+                    String name = jars.get(part).getFileName().toString();
+                    var selected = plan.roots().stream().filter(value -> value.name().equals(name)).findFirst().orElseThrow();
+                    require(selected.module() == (part == 2), "Global interning changed module-path membership");
+                    require(new String(content(plan, selected, "root.txt"), StandardCharsets.UTF_8).equals("root-" + part),
+                            "Global interning merged duplicate resource paths");
+                    require(new String(content(plan, selected, "version.txt"), StandardCharsets.UTF_8).equals("version-" + part),
+                            "Global interning changed Multi-Release selection");
+                    require(!selected.files().containsKey("future.txt"), "Future resource layer was selected");
+                    for (int index = part * 20; index < (part + 1) * 20; index++) {
+                        String path = "shared/Example" + index + ".class";
+                        require(Arrays.equals(Files.readAllBytes(root.resolve("classes").resolve(path)), content(plan, selected, path)),
+                                "Cross-root CLASSFILE bytes changed: " + path);
+                        int[][] transforms = selected.files().get(path).transforms();
+                        require(transforms.length == 1 && transforms[0][1] == 0, "Class did not use the global pool");
+                    }
+                }
+            }
+            options = globalOptions(jars, root.resolve("global-copy-" + compression + ".janex"), compression);
+            JanexWriter.write(options);
+            require(Arrays.equals(Files.readAllBytes(root.resolve("global-" + compression + ".janex")), Files.readAllBytes(options.output)),
+                    "Global string pool output is not reproducible");
+            options = globalOptions(jars, root.resolve("global-no-transform-" + compression + ".janex"), compression);
+            options.transformClassfiles = false;
+            JanexWriter.write(options);
+            try (JanexReader reader = new JanexReader(options.output)) {
+                for (var selected : reader.launch("main").resources.roots()) {
+                    require(selected.files().values().stream().allMatch(file -> file.transforms().length == 0),
+                            "Global string pooling ignored disabled CLASSFILE transforms");
+                }
+            }
+        }
+        globalPoolLimit(root);
+    }
+
+    /// Creates equivalent options for repeated cross-root fixture writes.
+    private static PackOptions globalOptions(List<Path> jars, Path output, boolean compression) {
+        PackOptions options = new PackOptions(jars.get(0), output);
+        options.mainClass = "shared.Example0";
+        options.classPath.add(jars.get(1));
+        options.modulePath.add(jars.get(2));
+        options.compression = compression;
+        return options;
+    }
+
+    /// Requires a valid local fallback when combining independently bounded string pools exceeds policy.
+    private static void globalPoolLimit(Path root) throws Exception {
+        Path first = Files.createDirectory(root.resolve("bounded-first"));
+        Path second = Files.createDirectory(root.resolve("bounded-second"));
+        for (int index = 0; index < 24; index++) {
+            Files.writeString(first.resolve("first-" + index + ".txt"), "first");
+            Files.writeString(second.resolve("second-" + index + ".txt"), "second");
+        }
+        PackOptions options = new PackOptions(first, root.resolve("bounded-global.janex"));
+        options.mainClass = "example.Main";
+        options.classPath.add(second);
+        options.limits = new ReadLimits(1024 * 1024, 40, 64);
+        JanexWriter.write(options);
+        try (ContainerReader reader = new ContainerReader(options.output)) {
+            for (int index = 0; index < 2; index++) {
+                Path source = index == 0 ? first : second;
+                BlobPool local = BlobPool.local(index + 1L, new Resources(source, options, new long[]{0}), options, false);
+                require(Arrays.equals(local.bytes, reader.readSectionRange(index + 1L, 0, local.bytes.length)),
+                        "Oversized combined string pool did not fall back to local pools");
+            }
+        }
+        try (JanexReader reader = new JanexReader(options.output)) {
+            ResourcePlan plan = reader.launch("main").resources;
+            require(new String(content(plan, plan.roots().get(1), "second-23.txt"), StandardCharsets.UTF_8).equals("second"),
+                    "Local fallback changed resource content");
+        }
+    }
+
     /// Checks block boundaries, incompressible input, decoded page checksums, and reproducibility.
     private static void compression(Path root) throws Exception {
         Path directory = Files.createDirectory(root.resolve("compression"));
@@ -306,7 +415,7 @@ public final class WriterTest {
             require(Arrays.equals(Files.readAllBytes(options.output), Files.readAllBytes(duplicate.output)),
                     "Compression mode is not reproducible");
 
-            BlobPool pool = new BlobPool(1, new Resources(directory, options, new long[]{0}), options);
+            BlobPool pool = BlobPool.local(1, new Resources(directory, options, new long[]{0}), options, false);
             boolean compressedPage = false;
             for (Object value : (List<?>) pool.info.get(2)) {
                 List<?> page = (List<?>) value;

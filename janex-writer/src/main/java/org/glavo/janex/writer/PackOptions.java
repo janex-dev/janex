@@ -45,7 +45,8 @@ public final class PackOptions {
     /// Applies to blobs and table pages. False stores both without compression.
     public boolean compression = true;
     /// Whether to try shared CLASSFILE strings; defaults to true.
-    /// A root retains ordinary class bytes when the complete encoded pool would not shrink.
+    /// The writer compares per-root and package-wide string pools, including their encoding overhead.
+    /// Ordinary class bytes or local pools remain when the alternative would not shrink the package.
     public boolean transformClassfiles = true;
     /// Whether to remove unreachable classes from embedded classpath dependencies; defaults to false.
     /// All primary-input and module-path classes, package annotations, service providers, and explicit keep matches are roots.

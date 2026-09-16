@@ -74,14 +74,25 @@ public final class JanexWriter {
         List<Object> modulePath = new ArrayList<>();
         List<BlobPool> pools = new ArrayList<>();
         for (int index = 0; index < roots.size(); index++) {
-            BlobPool pool = new BlobPool(index + 1L, roots.get(index), options);
+            BlobPool pool = BlobPool.local(index + 1L, roots.get(index), options, false);
             if (options.transformClassfiles && roots.get(index).layers.values().stream()
                     .anyMatch(layer -> layer.keySet().stream().anyMatch(name -> name.endsWith(".class")))) {
-                BlobPool candidate = new BlobPool(index + 1L, roots.get(index), options, true);
-                if ((long) candidate.bytes.length + Encoding.cbor(candidate.info).length
-                        < (long) pool.bytes.length + Encoding.cbor(pool.info).length) pool = candidate;
+                BlobPool candidate = BlobPool.local(index + 1L, roots.get(index), options, true);
+                if (candidate.encodedSize() < pool.encodedSize()) pool = candidate;
             }
             pools.add(pool);
+        }
+        if (roots.size() > 1) {
+            List<BlobPool> global = null;
+            try {
+                global = BlobPool.global(roots, options);
+            } catch (IOException unavailable) {
+                // Local encodings are already valid; the combined candidate may exceed encoding limits.
+            }
+            if (global != null && poolSize(global) < poolSize(pools)) pools = global;
+        }
+        for (int index = 0; index < pools.size(); index++) {
+            BlobPool pool = pools.get(index);
             boolean modular = index == 0 ? options.mainModule != null : index > options.classPath.size();
             (modular ? modulePath : classPath).add(Map.of(0, 0, 1, List.of(index + 1, pool.root)));
         }
@@ -152,6 +163,13 @@ public final class JanexWriter {
         } finally {
             Files.deleteIfExists(temporary);
         }
+    }
+
+    /// Sums pool sections and section-table rows without overflowing 32-bit package sizes.
+    private static long poolSize(List<BlobPool> pools) throws IOException {
+        long size = 0;
+        for (BlobPool pool : pools) size += pool.encodedSize();
+        return size;
     }
 
     /// Encodes one SHA-256 ChecksumValue in its canonical byte representation.
