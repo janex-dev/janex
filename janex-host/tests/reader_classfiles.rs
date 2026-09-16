@@ -43,7 +43,7 @@ fn vector(
     output.extend((length as u32).to_be_bytes());
     output.extend((pool.len() as u32).to_be_bytes());
     for index in 0..pool.len() {
-        bytes(output, pool.get(index as u64).unwrap());
+        bytes(output, pool.get(index).unwrap());
     }
     let restored = if transform {
         classfile::restore(encoded, pool, limits)

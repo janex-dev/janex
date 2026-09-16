@@ -191,13 +191,13 @@ struct Builder<'a> {
     /// Serialized sources; extents refer only to earlier sources.
     sources: Vec<Vec<u8>>,
     /// Shared blob source identities.
-    ids: BTreeMap<BlobRef, usize>,
+    ids: BTreeMap<BlobRef, u32>,
     /// Decoded source lengths.
     sizes: Vec<u64>,
     /// Serialized data pools shared by transforms.
     pools: Vec<Vec<u8>>,
     /// Pool identities independent of the referring root.
-    pool_ids: BTreeMap<BlobRef, usize>,
+    pool_ids: BTreeMap<BlobRef, u32>,
     /// Serialized source and pool bytes retained so far.
     index_bytes: u64,
     /// Remaining aggregate expanded logical byte allowance.
@@ -206,20 +206,20 @@ struct Builder<'a> {
 
 impl Builder<'_> {
     /// Registers a source descriptor after checking collection and byte limits.
-    fn add(&mut self, data: Vec<u8>, size: u64) -> Result<usize> {
+    fn add(&mut self, data: Vec<u8>, size: u64) -> Result<u32> {
         let limits = self.blobs.reader().limits();
         limits.bytes(size)?;
         self.index_bytes += data.len() as u64;
         limits.bytes(self.index_bytes)?;
         limits.elements(self.sources.len() as u64 + 1)?;
-        let id = self.sources.len();
+        let id = identifier(self.sources.len() as u64)?;
         self.sources.push(data);
         self.sizes.push(size);
         Ok(id)
     }
 
     /// Stores inline or Host-decoded bytes in the private index.
-    fn inline(&mut self, bytes: &[u8]) -> Result<usize> {
+    fn inline(&mut self, bytes: &[u8]) -> Result<u32> {
         let mut data = vec![0];
         number(&mut data, bytes.len() as u64)?;
         data.extend_from_slice(bytes);
@@ -227,7 +227,7 @@ impl Builder<'_> {
     }
 
     /// Describes a blob without decoding ordinary independently compressed payloads.
-    fn blob(&mut self, reference: BlobRef) -> Result<usize> {
+    fn blob(&mut self, reference: BlobRef) -> Result<u32> {
         if let Some(id) = self.ids.get(&reference) {
             return Ok(*id);
         }
@@ -270,14 +270,14 @@ impl Builder<'_> {
                     if extent
                         .decoded_offset
                         .checked_add(extent.decoded_length)
-                        .is_none_or(|end| end > self.sizes[id])
+                        .is_none_or(|end| end > self.sizes[id as usize])
                     {
                         return Err(invalid("extent exceeds decoded source"));
                     }
                     size = size
                         .checked_add(extent.decoded_length)
                         .ok_or_else(|| invalid("extent length overflow"))?;
-                    number(&mut data, id as u64)?;
+                    number(&mut data, u64::from(id))?;
                     number(&mut data, extent.decoded_offset)?;
                     number(&mut data, extent.decoded_length)?;
                 }
@@ -290,7 +290,7 @@ impl Builder<'_> {
     }
 
     /// Registers the selected transform pool once, including explicit file overrides.
-    fn pool(&mut self, reference: BlobRef, root: &ResourceRoot) -> Result<usize> {
+    fn pool(&mut self, reference: BlobRef, root: &ResourceRoot) -> Result<u32> {
         if let Some(id) = self.pool_ids.get(&reference) {
             return Ok(*id);
         }
@@ -305,15 +305,15 @@ impl Builder<'_> {
             &explicit
         };
         let mut data = Vec::new();
-        number(&mut data, pool.len() as u64)?;
+        number(&mut data, pool.len())?;
         for i in 0..pool.len() {
-            let bytes = pool.get(i as u64)?;
+            let bytes = pool.get(i)?;
             number(&mut data, bytes.len() as u64)?;
             data.extend_from_slice(bytes);
         }
         self.index_bytes += data.len() as u64;
         self.blobs.reader().limits().bytes(self.index_bytes)?;
-        let id = self.pools.len();
+        let id = identifier(self.pools.len() as u64)?;
         self.pools.push(data);
         self.pool_ids.insert(reference, id);
         Ok(id)
@@ -328,12 +328,12 @@ impl Builder<'_> {
         let size = content
             .transforms
             .first()
-            .map_or(self.sizes[id], |t| t.input_size);
+            .map_or(self.sizes[id as usize], |t| t.input_size);
         self.remaining = self
             .remaining
             .checked_sub(size)
             .ok_or_else(|| invalid("materialized resource byte limit exceeded"))?;
-        number(output, id as u64)?;
+        number(output, u64::from(id))?;
         number(output, content.transforms.len() as u64)?;
         for transform in content.transforms.iter().rev() {
             let reference = transform
@@ -343,7 +343,7 @@ impl Builder<'_> {
                 .transpose()?
                 .unwrap_or(root.data_pool);
             number(output, transform.input_size)?;
-            number(output, self.pool(reference, root)? as u64)?;
+            number(output, u64::from(self.pool(reference, root)?))?;
         }
         Ok(())
     }
@@ -401,6 +401,14 @@ fn number(output: &mut Vec<u8>, value: u64) -> Result<()> {
     );
     Ok(())
 }
+
+/// Checks a private-index identity before retaining it in a fixed-width lookup table.
+fn identifier(value: u64) -> Result<u32> {
+    u32::try_from(value)
+        .ok()
+        .filter(|&value| value <= i32::MAX as u32)
+        .ok_or_else(|| invalid("bootstrap index exceeds Java int range"))
+}
 /// Writes a string without charset-dependent conversion.
 fn string(output: &mut Vec<u8>, text: &str) -> Result<()> {
     units(output, text.encode_utf16())
@@ -432,6 +440,16 @@ mod tests {
         runtime::{JavaOptions, JavaRuntime, candidates},
     };
     use std::{io::Write, process::Command};
+
+    /// Checks source and pool identities at the Java integer boundary without allocation.
+    #[test]
+    fn identifiers_fit_nonnegative_java_integers() {
+        assert_eq!(identifier(0).unwrap(), 0);
+        assert_eq!(identifier(i32::MAX as u64).unwrap(), i32::MAX as u32);
+        for value in [i32::MAX as u64 + 1, u32::MAX as u64, u64::MAX] {
+            assert!(identifier(value).is_err());
+        }
+    }
 
     /// Creates a regular entry with no optional checksum.
     fn file(name: &str, content: Content) -> DirectoryEntry {

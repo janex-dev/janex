@@ -44,8 +44,8 @@ fn frame(bytes: &[u8], level: i32) -> Vec<u8> {
 }
 
 /// Appends a nonnegative fixture integer.
-fn number(output: &mut Vec<u8>, size: usize) {
-    output.extend_from_slice(&(size as u32).to_be_bytes());
+fn number(output: &mut Vec<u8>, size: u64) {
+    output.extend_from_slice(&i32::try_from(size).unwrap().to_be_bytes());
 }
 
 /// Appends a codec vector with its independent expected bytes and selected pool.
@@ -58,14 +58,14 @@ fn vector(
     pool: &DataPool,
 ) {
     output.extend([kind, u8::from(valid)]);
-    number(output, input.len());
+    number(output, input.len() as u64);
     output.extend(input);
-    number(output, expected.len());
+    number(output, expected.len() as u64);
     output.extend(expected);
     number(output, pool.len());
     for i in 0..pool.len() {
-        let text = pool.get(i as u64).unwrap();
-        number(output, text.len());
+        let text = pool.get(i).unwrap();
+        number(output, text.len() as u64);
         output.extend_from_slice(text);
     }
 }

@@ -20,8 +20,8 @@ use std::{
 pub struct DataPool {
     /// Concatenated entry payloads without framing bytes.
     bytes: Vec<u8>,
-    /// Entry boundaries, including the final end offset.
-    offsets: Vec<usize>,
+    /// Entry boundaries, including the final end offset; each is bounded by the owned buffer.
+    offsets: Vec<u64>,
 }
 
 impl Default for DataPool {
@@ -66,7 +66,7 @@ impl DataPool {
                 return Err(invalid("duplicate data pool entry"));
             }
             pool.bytes.extend_from_slice(value);
-            pool.offsets.push(pool.bytes.len());
+            pool.offsets.push(pool.bytes.len() as u64);
         }
         decoder.finish()?;
         Ok(pool)
@@ -75,16 +75,19 @@ impl DataPool {
     /// Encodes all entries in their existing index order.
     pub fn encode(&self) -> Result<Vec<u8>> {
         let mut bytes = Vec::new();
-        write_vuint(&mut bytes, self.len() as u64)?;
+        write_vuint(&mut bytes, self.len())?;
         for range in self.offsets.windows(2) {
-            write_sized(&mut bytes, &self.bytes[range[0]..range[1]])?;
+            write_sized(
+                &mut bytes,
+                &self.bytes[range[0] as usize..range[1] as usize],
+            )?;
         }
         Ok(bytes)
     }
 
     /// Returns the number of entries, including the empty sequence.
-    pub fn len(&self) -> usize {
-        self.offsets.len() - 1
+    pub fn len(&self) -> u64 {
+        (self.offsets.len() - 1) as u64
     }
 
     /// Returns false: every valid pool contains index zero.
@@ -96,9 +99,9 @@ impl DataPool {
     pub fn get(&self, index: u64) -> Result<&[u8]> {
         let index = usize::try_from(index)
             .ok()
-            .filter(|&index| index < self.len())
+            .filter(|&index| index < self.offsets.len() - 1)
             .ok_or_else(|| invalid("data pool index out of range"))?;
-        Ok(&self.bytes[self.offsets[index]..self.offsets[index + 1]])
+        Ok(&self.bytes[self.offsets[index] as usize..self.offsets[index + 1] as usize])
     }
 }
 
@@ -126,7 +129,12 @@ impl From<DataPool> for DataPoolBuilder {
             .offsets
             .windows(2)
             .enumerate()
-            .map(|(index, range)| (pool.bytes[range[0]..range[1]].to_vec(), index as u64))
+            .map(|(index, range)| {
+                (
+                    pool.bytes[range[0] as usize..range[1] as usize].to_vec(),
+                    index as u64,
+                )
+            })
             .collect();
         Self { pool, indices }
     }
@@ -163,20 +171,22 @@ impl DataPoolBuilder {
         if let Some(index) = self.find(value) {
             return index;
         }
-        let index = self.len() as u64;
+        let index = self.len();
         self.pool.bytes.extend_from_slice(value);
-        self.pool.offsets.push(self.pool.bytes.len());
+        self.pool.offsets.push(self.pool.bytes.len() as u64);
         self.indices.insert(value.into(), index);
         index
     }
 
     /// Removes entries appended since a previous length, preserving index zero.
-    pub(crate) fn truncate(&mut self, length: usize) {
-        let length = length.max(1);
+    pub(crate) fn truncate(&mut self, length: u64) {
+        let length =
+            usize::try_from(length.max(1)).expect("pool checkpoint fits the address space");
         for range in self.pool.offsets[length..].windows(2) {
-            self.indices.remove(&self.pool.bytes[range[0]..range[1]]);
+            self.indices
+                .remove(&self.pool.bytes[range[0] as usize..range[1] as usize]);
         }
-        self.pool.bytes.truncate(self.pool.offsets[length]);
+        self.pool.bytes.truncate(self.pool.offsets[length] as usize);
         self.pool.offsets.truncate(length + 1);
     }
 }

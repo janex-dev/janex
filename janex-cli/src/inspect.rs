@@ -302,7 +302,7 @@ pub(crate) fn run(args: InspectArgs) -> janex_host::Result<i32> {
                 let values = (0..strings.len())
                     .map(|index| {
                         strings
-                            .get(index as u64)
+                            .get(index)
                             .map(|bytes| json!({"bytes_hex": hex(bytes)}))
                     })
                     .collect::<janex_format::Result<Vec<_>>>()?;

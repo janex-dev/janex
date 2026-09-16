@@ -193,9 +193,7 @@ fn root_round_trip_shares_names_and_retains_metadata() {
     ])
     .unwrap();
     let encoded = root.encode(Limits::default()).unwrap();
-    assert!(
-        (0..root.data.len()).all(|index| root.data.get(index as u64).unwrap() != b"Object.class")
-    );
+    assert!((0..root.data.len()).all(|index| root.data.get(index).unwrap() != b"Object.class"));
     let mut blobs = store(&[root.data.encode().unwrap(), b"class bytes".to_vec()]);
     let mut decoded = ResourceRoot::decode(&encoded, &mut blobs).unwrap();
     assert_eq!(decoded.encode(Limits::default()).unwrap(), encoded);
