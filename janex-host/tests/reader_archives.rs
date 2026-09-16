@@ -205,6 +205,20 @@ fn java_matches_zip64_import_and_native_tail_boundary_validation() {
         }
     }
     let empty = end(0, 0, 0, b"");
+    let mut unspecified_mode = member(0, &[], true);
+    let central = unspecified_mode
+        .windows(4)
+        .position(|value| value == b"PK\x01\x02")
+        .unwrap();
+    field(&mut unspecified_mode, central + 38, 4, 0xffff0000);
+    let entries = janex_java::jar::read(
+        &unspecified_mode,
+        janex_java::Limits::default(),
+        512 * 1024 * 1024,
+    )
+    .unwrap();
+    assert_eq!(entries[0].unix_mode, None);
+    archive_vector(&mut vectors, &unspecified_mode);
     archive_vector(&mut vectors, &empty);
     container_vector(&mut vectors, &[&janex[..], &empty].concat());
     let nested = end(0, 0, 0, &[&janex[..], &empty].concat());

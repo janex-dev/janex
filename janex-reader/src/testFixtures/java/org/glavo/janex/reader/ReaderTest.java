@@ -125,7 +125,7 @@ public final class ReaderTest {
     private static void archives() throws Exception {
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         try (ZipOutputStream zip = new ZipOutputStream(buffer)) {
-            zip.putNextEntry(new ZipEntry("empty"));
+            zip.putNextEntry(new ZipEntry("empty/"));
             zip.closeEntry();
             zip.putNextEntry(new ZipEntry("value"));
             zip.write(new byte[]{1, 2, 3});
@@ -145,6 +145,17 @@ public final class ReaderTest {
             }
         }
         check(directory >= 0);
+        byte[] unspecifiedMode = original.clone();
+        unspecifiedMode[directory + 5] = 3;
+        unspecifiedMode[directory + 38] = 0x10;
+        unspecifiedMode[directory + 40] = (byte) 0xff;
+        unspecifiedMode[directory + 41] = (byte) 0xff;
+        check(JarArchive.read(unspecifiedMode).get(0).mode() == -1);
+        // A FIFO remains unsupported; accepting the sentinel must not relax type validation.
+        byte[] fifo = original.clone();
+        fifo[directory + 5] = 3;
+        fifo[directory + 41] = 0x10;
+        reject(() -> JarArchive.read(fifo));
         byte[] name = original.clone();
         name[directory + 46] ^= 1;
         reject(() -> JarArchive.read(name));

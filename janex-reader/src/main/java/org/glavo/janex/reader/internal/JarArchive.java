@@ -121,6 +121,10 @@ public final class JarArchive {
             return -1;
         }
         int unix = (int) (attributes >>> 16);
+        // Some Maven JARs store -1 as an unspecified Unix mode.
+        if (unix == 0xffff) {
+            return -1;
+        }
         if (unix != 0 || system == 3) {
             return unix;
         }

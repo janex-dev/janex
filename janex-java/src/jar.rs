@@ -55,7 +55,8 @@ pub fn read(bytes: &[u8], limits: Limits, max_total_bytes: u64) -> Result<Vec<En
         let name = std::str::from_utf8(file.name_raw())
             .map_err(|_| invalid("JAR entry name is not UTF-8"))?
             .to_owned();
-        let unix_mode = file.unix_mode();
+        // Some Maven JARs store -1 as an unspecified Unix mode.
+        let unix_mode = file.unix_mode().filter(|mode| *mode != 0xffff);
         let expected = file.size();
         limits.bytes(expected)?;
         total = total
