@@ -250,7 +250,7 @@ in ignored build directories. To consume a published plugin, add that repository
 `id("org.glavo.janex") version "0.1.0-SNAPSHOT"`.
 
 All Java modules and the plugin marker use `workspace.package.version` from the root `Cargo.toml`,
-including standalone and composite plugin builds. See [project versioning](../docs/BuildArtifacts.md#versioning)
+including standalone and composite plugin builds. See [project versioning](../README.md#versioning)
 for the development and release workflow.
 
 The CI workflow publishes snapshots to `https://maven.cnb.cool/Glavo/maven/-/packages/` after all

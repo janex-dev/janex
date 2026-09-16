@@ -191,8 +191,7 @@ artifactArchive.configure {
     from("LICENSE") {
         filePermissions { unix("rw-r--r--") }
     }
-    from("docs/Distribution.md") {
-        rename { "README.md" }
+    from("README.md") {
         filePermissions { unix("rw-r--r--") }
     }
     isPreserveFileTimestamps = false

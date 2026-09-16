@@ -12,7 +12,7 @@ Build the CLI and launcher with the root Gradle Wrapper:
 ```
 
 For static Linux musl builds and downloadable Actions artifacts, see
-[Build Artifacts](../docs/BuildArtifacts.md).
+[Building from Source](../README.md#building-from-source).
 
 Package a Windows executable:
 

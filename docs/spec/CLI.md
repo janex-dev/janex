@@ -187,7 +187,7 @@ Downloads allow five redirects, prohibit HTTPS downgrade, and are bounded to 60 
 per dependency. HTTP requires a SHA-256, SHA-512, or SM3 checksum. HTTPS may omit it; declared
 checksums support all five Janex algorithms and are verified on downloads and cache hits. No POMs or
 transitive dependencies are resolved. Offline cache misses and corruption fail; online corruption
-triggers reacquisition. Cache publication is atomic. See [Dependency Cache](../DependencyCache.md).
+triggers reacquisition. Cache publication is atomic.
 
 The standalone reader accepts None or Checksum verification and checks all recorded container and
 blob-page digests using their declared algorithms. Missing checksums do not establish integrity.
@@ -206,7 +206,7 @@ application entry point executes. Virtual requirements do not download module pr
 module paths require Java 9 or later.
 Signing options cannot be combined with `--with-launcher`. Default standalone launching rejects
 signed packages and startup options requiring direct mode.
-The reusable Java [reader APIs](../JavaReader.md) separate container parsing, recorded-integrity
+The reusable Java reader APIs separate container parsing, recorded-integrity
 checks, and caller authentication policy; parsing a signature does not authorize execution.
 The runtime resource index does not repeat per-file checksums, matching native bootstrap launching.
 This entry point does not establish publisher trust:
@@ -455,7 +455,7 @@ janex run --trust-cms-certificate signer.pem ./app.janex
 
 SDKs use the shared command namespace. They do not have a separate `java` or `sdk` command group.
 Providers support Java distributions, Gradle, and Apache Maven; application installation from Maven is planned
-separately. See [SDK Management](../SdkManagement.md) for storage, acquisition, and selection rules.
+separately.
 
 ```text
 janex available bellsoft@21 [--refresh] [--offline] [--json]
