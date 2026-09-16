@@ -105,9 +105,9 @@ public final class JanexPluginTest {
             var plan = reader.launch("main").resources;
             require(plan.roots().get(0).files().get("demo/Shared0.class").transforms().length == 1,
                     "Interoperability fixture did not select CLASSFILE transforms");
-            require(plan.pools().length == 1
+            require(plan.pools().length == 2
                     && plan.roots().get(1).files().get("dependency/Shared0.class").transforms().length == 1,
-                    "Interoperability fixture did not select a cross-JAR string pool");
+                    "Interoperability fixture did not retain independent root string pools");
         }
         require(run(List.of(executable.toString(), "run", "--allow-unsigned", "--java", javaExecutable(), output.toString()))
                 .contains("hello|resource|configured|4"), "Rust could not launch the Java-written package");

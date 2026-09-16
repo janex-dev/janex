@@ -9,7 +9,7 @@ import java.util.*;
 
 import org.glavo.janex.reader.Checksum;
 
-/// Holds one encoded blob pool and builds local or package-wide string-pool candidates.
+/// Holds one encoded blob pool with a string pool scoped to its resource root.
 final class BlobPool {
     /// Section identifier assigned by the container writer.
     final long id;
@@ -30,24 +30,8 @@ final class BlobPool {
 
     /// Builds one resource root with its own string pool.
     static BlobPool local(long id, Resources resources, PackOptions options, boolean transform) throws IOException {
-        StringPool strings = new StringPool(options.limits);
-        Builder builder = new Builder(id, resources, options, transform, strings, id);
-        builder.blobs.set(0, strings.encode());
+        Builder builder = new Builder(id, resources, options, transform);
         return builder.finish();
-    }
-
-    /// Builds ordered roots sharing one string pool in blob zero of the first section.
-    /// All roots are collected before encoding the pool so later roots may append strings safely.
-    static List<BlobPool> global(List<Resources> roots, PackOptions options) throws IOException {
-        StringPool strings = new StringPool(options.limits);
-        List<Builder> builders = new ArrayList<>();
-        for (int index = 0; index < roots.size(); index++) {
-            builders.add(new Builder(index + 1L, roots.get(index), options, options.transformClassfiles, strings, 1));
-        }
-        builders.get(0).blobs.set(0, strings.encode());
-        List<BlobPool> result = new ArrayList<>();
-        for (Builder builder : builders) result.add(builder.finish());
-        return result;
     }
 
     /// Returns section bytes, the integrity-covered section-table row, and the application's root reference size.
@@ -57,7 +41,7 @@ final class BlobPool {
                 + Encoding.cbor(List.of(id, root)).length;
     }
 
-    /// Collects stable blob references while the shared string pool can still grow.
+    /// Collects file blobs and strings for one resource root.
     private static final class Builder {
         /// Section identifier assigned by the container writer.
         private final long id;
@@ -74,14 +58,13 @@ final class BlobPool {
         /// Index of the complete resource-root blob.
         final int root;
 
-        /// Builds one root with stable references to a local or package-wide string pool.
-        Builder(long id, Resources resources, PackOptions options, boolean transform,
-                StringPool strings, long stringPoolId) throws IOException {
+        /// Builds one root with stable references to its own string pool.
+        Builder(long id, Resources resources, PackOptions options, boolean transform) throws IOException {
             this.id = id;
             this.options = options;
             this.transform = transform;
-            this.strings = strings;
-            if (id == stringPoolId) append(new byte[0]);
+            strings = new StringPool(options.limits);
+            append(new byte[0]);
             Encoding layers = new Encoding();
             layers.uint(resources.layers.size());
             for (var layer : resources.layers.entrySet()) {
@@ -126,15 +109,16 @@ final class BlobPool {
                 }
             }
             Encoding resource = new Encoding();
-            resource.uint(stringPoolId);
+            resource.uint(id);
             resource.uint(0);
             resource.map(Map.of("janex.java.jar_name", resources.name));
             resource.writeBytes(layers.toByteArray());
             root = append(resource.toByteArray());
         }
 
-        /// Encodes the completed blobs after the shared string pool has been finalized.
+        /// Finalizes this root's string pool and encodes its complete blob section.
         BlobPool finish() throws IOException {
+            blobs.set(0, strings.encode());
             Encoding data = new Encoding();
             List<byte[]> descriptions = new ArrayList<>();
             for (byte[] blob : blobs) {

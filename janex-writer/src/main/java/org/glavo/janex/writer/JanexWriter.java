@@ -82,15 +82,6 @@ public final class JanexWriter {
             }
             pools.add(pool);
         }
-        if (roots.size() > 1) {
-            List<BlobPool> global = null;
-            try {
-                global = BlobPool.global(roots, options);
-            } catch (IOException unavailable) {
-                // Local encodings are already valid; the combined candidate may exceed encoding limits.
-            }
-            if (global != null && poolSize(global) < poolSize(pools)) pools = global;
-        }
         for (int index = 0; index < pools.size(); index++) {
             BlobPool pool = pools.get(index);
             boolean modular = index == 0 ? options.mainModule != null : index > options.classPath.size();
@@ -163,13 +154,6 @@ public final class JanexWriter {
         } finally {
             Files.deleteIfExists(temporary);
         }
-    }
-
-    /// Sums pool sections and section-table rows without overflowing 32-bit package sizes.
-    private static long poolSize(List<BlobPool> pools) throws IOException {
-        long size = 0;
-        for (BlobPool pool : pools) size += pool.encodedSize();
-        return size;
     }
 
     /// Encodes one SHA-256 ChecksumValue in its canonical byte representation.

@@ -30,7 +30,7 @@ public final class WriterTest {
             directory(root);
             compression(root);
             classfiles(root);
-            globalStrings(root);
+            rootStrings(root);
             external(root);
             failures(root);
             System.out.println("Java writer checks passed.");
@@ -267,8 +267,8 @@ public final class WriterTest {
         }
     }
 
-    /// Checks global interning across root boundaries, exact restoration, and deterministic pool selection.
-    private static void globalStrings(Path root) throws Exception {
+    /// Checks independent root pools, exact restoration, and deterministic output.
+    private static void rootStrings(Path root) throws Exception {
         List<Path> jars = new ArrayList<>();
         for (int part = 0; part < 3; part++) {
             Path jar = root.resolve("shared-" + part + ".jar");
@@ -287,53 +287,56 @@ public final class WriterTest {
             }
         }
         for (boolean compression : new boolean[]{false, true}) {
-            PackOptions options = globalOptions(jars, root.resolve("global-" + compression + ".janex"), compression);
+            PackOptions options = rootOptions(jars, root.resolve("root-pool-" + compression + ".janex"), compression);
             JanexWriter.write(options);
             try (JanexReader reader = new JanexReader(options.output)) {
                 ResourcePlan plan = reader.launch("main").resources;
-                require(plan.roots().size() == 3 && plan.pools().length == 1, "Roots did not share one global string pool");
-                String[] strings = plan.pools()[0];
-                require(strings[0].isEmpty() && new HashSet<>(Arrays.asList(strings)).size() == strings.length,
-                        "Global pool contains duplicate strings or a nonempty index zero");
-                require(Arrays.stream(strings).filter("A shared string constant repeated across class files"::equals).count() == 1,
-                        "Cross-JAR class constant was not interned once");
+                require(plan.roots().size() == 3 && plan.pools().length == 3, "Roots did not retain independent string pools");
+                Set<Integer> poolIds = new HashSet<>();
                 for (int part = 0; part < jars.size(); part++) {
                     String name = jars.get(part).getFileName().toString();
                     var selected = plan.roots().stream().filter(value -> value.name().equals(name)).findFirst().orElseThrow();
-                    require(selected.module() == (part == 2), "Global interning changed module-path membership");
+                    int poolId = selected.files().get("shared/Example" + part * 20 + ".class").transforms()[0][1];
+                    require(poolIds.add(poolId), "Distinct roots reused a string pool");
+                    String[] strings = plan.pools()[poolId];
+                    require(strings[0].isEmpty() && new HashSet<>(Arrays.asList(strings)).size() == strings.length,
+                            "Root pool contains duplicate strings or a nonempty index zero");
+                    require(Arrays.stream(strings).filter("A shared string constant repeated across class files"::equals).count() == 1,
+                            "Class constant was not interned once within its root");
+                    require(selected.module() == (part == 2), "Root pooling changed module-path membership");
                     require(new String(content(plan, selected, "root.txt"), StandardCharsets.UTF_8).equals("root-" + part),
-                            "Global interning merged duplicate resource paths");
+                            "Root pooling merged duplicate resource paths");
                     require(new String(content(plan, selected, "version.txt"), StandardCharsets.UTF_8).equals("version-" + part),
-                            "Global interning changed Multi-Release selection");
+                            "Root pooling changed Multi-Release selection");
                     require(!selected.files().containsKey("future.txt"), "Future resource layer was selected");
                     for (int index = part * 20; index < (part + 1) * 20; index++) {
                         String path = "shared/Example" + index + ".class";
                         require(Arrays.equals(Files.readAllBytes(root.resolve("classes").resolve(path)), content(plan, selected, path)),
                                 "Cross-root CLASSFILE bytes changed: " + path);
                         int[][] transforms = selected.files().get(path).transforms();
-                        require(transforms.length == 1 && transforms[0][1] == 0, "Class did not use the global pool");
+                        require(transforms.length == 1 && transforms[0][1] == poolId, "Class did not use its root pool");
                     }
                 }
             }
-            options = globalOptions(jars, root.resolve("global-copy-" + compression + ".janex"), compression);
+            options = rootOptions(jars, root.resolve("root-pool-copy-" + compression + ".janex"), compression);
             JanexWriter.write(options);
-            require(Arrays.equals(Files.readAllBytes(root.resolve("global-" + compression + ".janex")), Files.readAllBytes(options.output)),
-                    "Global string pool output is not reproducible");
-            options = globalOptions(jars, root.resolve("global-no-transform-" + compression + ".janex"), compression);
+            require(Arrays.equals(Files.readAllBytes(root.resolve("root-pool-" + compression + ".janex")), Files.readAllBytes(options.output)),
+                    "Root string pool output is not reproducible");
+            options = rootOptions(jars, root.resolve("root-pool-no-transform-" + compression + ".janex"), compression);
             options.transformClassfiles = false;
             JanexWriter.write(options);
             try (JanexReader reader = new JanexReader(options.output)) {
                 for (var selected : reader.launch("main").resources.roots()) {
                     require(selected.files().values().stream().allMatch(file -> file.transforms().length == 0),
-                            "Global string pooling ignored disabled CLASSFILE transforms");
+                            "Root string pooling ignored disabled CLASSFILE transforms");
                 }
             }
         }
-        globalPoolLimit(root);
+        rootPoolLimits(root);
     }
 
     /// Creates equivalent options for repeated cross-root fixture writes.
-    private static PackOptions globalOptions(List<Path> jars, Path output, boolean compression) {
+    private static PackOptions rootOptions(List<Path> jars, Path output, boolean compression) {
         PackOptions options = new PackOptions(jars.get(0), output);
         options.mainClass = "shared.Example0";
         options.classPath.add(jars.get(1));
@@ -342,15 +345,15 @@ public final class WriterTest {
         return options;
     }
 
-    /// Requires a valid local fallback when combining independently bounded string pools exceeds policy.
-    private static void globalPoolLimit(Path root) throws Exception {
+    /// Checks that collection limits apply independently to each resource root string pool.
+    private static void rootPoolLimits(Path root) throws Exception {
         Path first = Files.createDirectory(root.resolve("bounded-first"));
         Path second = Files.createDirectory(root.resolve("bounded-second"));
         for (int index = 0; index < 24; index++) {
             Files.writeString(first.resolve("first-" + index + ".txt"), "first");
             Files.writeString(second.resolve("second-" + index + ".txt"), "second");
         }
-        PackOptions options = new PackOptions(first, root.resolve("bounded-global.janex"));
+        PackOptions options = new PackOptions(first, root.resolve("bounded-roots.janex"));
         options.mainClass = "example.Main";
         options.classPath.add(second);
         options.limits = new ReadLimits(1024 * 1024, 40, 64);
@@ -360,13 +363,13 @@ public final class WriterTest {
                 Path source = index == 0 ? first : second;
                 BlobPool local = BlobPool.local(index + 1L, new Resources(source, options, new long[]{0}), options, false);
                 require(Arrays.equals(local.bytes, reader.readSectionRange(index + 1L, 0, local.bytes.length)),
-                        "Oversized combined string pool did not fall back to local pools");
+                        "Root pool differs from its independent encoding");
             }
         }
         try (JanexReader reader = new JanexReader(options.output)) {
             ResourcePlan plan = reader.launch("main").resources;
             require(new String(content(plan, plan.roots().get(1), "second-23.txt"), StandardCharsets.UTF_8).equals("second"),
-                    "Local fallback changed resource content");
+                    "Independent root pooling changed resource content");
         }
     }
 
