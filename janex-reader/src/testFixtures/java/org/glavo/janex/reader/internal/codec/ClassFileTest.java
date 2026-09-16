@@ -7,6 +7,7 @@ import java.io.*;
 import java.util.Arrays;
 
 import org.glavo.janex.reader.ClassFile;
+import org.glavo.janex.reader.DataPool;
 import org.glavo.janex.reader.ReadLimits;
 
 /// Compares ordinary validation and CLASSFILE restoration with native format results.
@@ -34,7 +35,7 @@ public final class ClassFileTest {
                 IOException failure = null;
                 try {
                     if (transform) {
-                        byte[] restored = ClassFile.restore(encoded, pool, length, limits);
+                        byte[] restored = ClassFile.restore(encoded, DataPool.copyOf(pool), length, limits);
                         if (valid && !Arrays.equals(expected, restored)) {
                             throw new AssertionError("Restored class bytes differ at " + index);
                         }

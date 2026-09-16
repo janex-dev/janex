@@ -165,11 +165,16 @@ public final class Input {
 
     /// Decodes strict UTF-8.
     public static String utf8(byte[] bytes) throws IOException {
+        return utf8(ByteBuffer.wrap(bytes));
+    }
+
+    /// Decodes the remaining bytes as strict UTF-8, advancing past consumed bytes even on failure.
+    public static String utf8(ByteBuffer bytes) throws IOException {
         try {
             return StandardCharsets.UTF_8.newDecoder()
                     .onMalformedInput(CodingErrorAction.REPORT)
                     .onUnmappableCharacter(CodingErrorAction.REPORT)
-                    .decode(ByteBuffer.wrap(bytes)).toString();
+                    .decode(bytes).toString();
         } catch (CharacterCodingException failure) {
             Invalid invalid = new Invalid("Invalid UTF-8");
             invalid.initCause(failure);

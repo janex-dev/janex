@@ -7,6 +7,7 @@ import java.io.*;
 import java.util.Arrays;
 
 import org.glavo.janex.reader.ClassFile;
+import org.glavo.janex.reader.DataPool;
 import org.glavo.janex.reader.internal.codec.zstd.Zstandard;
 
 /// Compares the portable decoders with independent Rust-generated fixtures.
@@ -65,7 +66,7 @@ public final class CodecTest {
                             }
                         }
                     } else {
-                        actual = ClassFile.restore(encoded, pool, expected.length);
+                        actual = ClassFile.restore(encoded, DataPool.copyOf(pool), expected.length);
                     }
                 } catch (IOException | IllegalArgumentException rejected) {
                     if (valid) {

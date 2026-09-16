@@ -4,6 +4,9 @@
 package org.glavo.janex.reader.internal.codec;
 
 import java.io.*;
+import java.nio.ByteBuffer;
+
+import org.glavo.janex.reader.DataPool;
 
 import org.glavo.janex.reader.ReadLimits;
 
@@ -20,12 +23,12 @@ public final class ClassFiles {
     /// @param length required original class length
     /// @return a new ordinary class file
     /// @throws IOException if framing, references, or output length are invalid
-    public static byte[] restore(byte[] bytes, byte[][] pool, int length) throws IOException {
+    public static byte[] restore(byte[] bytes, DataPool pool, int length) throws IOException {
         return restore(bytes, pool, length, ReadLimits.DEFAULT);
     }
 
     /// Restores bytes with bounded transform framing; class-file validation belongs to the JVM.
-    public static byte[] restore(byte[] bytes, byte[][] pool, int length, ReadLimits limits) throws IOException {
+    public static byte[] restore(byte[] bytes, DataPool pool, int length, ReadLimits limits) throws IOException {
         if (length < 0 || length > limits.maxBytes() || bytes.length > limits.maxBytes()) {
             throw new IOException("CLASSFILE byte limit exceeded");
         }
@@ -46,38 +49,40 @@ public final class ClassFiles {
         for (int i = 1; i < count; i++) {
             int tag = input.readUnsignedByte();
             if (tag == 0xfd) {
-                byte[] template = entry(input, pool, true);
-                if (template.length > limits.maxBytes()) {
+                int template = entry(input, pool, true);
+                if (pool.byteLength(template) > limits.maxBytes()) {
                     throw new IOException("CLASSFILE byte limit exceeded");
                 }
                 data.writeByte(1);
                 int lengthPosition = output.position;
                 data.writeShort(0);
-                expandTemplate(template, pool, output);
+                expandTemplate(pool.view(template), pool, output);
                 int textLength = output.position - lengthPosition - 2;
                 result[lengthPosition] = (byte) (textLength >>> 8);
                 result[lengthPosition + 1] = (byte) textLength;
             } else if (tag == 0xff || tag == 0xfe) {
-                byte[] text = entry(input, pool);
+                int text = entry(input, pool);
+                int textLength = pool.byteLength(text);
                 if (tag == 0xfe) {
-                    byte[] name = entry(input, pool);
-                    if (name.length == 0) {
+                    int name = entry(input, pool);
+                    int nameLength = pool.byteLength(name);
+                    if (nameLength == 0) {
                         throw new IOException("Empty external class name");
                     }
-                    if ((long) text.length + name.length + (text.length == 0 ? 0 : 1) > 65535) {
+                    if ((long) textLength + nameLength + (textLength == 0 ? 0 : 1) > 65535) {
                         throw new IOException("External class string exceeds 65535 bytes");
                     }
                     data.writeByte(1);
-                    data.writeShort(text.length + name.length + (text.length == 0 ? 0 : 1));
-                    if (text.length != 0) {
-                        data.write(text);
+                    data.writeShort(textLength + nameLength + (textLength == 0 ? 0 : 1));
+                    if (textLength != 0) {
+                        output.write(pool, text);
                         data.writeByte('/');
                     }
-                    data.write(name);
+                    output.write(pool, name);
                 } else {
                     data.writeByte(1);
-                    data.writeShort(text.length);
-                    data.write(text);
+                    data.writeShort(textLength);
+                    output.write(pool, text);
                 }
             } else {
                 data.writeByte(tag);
@@ -128,28 +133,28 @@ public final class ClassFiles {
     }
 
     /// Expands references directly into the result without allocating a restored string.
-    private static void expandTemplate(byte[] bytes, byte[][] pool, ByteArrayOutput output) throws IOException {
-        DataInputStream input = new DataInputStream(new ByteArrayInputStream(bytes));
+    private static void expandTemplate(ByteBuffer template, DataPool pool, ByteArrayOutput output) throws IOException {
         int start = output.position;
-        while (input.available() != 0) {
-            int position = bytes.length - input.available();
-            int end = position;
-            while (end < bytes.length && bytes[end] != 0) end++;
-            checkTemplateLength((long) output.position - start + end - position);
-            output.write(bytes, position, end - position);
-            input.skipBytes(end - position);
-            if (input.available() == 0) break;
-            input.readUnsignedByte();
-            byte[] packageName = entry(input, pool);
-            byte[] className = entry(input, pool);
-            if (className.length == 0) throw new IOException("Empty external class name");
-            checkTemplateLength((long) output.position - start + packageName.length
-                    + className.length + (packageName.length == 0 ? 0 : 1));
-            if (packageName.length != 0) {
-                output.write(packageName);
+        while (template.hasRemaining()) {
+            int end = template.position();
+            while (end < template.limit() && template.get(end) != 0) end++;
+            int length = end - template.position();
+            checkTemplateLength((long) output.position - start + length);
+            output.write(template, length);
+            if (!template.hasRemaining()) break;
+            template.get();
+            int packageName = entry(template, pool);
+            int className = entry(template, pool);
+            int packageLength = pool.byteLength(packageName);
+            int classLength = pool.byteLength(className);
+            if (classLength == 0) throw new IOException("Empty external class name");
+            checkTemplateLength((long) output.position - start + packageLength
+                    + classLength + (packageLength == 0 ? 0 : 1));
+            if (packageLength != 0) {
+                output.write(pool, packageName);
                 output.write('/');
             }
-            output.write(className);
+            output.write(pool, className);
         }
     }
 
@@ -168,32 +173,44 @@ public final class ClassFiles {
         input.skipBytes(length);
     }
 
-    /// Reads a bounded ULEB128 data index, accepting zero padding permitted by the format.
-    private static byte[] entry(DataInputStream input, byte[][] pool) throws IOException {
+    /// Reads an external string index with the CONSTANT_Utf8 byte-length bound.
+    private static int entry(DataInputStream input, DataPool pool) throws IOException {
         return entry(input, pool, false);
     }
 
-    /// Reads a pool reference, allowing template bytes to exceed the restored string limit.
-    private static byte[] entry(DataInputStream input, byte[][] pool, boolean template) throws IOException {
+    /// Reads an index, allowing templates to exceed the restored string length bound.
+    private static int entry(DataInputStream input, DataPool pool, boolean template) throws IOException {
         long value = 0;
         for (int shift = 0; shift < 70; shift += 7) {
             int next = input.readUnsignedByte();
-            if (shift == 63 && next > 1) {
-                throw new IOException("Data-pool index overflow");
-            }
+            if (shift == 63 && next > 1) throw new IOException("Data-pool index overflow");
             value |= (long) (next & 127) << shift;
-            if (next < 128) {
-                if (value < 0 || value >= pool.length) {
-                    throw new IOException("Data-pool index out of range");
-                }
-                byte[] text = pool[(int) value];
-                if (!template && text.length > 65535) {
-                    throw new IOException("External class string exceeds 65535 bytes");
-                }
-                return text;
-            }
+            if (next < 128) return checkedEntry(value, pool, template);
         }
         throw new IOException("Data-pool index overflow");
+    }
+
+    /// Reads a nonrecursive reference from a template, advancing past consumed bytes on failure.
+    private static int entry(ByteBuffer input, DataPool pool) throws IOException {
+        long value = 0;
+        for (int shift = 0; shift < 70; shift += 7) {
+            if (!input.hasRemaining()) throw new EOFException("Truncated template index");
+            int next = input.get() & 255;
+            if (shift == 63 && next > 1) throw new IOException("Data-pool index overflow");
+            value |= (long) (next & 127) << shift;
+            if (next < 128) return checkedEntry(value, pool, false);
+        }
+        throw new IOException("Data-pool index overflow");
+    }
+
+    /// Checks an unsigned index and the length bound for directly copied string entries.
+    private static int checkedEntry(long value, DataPool pool, boolean template) throws IOException {
+        if (value < 0 || value >= pool.size()) throw new IOException("Data-pool index out of range");
+        int index = (int) value;
+        if (!template && pool.byteLength(index) > 65535) {
+            throw new IOException("External class string exceeds 65535 bytes");
+        }
+        return index;
     }
 
     /// Writes into an exact-size output without growing or exposing partial results.
@@ -215,6 +232,21 @@ public final class ClassFiles {
                 throw new IOException("CLASSFILE exceeds declared size");
             }
             bytes[position++] = (byte) value;
+        }
+
+        /// Copies a complete pool entry directly into the final class buffer.
+        void write(DataPool pool, int index) throws IOException {
+            int length = pool.byteLength(index);
+            if (length > bytes.length - position) throw new IOException("CLASSFILE exceeds declared size");
+            pool.copyTo(index, bytes, position);
+            position += length;
+        }
+
+        /// Copies a literal template range and advances both source and destination positions.
+        void write(ByteBuffer source, int length) throws IOException {
+            if (length > bytes.length - position) throw new IOException("CLASSFILE exceeds declared size");
+            source.get(bytes, position, length);
+            position += length;
         }
 
         /// Copies one byte range, rejecting overflow before modifying the result.

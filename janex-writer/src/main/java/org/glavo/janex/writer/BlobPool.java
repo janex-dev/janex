@@ -51,7 +51,7 @@ final class BlobPool {
         /// Raw blobs in stable index order.
         private final List<byte[]> blobs = new ArrayList<>();
         /// Shared path and class-constant bytes in insertion order, beginning with empty bytes.
-        private final DataPool strings;
+        private final DataPoolBuilder strings;
         /// Digest buckets retaining exact bytes to distinguish hash collisions.
         private final Map<ByteBuffer, List<SharedFile>> shared = new HashMap<>();
         /// Whether this candidate uses class transforms and split class resource names.
@@ -66,7 +66,7 @@ final class BlobPool {
             this.id = id;
             this.options = options;
             this.transform = transform;
-            strings = new DataPool(options.limits);
+            strings = new DataPoolBuilder(options.limits);
             append(new byte[0]);
             Encoding layers = new Encoding();
             layers.uint(resources.layers.size());

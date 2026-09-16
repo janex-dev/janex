@@ -46,7 +46,7 @@ public final class WriterTest {
 
     /// Checks independent template bytes, component sharing, and generic-signature round trips.
     private static void classTemplates() throws Exception {
-        DataPool pool = new DataPool(ReadLimits.DEFAULT);
+        DataPoolBuilder pool = new DataPoolBuilder(ReadLimits.DEFAULT);
         for (String value : List.of("java/lang", "String", "Object")) pool.intern(Encoding.utf8(value));
         List<String> texts = List.of(
                 "(Ljava/lang/String;)Ljava/lang/Object;",
@@ -78,7 +78,7 @@ public final class WriterTest {
                 require(Arrays.equals(values[4], new byte[]{'(', 'L', 0, 1, 2, ';', ')', 'L', 0, 1, 3, ';'}),
                         "Template differs from the independent format vector");
             }
-            require(Arrays.equals(original, ClassFile.restore(encoded, values, original.length)),
+            require(Arrays.equals(original, ClassFile.restore(encoded, DataPool.copyOf(values), original.length)),
                     "Descriptor or generic signature changed");
             int checkpoint = pool.size();
             require(Arrays.equals(encoded, ClassFileEncoder.transform(original, pool, ReadLimits.DEFAULT))
@@ -314,7 +314,7 @@ public final class WriterTest {
         require(javax.tools.ToolProvider.getSystemJavaCompiler().run(null, null, null,
                 arguments.toArray(String[]::new)) == 0, "Class fixture compilation failed");
         byte[] original = Files.readAllBytes(classes.resolve("shared/Example0.class"));
-        DataPool strings = new DataPool(ReadLimits.DEFAULT);
+        DataPoolBuilder strings = new DataPoolBuilder(ReadLimits.DEFAULT);
         for (int i = 0; i < 130; i++) strings.intern(Encoding.utf8("preexisting-" + i));
         byte[] transformed = ClassFileEncoder.transform(original, strings, ReadLimits.DEFAULT);
         require(transformed != null, "Class transform was not exercised");
@@ -324,7 +324,7 @@ public final class WriterTest {
         require(Arrays.stream(values).noneMatch(value -> Arrays.equals(value, "before\0after".getBytes(StandardCharsets.UTF_8))
                         || Arrays.equals(value, "before\uD83D\uDE80after".getBytes(StandardCharsets.UTF_8))),
                 "Writer externalized constants with different UTF-8 and Modified UTF-8 bytes");
-        require(Arrays.equals(original, ClassFile.restore(transformed, values, original.length)), "CLASSFILE bytes changed");
+        require(Arrays.equals(original, ClassFile.restore(transformed, DataPool.copyOf(values), original.length)), "CLASSFILE bytes changed");
         require(Arrays.stream(values).anyMatch(value -> Arrays.equals(value, "shared".getBytes(StandardCharsets.UTF_8)))
                         && Arrays.stream(values).anyMatch(value -> Arrays.equals(value, "Example0".getBytes(StandardCharsets.UTF_8))),
                 "Class name was not split into shared components");
@@ -343,13 +343,13 @@ public final class WriterTest {
                 }
             }
             fails(() -> ClassFile.validate(opaque));
-            DataPool opaquePool = new DataPool(ReadLimits.DEFAULT);
+            DataPoolBuilder opaquePool = new DataPoolBuilder(ReadLimits.DEFAULT);
             byte[] encoded = ClassFileEncoder.transform(opaque, opaquePool, ReadLimits.DEFAULT);
             require(encoded != null, "Transform unnecessarily validated class-file internals");
             Input poolInput = new Input(opaquePool.encode());
             byte[][] entries = new byte[Math.toIntExact(poolInput.uint())][];
             for (int i = 0; i < entries.length; i++) entries[i] = poolInput.sized();
-            require(Arrays.equals(opaque, ClassFile.restore(encoded, entries, opaque.length)),
+            require(Arrays.equals(opaque, ClassFile.restore(encoded, DataPool.copyOf(entries), opaque.length)),
                     "Transform changed uninterpreted class-file bytes");
         }
         Files.write(classes.resolve("broken.class"), new byte[]{1, 2, 3});
@@ -457,11 +457,13 @@ public final class WriterTest {
                     var selected = plan.roots().stream().filter(value -> value.name().equals(name)).findFirst().orElseThrow();
                     int poolId = selected.files().get("shared/Example" + part * 20 + ".class").transforms()[0][1];
                     require(poolIds.add(poolId), "Distinct roots reused a data pool");
-                    byte[][] strings = plan.pools()[poolId];
-                    require(strings[0].length == 0 && Arrays.stream(strings).map(java.nio.ByteBuffer::wrap).distinct().count() == strings.length,
+                    DataPool strings = plan.pools()[poolId];
+                    Set<java.nio.ByteBuffer> unique = new HashSet<>();
+                    for (int i = 0; i < strings.size(); i++) unique.add(strings.view(i));
+                    require(strings.byteLength(0) == 0 && unique.size() == strings.size(),
                             "Root pool contains duplicate entries or a nonempty index zero");
                     byte[] shared = "A shared string constant repeated across class files".getBytes(StandardCharsets.UTF_8);
-                    require(Arrays.stream(strings).filter(value -> Arrays.equals(shared, value)).count() == 1,
+                    require(unique.contains(java.nio.ByteBuffer.wrap(shared)),
                             "Class constant was not interned once within its root");
                     require(selected.module() == (part == 2), "Root pooling changed module-path membership");
                     require(new String(content(plan, selected, "root.txt"), StandardCharsets.UTF_8).equals("root-" + part),

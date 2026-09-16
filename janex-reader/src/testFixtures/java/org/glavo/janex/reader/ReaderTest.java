@@ -4,6 +4,9 @@
 package org.glavo.janex.reader;
 
 import java.io.ByteArrayOutputStream;
+import java.io.ByteArrayInputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.util.Arrays;
@@ -71,10 +74,81 @@ public final class ReaderTest {
         check(extension.containsKey(BigInteger.valueOf(99)));
         archives();
         resourcePlan();
+        dataPools();
+    }
+
+    /// Checks contiguous-pool ownership, read-only views, framing, growth, and stream boundaries.
+    private static void dataPools() throws Exception {
+        byte[] encoded = {3, 0, 1, (byte) 0xff, 2, (byte) 0xc0, (byte) 0x80};
+        DataPool pool = DataPool.decode(encoded, ReadLimits.DEFAULT);
+        for (int end = 0; end < encoded.length; end++) {
+            final byte[] prefix = Arrays.copyOf(encoded, end);
+            reject(() -> DataPool.decode(prefix, ReadLimits.DEFAULT));
+        }
+        Arrays.fill(encoded, (byte) 0);
+        check(pool.size() == 3 && pool.byteLength(0) == 0);
+        check(pool.view(1).get() == (byte) 0xff);
+        java.nio.ByteBuffer view = pool.view(2);
+        check(view.position() == 0 && view.limit() == 2 && view.isReadOnly() && !view.hasArray());
+        view.get();
+        check(pool.view(2).position() == 0);
+        try {
+            view.put(0, (byte) 0);
+            throw new AssertionError("Mutable pool view");
+        } catch (java.nio.ReadOnlyBufferException expected) {
+            check(pool.view(2).get() == (byte) 0xc0);
+        }
+        byte[] copy = {7, 7, 7, 7};
+        pool.copyTo(2, copy, 1);
+        check(Arrays.equals(copy, new byte[]{7, (byte) 0xc0, (byte) 0x80, 7}));
+        try {
+            pool.copyTo(2, copy, 3);
+            throw new AssertionError("Out-of-bounds copy accepted");
+        } catch (IndexOutOfBoundsException expected) {
+            check(copy[3] == 7);
+        }
+        reject(() -> pool.view(-1));
+        reject(() -> pool.byteLength(3));
+        reject(() -> DataPool.decode(new byte[]{3, 0, 1, 42, 1, 42}, ReadLimits.DEFAULT));
+        reject(() -> DataPool.decode(new byte[]{1, 1, 42}, ReadLimits.DEFAULT));
+        reject(() -> DataPool.decode(new byte[]{1, 0, 0}, ReadLimits.DEFAULT));
+        reject(() -> DataPool.copyOf(new byte[][]{new byte[0], new byte[0]}));
+        reject(() -> DataPool.decode(new byte[]{1, 0}, new ReadLimits(1, 1, 1)));
+
+        byte[] large = new byte[20000];
+        for (int i = 0; i < large.length; i++) large[i] = (byte) i;
+        DataPool original = DataPool.copyOf(new byte[][]{new byte[0], new byte[]{42}, large});
+        large[0] = 42;
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        original.writeIndex(new DataOutputStream(bytes) {
+            /// Overwrites supplied buffers after writing to detect leaked pool storage.
+            @Override
+            public void write(byte[] value, int offset, int length) throws IOException {
+                super.write(value, offset, length);
+                Arrays.fill(value, (byte) 0);
+            }
+        });
+        check(original.view(1).get() == 42 && original.view(2).get() == 0);
+        final byte[][] retained = {null};
+        DataInputStream input = new DataInputStream(new ByteArrayInputStream(bytes.toByteArray()) {
+            /// Retains the destination to verify that subsequent mutation cannot affect the pool.
+            @Override
+            public synchronized int read(byte[] value, int offset, int length) {
+                retained[0] = value;
+                return super.read(value, offset, length);
+            }
+        });
+        DataPool restored = DataPool.readIndex(input, ReadLimits.DEFAULT);
+        check(input.read() == -1);
+        Arrays.fill(retained[0], (byte) 42);
+        for (int i = 0; i < original.size(); i++) check(original.view(i).equals(restored.view(i)));
+        reject(() -> DataPool.readIndex(new DataInputStream(new ByteArrayInputStream(bytes.toByteArray())),
+                new ReadLimits(20000, 3, 1)));
+        reject(() -> DataPool.readIndex(new DataInputStream(new ByteArrayInputStream(new byte[4])), ReadLimits.DEFAULT));
     }
 
     /// Checks that selected-resource descriptions do not expose mutable preparation state.
-    private static void resourcePlan() {
+    private static void resourcePlan() throws IOException {
         byte[] bytes = {42};
         int[][] extents = {{0, 0, 1}};
         ResourcePlan.Source inline = new ResourcePlan.Source(bytes, -1, 0, new int[0], new int[0][3]);
@@ -85,28 +159,29 @@ public final class ReaderTest {
         Map<String, ResourcePlan.File> files = new java.util.LinkedHashMap<String, ResourcePlan.File>();
         files.put("value", file);
         ResourcePlan.Root root = new ResourcePlan.Root("example.jar", false, files);
-        byte[][][] pools = {{new byte[0], new byte[]{42}}};
+        DataPool immutable = DataPool.copyOf(new byte[][]{new byte[0], new byte[]{42}});
+        DataPool[] pools = {immutable};
         ResourcePlan plan = new ResourcePlan(java.nio.file.Paths.get("snapshot.janex"), ReadLimits.DEFAULT,
                 Arrays.asList(inline, extent), pools, java.util.Collections.emptyMap(), Arrays.asList(root));
         bytes[0] = 0;
         extents[0][2] = 0;
         transforms[0][0] = 0;
         times[0] = null;
-        pools[0][1][0] = 0;
+        pools[0] = null;
         files.clear();
         check(plan.sources().get(0).inline()[0] == 42);
         check(plan.sources().get(1).extents()[0][2] == 1);
         check(plan.roots().get(0).files().get("value").transforms()[0][0] == 10);
         check(file.times()[0].equals(BigInteger.ONE.shiftLeft(100)) && file.permissions() == 0);
-        check(plan.pools()[0][1][0] == 42);
+        check(plan.pools()[0] == immutable && plan.pools()[0].view(1).get() == 42);
         inline.inline()[0] = 0;
         extent.extents()[0][2] = 0;
         file.transforms()[0][0] = 0;
         file.times()[0] = null;
-        plan.pools()[0][1][0] = 0;
+        plan.pools()[0] = null;
         check(inline.inline()[0] == 42 && extent.extents()[0][2] == 1);
         check(file.transforms()[0][0] == 10 && file.times()[0] != null);
-        check(plan.pools()[0][1][0] == 42);
+        check(plan.pools()[0] == immutable && plan.pools()[0].view(1).get() == 42);
         try {
             plan.roots().clear();
             throw new AssertionError("Mutable resource roots");

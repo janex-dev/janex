@@ -8,6 +8,7 @@ import java.math.BigInteger;
 import java.util.*;
 
 import org.glavo.janex.reader.ReadLimits;
+import org.glavo.janex.reader.DataPool;
 import org.glavo.janex.reader.internal.codec.ClassFiles;
 import org.glavo.janex.reader.internal.codec.ZstandardFrames;
 import org.glavo.janex.reader.internal.codec.zstd.Zstandard;
@@ -26,7 +27,7 @@ public final class ResourceIndex implements Closeable {
     /// Topologically ordered byte sources.
     private final Source[] sources;
     /// Data pools shared between CLASSFILE transforms.
-    private final byte[][][] pools;
+    private final DataPool[] pools;
     /// Classpath roots in lookup order.
     final List<Root> roots;
     /// Required observable module names and optional exact versions.
@@ -61,16 +62,10 @@ public final class ResourceIndex implements Closeable {
             for (int i = 0; i < sources.length; i++) {
                 sources[i] = new Source(input, i);
             }
-            pools = new byte[count(input)][][];
+            pools = new DataPool[count(input)];
+            ReadLimits poolLimits = new ReadLimits(maxBytes, maxElements, ReadLimits.DEFAULT.maxDepth());
             for (int i = 0; i < pools.length; i++) {
-                pools[i] = new byte[count(input)][];
-                for (int j = 0; j < pools[i].length; j++) {
-                    pools[i][j] = new byte[size(input)];
-                    input.readFully(pools[i][j]);
-                }
-                if (pools[i].length == 0 || pools[i][0].length != 0) {
-                    throw new IOException("Invalid data pool");
-                }
+                pools[i] = DataPool.readIndex(input, poolLimits);
             }
             Map<String, String> required = new LinkedHashMap<String, String>();
             int requiredCount = count(input);

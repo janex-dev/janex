@@ -13,7 +13,7 @@ import java.util.Map;
 import org.glavo.janex.reader.ReadLimits;
 
 /// Interns opaque byte sequences with stable indices and transactional append rollback.
-final class DataPool {
+final class DataPoolBuilder {
     /// Owned byte sequences in index order.
     private final List<byte[]> values = new ArrayList<>();
     /// Existing indices by exact bytes.
@@ -22,7 +22,7 @@ final class DataPool {
     private final ReadLimits limits;
 
     /// Creates a pool with the required empty byte sequence at index zero.
-    DataPool(ReadLimits limits) throws IOException {
+    DataPoolBuilder(ReadLimits limits) throws IOException {
         this.limits = limits;
         intern(new byte[0]);
     }

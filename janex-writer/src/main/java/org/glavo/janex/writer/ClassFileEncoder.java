@@ -21,7 +21,7 @@ final class ClassFileEncoder {
     /// Only constant-pool framing is parsed; class-file internals are not validated.
     /// Retains original entries whose UTF-8 and Modified UTF-8 bytes differ.
     /// Rejected transformations leave the pool unchanged; allocation-limit failures propagate.
-    static byte[] transform(byte[] bytes, DataPool strings, ReadLimits limits) throws IOException {
+    static byte[] transform(byte[] bytes, DataPoolBuilder strings, ReadLimits limits) throws IOException {
         limits.bytes(bytes.length);
         if (bytes.length < 10) return null;
         DataInputStream input = new DataInputStream(new ByteArrayInputStream(bytes));
@@ -110,7 +110,7 @@ final class ClassFileEncoder {
     }
 
     /// Extracts byte-exact class-name fragments without validating the Java type grammar.
-    private static byte[] template(byte[] bytes, DataPool pool) throws IOException {
+    private static byte[] template(byte[] bytes, DataPoolBuilder pool) throws IOException {
         if (bytes.length == 0 || "([L<".indexOf(bytes[0]) < 0) return null;
         Encoding output = new Encoding();
         boolean changed = false;

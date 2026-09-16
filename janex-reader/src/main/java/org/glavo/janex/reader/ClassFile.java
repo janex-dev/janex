@@ -23,7 +23,7 @@ public final class ClassFile {
     /// @param length required decoded byte length
     /// @return restored bytes; class-file internals are not validated
     /// @throws IOException if transform framing, pool indices, output length, or read limits are invalid
-    public static byte[] restore(byte[] bytes, byte[][] pool, int length) throws IOException {
+    public static byte[] restore(byte[] bytes, DataPool pool, int length) throws IOException {
         return restore(bytes, pool, length, ReadLimits.DEFAULT);
     }
 
@@ -36,7 +36,7 @@ public final class ClassFile {
     /// @param limits inherited buffered-byte and constant-pool limits
     /// @return restored bytes; class-file internals are not validated
     /// @throws IOException if transform framing, pool indices, output length, or read limits are invalid
-    public static byte[] restore(byte[] bytes, byte[][] pool, int length, ReadLimits limits) throws IOException {
+    public static byte[] restore(byte[] bytes, DataPool pool, int length, ReadLimits limits) throws IOException {
         return org.glavo.janex.reader.internal.codec.ClassFiles.restore(bytes, pool, length, limits);
     }
 

@@ -8,6 +8,7 @@ import java.math.BigInteger;
 import java.util.*;
 
 import org.glavo.janex.reader.ReadLimits;
+import org.glavo.janex.reader.DataPool;
 import org.glavo.janex.reader.ResourcePlan;
 
 /// Serializes selected resources into the Host-compatible private bootstrap index.
@@ -56,16 +57,9 @@ public final class ResourceIndexes {
                 }
             }
         }
-        byte[][][] pools = plan.pools();
+        DataPool[] pools = plan.pools();
         output.writeInt(pools.length);
-        for (byte[][] pool : pools) {
-            output.writeInt(pool.length);
-            for (byte[] value : pool) {
-                limits.bytes(value.length);
-                output.writeInt(value.length);
-                output.write(value);
-            }
-        }
+        for (DataPool pool : pools) pool.writeIndex(output);
         output.writeInt(plan.requirements().size());
         for (Map.Entry<String, String> requirement : plan.requirements().entrySet()) {
             string(output, requirement.getKey(), limits);

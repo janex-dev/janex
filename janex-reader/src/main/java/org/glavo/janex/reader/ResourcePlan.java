@@ -19,18 +19,18 @@ public final class ResourcePlan {
     /// Sources in dependency order.
     private final List<Source> sources;
     /// Selected CLASSFILE data pools.
-    private final byte[][][] pools;
+    private final DataPool[] pools;
     /// Required module names and exact versions; empty versions are unconstrained.
     private final Map<String, String> requirements;
     /// Resource roots in lookup order.
     private final List<Root> roots;
 
     /// Retains validated preparation data without exposing mutable input arrays or collections.
-    ResourcePlan(Path snapshot, ReadLimits limits, List<Source> sources, byte[][][] pools, Map<String, String> requirements, List<Root> roots) {
+    ResourcePlan(Path snapshot, ReadLimits limits, List<Source> sources, DataPool[] pools, Map<String, String> requirements, List<Root> roots) {
         this.snapshot = snapshot;
         this.limits = limits;
         this.sources = Collections.unmodifiableList(new ArrayList<>(sources));
-        this.pools = copy(pools);
+        this.pools = pools.clone();
         this.requirements = Collections.unmodifiableMap(new LinkedHashMap<>(requirements));
         this.roots = Collections.unmodifiableList(new ArrayList<>(roots));
     }
@@ -50,9 +50,9 @@ public final class ResourcePlan {
         return sources;
     }
 
-    /// Returns a deep copy of the selected CLASSFILE data pools.
-    public byte[][][] pools() {
-        return copy(pools);
+    /// Returns an independent array sharing the selected immutable CLASSFILE data pools.
+    public DataPool[] pools() {
+        return pools.clone();
     }
 
     /// Returns required module names and exact versions; empty versions are unconstrained.
@@ -194,15 +194,4 @@ public final class ResourcePlan {
         return copy;
     }
 
-    /// Copies each pool, entry array, and byte sequence.
-    private static byte[][][] copy(byte[][][] values) {
-        byte[][][] copy = values.clone();
-        for (int i = 0; i < copy.length; i++) {
-            copy[i] = copy[i].clone();
-            for (int j = 0; j < copy[i].length; j++) {
-                copy[i][j] = copy[i][j].clone();
-            }
-        }
-        return copy;
-    }
 }

@@ -5,7 +5,6 @@ package org.glavo.janex.reader;
 
 import java.io.*;
 import java.math.BigInteger;
-import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.util.*;
 
@@ -47,7 +46,7 @@ public final class JanexReader implements Closeable {
     /// Sources in dependency order, shared by all selected roots.
     private final List<Source> sources = new ArrayList<Source>();
     /// Decoded data pools in selection order.
-    private final List<byte[][]> dataPools = new ArrayList<byte[][]>();
+    private final List<DataPool> dataPools = new ArrayList<DataPool>();
     /// Interned pool references.
     private final Map<List<Long>, Integer> dataPoolIds = new HashMap<List<Long>, Integer>();
     /// Aggregate logical resource size selected for this launch.
@@ -531,15 +530,7 @@ public final class JanexReader implements Closeable {
         if (previous != null) {
             return previous;
         }
-        Input input = input(bytes(reference(pool, index)));
-        byte[][] values = new byte[limits.elements(input.uint())][];
-        Set<ByteBuffer> unique = new HashSet<ByteBuffer>();
-        for (int i = 0; i < values.length; i++) {
-            values[i] = input.sized();
-            require(unique.add(ByteBuffer.wrap(values[i])), "Duplicate data-pool entry");
-        }
-        input.end();
-        require(values.length != 0 && values[0].length == 0, "Data pool must start with empty bytes");
+        DataPool values = DataPool.decode(bytes(reference(pool, index)), limits);
         int id = dataPools.size();
         dataPools.add(values);
         dataPoolIds.put(key, id);
@@ -548,9 +539,9 @@ public final class JanexReader implements Closeable {
 
     /// Decodes a root data-pool entry as UTF-8 for a resource path or name.
     private String string(int pool, long index) throws IOException {
-        byte[][] values = dataPools.get(pool);
-        require(index >= 0 && index < values.length, "Invalid data-pool index");
-        return Input.utf8(values[(int) index]);
+        DataPool values = dataPools.get(pool);
+        require(index >= 0 && index < values.size(), "Invalid data-pool index");
+        return Input.utf8(values.view((int) index));
     }
 
     /// Reads a nonempty indexed, inline, or concatenated string.
@@ -1168,7 +1159,7 @@ public final class JanexReader implements Closeable {
             selectedSources.add(new ResourcePlan.Source(source.inline, source.encoding == null ? -1 : source.offset,
                     source.inline == null && source.encoding != null ? limits.bytes(source.encoding.stored) : 0, filters, extents));
         }
-        byte[][][] selectedPools = new byte[usedPools.size()][][];
+        DataPool[] selectedPools = new DataPool[usedPools.size()];
         for (int id : usedPools) {
             selectedPools[poolIds.get(id)] = dataPools.get(id);
         }
