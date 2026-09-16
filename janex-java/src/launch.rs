@@ -72,8 +72,10 @@ impl LaunchRequest {
     ///
     /// `resources` must be Host-generated launch data matching the embedded Java bootstrap.
     /// It requires bootstrap mode. The caller must retain the referenced private snapshot until
-    /// Java exits. Java 9+ validates the indexed module graph in a separate process without
-    /// executing application entry points or agents. Other behavior matches [`Self::prepare`].
+    /// Java exits. The application JVM initializes the indexed module graph before invoking Java
+    /// agent premain methods or main. Include system-module roots required by indexed descriptors in
+    /// `jvm_options`; [`crate::modules::system_roots`] computes them from a selected inventory.
+    /// Preparation does not start Java. Other behavior matches [`Self::prepare`].
     pub fn prepare_with_resources(
         &self,
         runtime: &JavaRuntime,
@@ -139,7 +141,7 @@ impl LaunchRequest {
         }
         let indexed_modules = resources.is_some() && runtime.feature >= 9;
         if indexed_modules {
-            arguments.extend(indexed_module_options(&self.jvm_options)?);
+            arguments.extend(indexed_module_options(&self.jvm_options, runtime)?);
         } else {
             arguments.extend(self.jvm_options.iter().map(OsString::from));
         }
@@ -204,24 +206,15 @@ impl LaunchRequest {
         {
             return Err(invalid("Java process arguments must not contain NUL"));
         }
-        if indexed_modules {
-            let system_modules = runtime.validate_indexed_modules(
-                bridge.as_ref().expect("bootstrap resources require bridge"),
-                &self.jvm_options,
-            )?;
-            if !system_modules.is_empty() {
-                arguments.insert(
-                    0,
-                    format!("--add-modules={}", system_modules.join(",")).into(),
-                );
-            }
-        }
         Ok(arguments)
     }
 }
 
 /// Retains native JVM options while deferring module access changes until the indexed layer exists.
-pub(crate) fn indexed_module_options(options: &[String]) -> Result<Vec<OsString>> {
+pub(crate) fn indexed_module_options(
+    options: &[String],
+    runtime: &JavaRuntime,
+) -> Result<Vec<OsString>> {
     let mut result = vec!["--add-exports=java.base/jdk.internal.module=ALL-UNNAMED".into()];
     let mut index = 0;
     while index < options.len() {
@@ -246,6 +239,18 @@ pub(crate) fn indexed_module_options(options: &[String]) -> Result<Vec<OsString>
                     .get(index)
                     .ok_or_else(|| invalid(format!("missing operand for {key}")))?
             };
+            if key == "--add-modules" {
+                let system: Vec<_> = value
+                    .split(',')
+                    .filter(|name| {
+                        matches!(*name, "ALL-SYSTEM" | "ALL-DEFAULT")
+                            || runtime.modules.contains_key(*name)
+                    })
+                    .collect();
+                if !system.is_empty() {
+                    result.push(format!("--add-modules={}", system.join(",")).into());
+                }
+            }
             if key == "--enable-native-access" {
                 result.push("--add-opens=java.base/java.lang=ALL-UNNAMED".into());
                 if value.split(',').any(|name| name == "ALL-UNNAMED") {

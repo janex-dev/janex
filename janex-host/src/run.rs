@@ -187,6 +187,8 @@ impl ExecutionPlan {
 /// Explicit runtime selection disables fallback. None and Checksum inputs require
 /// `allow_unsigned`; signed inputs require signature support and never fall back to that policy.
 /// No application main method or descriptor-supplied agent runs during preparation.
+/// Module identities and requirements are checked here; graph resolution and module access
+/// validation occur in the launched JVM, whose initialization failures become child exit statuses.
 /// Dependency acquisition follows `options.dependencies` after authentication and condition evaluation.
 pub fn prepare(options: &RunOptions) -> Result<ExecutionPlan> {
     prepare_snapshot(
@@ -328,6 +330,18 @@ fn prepare_runtime(
         },
         !matches!(authentication, Authentication::Unsigned),
     )?;
+    let inventory = crate::modules::inventory(&launch.module_path, &context, blobs, roots)?;
+    let requirements: Vec<_> = launch
+        .module_path
+        .iter()
+        .filter_map(PathEntry::module_requirement)
+        .collect();
+    let system_roots = janex_java::modules::system_roots(
+        &runtime,
+        &inventory,
+        &requirements,
+        launch.entry_point.main_module.as_deref(),
+    )?;
     let resources = if options.launch_mode == LaunchMode::Bootstrap {
         Some(crate::bootstrap::prepare(
             &launch.class_path,
@@ -359,32 +373,10 @@ fn prepare_runtime(
         .map(|entry| materializer.local(entry))
         .collect::<Result<Vec<_>>>()?;
     let mut module_path = Vec::new();
-    let mut requirements = Vec::new();
     for entry in &launch.module_path {
-        if let Some(requirement) = entry.module_requirement() {
-            requirements.push(requirement);
-        } else if resources.is_none() {
+        if entry.module_requirement().is_none() && resources.is_none() {
             module_path.push(materializer.local(entry)?);
         }
-    }
-    let modules = runtime.validate_module_path(&module_path)?;
-    for (name, version) in requirements.into_iter().filter(|_| resources.is_none()) {
-        let actual = modules
-            .get(&name)
-            .ok_or_else(|| invalid(format!("required module is unavailable: {name}")))?;
-        if let Some(version) = version
-            && actual.as_deref() != Some(&version)
-        {
-            return Err(invalid(format!(
-                "required module version is unavailable: {name}@{version}"
-            )));
-        }
-    }
-    if let Some(name) = &launch.entry_point.main_module
-        && resources.is_none()
-        && !modules.contains_key(name)
-    {
-        return Err(invalid(format!("main module is unavailable: {name}")));
     }
     let mut agents = Vec::new();
     for (index, agent) in launch.agents.iter().enumerate() {
@@ -414,13 +406,20 @@ fn prepare_runtime(
         .map(OsString::from)
         .chain(options.arguments.iter().cloned())
         .collect();
+    let mut jvm_options = launch.jvm_options.clone();
+    if resources.is_some() && !system_roots.is_empty() {
+        jvm_options.push(format!(
+            "--add-modules={}",
+            system_roots.into_iter().collect::<Vec<_>>().join(",")
+        ));
+    }
     let arguments = LaunchRequest {
         entry_point: EntryPoint {
             main_class: launch.entry_point.main_class.clone(),
             main_module: launch.entry_point.main_module.clone(),
         },
         mode: options.launch_mode,
-        jvm_options: launch.jvm_options.clone(),
+        jvm_options,
         class_path,
         module_path,
         agents,

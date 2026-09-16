@@ -60,58 +60,6 @@ impl JavaRuntime {
         crate::runtime_cache::probe(executable)
     }
 
-    /// Validates an indexed bootstrap's module graph without application main methods or agents.
-    pub(crate) fn validate_indexed_modules(
-        &self,
-        bridge: &Path,
-        options: &[String],
-    ) -> Result<Vec<String>> {
-        let mut resolution = Vec::new();
-        let mut index = 0;
-        while index < options.len() {
-            let key = options[index].split('=').next().unwrap();
-            if matches!(
-                key,
-                "--limit-modules" | "--upgrade-module-path" | "--enable-native-access"
-            ) {
-                resolution.push(options[index].clone());
-                if !options[index].contains('=') {
-                    index += 1;
-                    resolution.push(
-                        options
-                            .get(index)
-                            .ok_or_else(|| invalid("missing module option operand"))?
-                            .clone(),
-                    );
-                }
-            }
-            index += 1;
-        }
-        let mut args = crate::launch::indexed_module_options(&resolution)?;
-        args.push("--add-modules=ALL-SYSTEM".into());
-        args.push("-cp".into());
-        args.push(bridge.as_os_str().into());
-        args.push("org.glavo.janex.bootstrap.loader.ModuleSupport".into());
-        let output = Command::new(&self.executable)
-            .args(&args)
-            .stdin(Stdio::null())
-            .output()?;
-        if !output.status.success() {
-            return Err(invalid(format!(
-                "Java module validation failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            )));
-        }
-        let text =
-            String::from_utf8(output.stdout).map_err(|_| invalid("invalid module probe output"))?;
-        let names: Vec<String> = text.lines().map(str::to_owned).collect();
-        if names.iter().any(|name| {
-            name.is_empty() || name.contains([',', '=', '\0']) || !self.modules.contains_key(name)
-        }) {
-            return Err(invalid("invalid module probe output"));
-        }
-        Ok(names)
-    }
     /// Probes one executable's properties and, on Java 9 or later, system modules without a cache.
     ///
     /// Probes start child processes without a shell, capture their output, and do not

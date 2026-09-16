@@ -8,7 +8,11 @@ use janex_host::{
     pack::{PackOptions, pack},
     run::{LaunchMode, RunOptions, prepare},
 };
-use std::{fs, path::Path, process::Command};
+use std::{
+    fs,
+    path::Path,
+    process::{Command, Stdio},
+};
 
 /// Compiles Java fixtures and requires successful tool completion.
 fn javac(directory: &Path, args: &[&str]) {
@@ -146,7 +150,7 @@ fn jar_tail_launches_named_module_and_propagates_exit_status() {
     fs::create_dir_all(temp.path().join("src/app")).unwrap();
     fs::write(
         temp.path().join("src/module-info.java"),
-        "module sample.app { requires java.logging; }",
+        "module sample.app { requires java.logging; requires jdk.jconsole; requires static jdk.hotspot.agent; }",
     )
     .unwrap();
     fs::write(temp.path().join("src/app/Main.java"), r#"
@@ -155,6 +159,11 @@ public class Main {
     public static void main(String[] args) throws Exception {
         if (!Main.class.getModule().getName().equals("sample.app")) throw new AssertionError();
         java.util.logging.Logger.getLogger("sample");
+        Module console = com.sun.tools.jconsole.JConsoleContext.class.getModule();
+        if (ModuleLayer.boot().findModule("jdk.jconsole").orElseThrow() != console) throw new AssertionError("system module");
+        if (ModuleLayer.boot().findModule("jdk.hotspot.agent").isPresent() != Boolean.getBoolean("check.required.system")) {
+            throw new AssertionError("mandatory/static system dependency");
+        }
         Module application = Main.class.getModule();
         Module base = Object.class.getModule();
         Module sql = Class.forName("java.sql.Driver").getModule();
@@ -209,6 +218,18 @@ public class Main {
     for separate in [false, true] {
         options.output = temp.path().join(format!("module-{separate}.janex"));
         options.jvm_options.clear();
+        if separate {
+            // The same non-default system module becomes mandatory in the second descriptor.
+            fs::write(temp.path().join("src/module-info.java"),
+                "module sample.app { requires java.logging; requires jdk.jconsole; requires jdk.hotspot.agent; }").unwrap();
+            javac(
+                temp.path(),
+                &["--release", "11", "-d", "classes", "src/module-info.java"],
+            );
+            options
+                .jvm_options
+                .push("-Dcheck.required.system=true".into());
+        }
         let mut access = vec![
             ("--add-modules", "java.sql,ALL-MODULE-PATH"),
             ("--add-reads", "sample.app=java.sql,ALL-UNNAMED"),
@@ -306,7 +327,16 @@ public class Main {
         run.allow_unsigned = true;
         // Compare both paths on the same JVM without falling back to an installed Java 8.
         run.java.java = Some("java".into());
-        assert!(prepare(&run).is_err(), "native accepted {args:?}");
+        if let Ok(plan) = prepare(&run) {
+            let result = plan
+                .command()
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+                .unwrap();
+            assert!(!result.status.success(), "native accepted {args:?}");
+            assert!(!String::from_utf8_lossy(&result.stdout).contains("application-started"));
+        }
         let result = Command::new("java")
             .arg("-jar")
             .arg(&options.output)

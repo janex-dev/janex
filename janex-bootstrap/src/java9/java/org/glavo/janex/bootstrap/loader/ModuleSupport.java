@@ -76,28 +76,10 @@ public final class ModuleSupport {
             }
             if (option.startsWith("--add-modules=")) {
                 for (String name : option.substring(14).split(",", -1)) {
-                    if (name.equals("ALL-SYSTEM")) {
-                        for (ModuleReference system : ModuleFinder.ofSystem().findAll()) {
-                            loader.systemModules.add(system.descriptor().name());
-                        }
-                    }
                     if (!name.equals("ALL-MODULE-PATH") && !name.equals("ALL-SYSTEM") && !name.equals("ALL-DEFAULT")) {
                         roots.add(name);
                     }
                 }
-            }
-        }
-        for (ModuleReference reference : finder.findAll()) {
-            for (ModuleDescriptor.Requires requirement : reference.descriptor().requires()) {
-                if (!requirement.modifiers().contains(ModuleDescriptor.Requires.Modifier.STATIC)
-                        && ModuleFinder.ofSystem().find(requirement.name()).isPresent()) {
-                    loader.systemModules.add(requirement.name());
-                }
-            }
-        }
-        for (String root : roots) {
-            if (ModuleFinder.ofSystem().find(root).isPresent()) {
-                loader.systemModules.add(root);
             }
         }
         Configuration configuration = ModuleLayer.boot().configuration().resolveAndBind(finder, ModuleFinder.of(), roots);
@@ -208,17 +190,113 @@ public final class ModuleSupport {
         return result;
     }
 
-    /// Validates descriptors and resolution in a preparation process without executing main methods or agents.
+    /// Computes native system-module roots from descriptor metadata without resolving a module graph.
     ///
-    /// @param args unused
-    /// @throws Exception if the prepared launch cannot initialize its module layer
-    public static void main(String[] args) throws Exception {
-        try (ResourceLoader loader = new ResourceLoader(ClassLoader.getSystemClassLoader())) {
-            for (String name : loader.systemModules) {
-                System.out.write(name.getBytes(StandardCharsets.UTF_8));
-                System.out.write('\n');
+    /// @param data private resource index, or null when there are no module entries or requirements
+    /// @param mainModule main module name, or an empty string for classpath launching
+    /// @param options ordered application JVM options
+    /// @return system-module names and native root tokens to enable in the application JVM
+    /// @throws IOException if indexed metadata cannot be read
+    /// @throws FindException if a required module or exact version is unavailable
+    public static String[] launchModules(byte[] data, String mainModule, List<String> options) throws IOException {
+        ModuleFinder system = ModuleFinder.ofSystem();
+        Map<String, ModuleDescriptor> available = new HashMap<String, ModuleDescriptor>();
+        Set<String> roots = new TreeSet<String>();
+        for (ModuleReference reference : system.findAll()) {
+            available.put(reference.descriptor().name(), reference.descriptor());
+        }
+        List<ModuleDescriptor> selected = new ArrayList<ModuleDescriptor>();
+        if (data != null) {
+            try (ResourceIndex index = new ResourceIndex(new ByteArrayInputStream(data))) {
+                for (ResourceIndex.Root root : index.roots) {
+                    if (!root.module) {
+                        continue;
+                    }
+                    ResourceIndex.Resource info = root.files.get("module-info.class");
+                    ModuleDescriptor descriptor;
+                    if (info != null) {
+                        descriptor = ModuleDescriptor.read(ByteBuffer.wrap(info.read()));
+                    } else {
+                        java.util.jar.Manifest manifest = null;
+                        for (Map.Entry<String, ResourceIndex.Resource> entry : root.files.entrySet()) {
+                            if (entry.getKey().equalsIgnoreCase("META-INF/MANIFEST.MF")) {
+                                manifest = new java.util.jar.Manifest(new ByteArrayInputStream(entry.getValue().read()));
+                                break;
+                            }
+                        }
+                        descriptor = automaticIdentity(root.name, manifest).build();
+                    }
+                    if (available.putIfAbsent(descriptor.name(), descriptor) != null) {
+                        throw new FindException("Duplicate or shadowed module: " + descriptor.name());
+                    }
+                    selected.add(descriptor);
+                }
+                for (Map.Entry<String, String> requirement : index.requirements.entrySet()) {
+                    ModuleDescriptor descriptor = available.get(requirement.getKey());
+                    if (descriptor == null) {
+                        throw new FindException("Required module is unavailable: " + requirement.getKey());
+                    }
+                    if (!requirement.getValue().isEmpty() && !descriptor.rawVersion().orElse("").equals(requirement.getValue())) {
+                        throw new FindException("Required module version is unavailable: " + requirement.getKey() + "@" + requirement.getValue());
+                    }
+                }
             }
         }
+        Set<String> required = new LinkedHashSet<String>();
+        if (!mainModule.isEmpty()) {
+            required.add(mainModule);
+        }
+        for (ModuleDescriptor descriptor : selected) {
+            for (ModuleDescriptor.Requires dependency : descriptor.requires()) {
+                if (!dependency.modifiers().contains(ModuleDescriptor.Requires.Modifier.STATIC)) {
+                    required.add(dependency.name());
+                }
+            }
+        }
+        for (String name : required) {
+            if (!available.containsKey(name)) {
+                throw new FindException("Required module is unavailable: " + name);
+            }
+            if (system.find(name).isPresent()) {
+                roots.add(name);
+            }
+        }
+        for (int i = 0; i < options.size(); i++) {
+            String option = options.get(i);
+            if (option.equals("--add-modules")) {
+                option += "=" + argument(options, ++i);
+            }
+            if (option.startsWith("--add-modules=")) {
+                for (String name : option.substring(14).split(",", -1)) {
+                    if (name.equals("ALL-SYSTEM") || name.equals("ALL-DEFAULT") || system.find(name).isPresent()) {
+                        roots.add(name);
+                    }
+                }
+            }
+        }
+        return roots.toArray(new String[0]);
+    }
+
+    /// Derives an automatic module's name and optional version without reading its packages or services.
+    private static ModuleDescriptor.Builder automaticIdentity(String file, java.util.jar.Manifest manifest) {
+        String stem = file.endsWith(".jar") ? file.substring(0, file.length() - 4) : file;
+        java.util.regex.Matcher version = java.util.regex.Pattern.compile("-(\\d+(?:\\.|$))").matcher(stem);
+        String rawVersion = null;
+        if (version.find()) {
+            rawVersion = stem.substring(version.start() + 1);
+            stem = stem.substring(0, version.start());
+        }
+        String name = manifest == null ? null : manifest.getMainAttributes().getValue("Automatic-Module-Name");
+        if (name == null) {
+            name = stem.replaceAll("[^A-Za-z0-9]", ".").replaceAll("\\.+", ".").replaceAll("^\\.|\\.$", "");
+        }
+        ModuleDescriptor.Builder builder = ModuleDescriptor.newAutomaticModule(name);
+        if (rawVersion != null) {
+            try {
+                builder.version(rawVersion);
+            } catch (IllegalArgumentException unparseable) { /* Optional filename version. */ }
+        }
+        return builder;
     }
 
     /// Reads a nonnegative counted sequence of UTF-16 code units from private launch data.
@@ -282,24 +360,7 @@ public final class ModuleSupport {
 
         /// Derives an automatic module from its original JAR filename, manifest, packages, and service files.
         private static ModuleDescriptor automatic(ResourceLoader.Root root, Set<String> packages) throws IOException {
-            String file = root.root.name;
-            String stem = file.endsWith(".jar") ? file.substring(0, file.length() - 4) : file;
-            java.util.regex.Matcher version = java.util.regex.Pattern.compile("-(\\d+(?:\\.|$))").matcher(stem);
-            String rawVersion = null;
-            if (version.find()) {
-                rawVersion = stem.substring(version.start() + 1);
-                stem = stem.substring(0, version.start());
-            }
-            String name = root.manifest == null ? null : root.manifest.getMainAttributes().getValue("Automatic-Module-Name");
-            if (name == null) {
-                name = stem.replaceAll("[^A-Za-z0-9]", ".").replaceAll("\\.+", ".").replaceAll("^\\.|\\.$", "");
-            }
-            ModuleDescriptor.Builder builder = ModuleDescriptor.newAutomaticModule(name).packages(packages);
-            if (rawVersion != null) {
-                try {
-                    builder.version(rawVersion);
-                } catch (IllegalArgumentException unparseable) { /* Optional filename version. */ }
-            }
+            ModuleDescriptor.Builder builder = automaticIdentity(root.root.name, root.manifest).packages(packages);
             for (Map.Entry<String, ResourceIndex.Resource> entry : root.root.files.entrySet()) {
                 String prefix = "META-INF/services/";
                 if (!entry.getKey().startsWith(prefix) || entry.getValue().id == -1) {

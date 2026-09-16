@@ -36,8 +36,6 @@ public final class ResourceLoader extends URLClassLoader {
     final Map<String, Root> modulePackages = new HashMap<String, Root>();
     /// Defined module layer, accessed by the Java 9+ bridge.
     Object moduleLayer;
-    /// System-module roots needed by the indexed application graph.
-    final Set<String> systemModules = new TreeSet<String>();
     /// URL handlers and manifests in classpath order.
     private final List<Root> roots = new ArrayList<Root>();
     /// Packages defined by this loader, excluding packages belonging to parents.

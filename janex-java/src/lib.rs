@@ -11,6 +11,7 @@ pub mod jar;
 pub mod launch;
 mod limits;
 pub mod manifest;
+pub mod modules;
 pub mod runtime;
 mod runtime_cache;
 

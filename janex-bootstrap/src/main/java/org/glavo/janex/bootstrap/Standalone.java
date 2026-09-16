@@ -86,16 +86,27 @@ public final class Standalone {
             List<String> nativeOptions = nativeOptions(options, feature);
             String java = Paths.get(System.getProperty("java.home"), "bin", isWindows() ? "java.exe" : "java").toString();
             if (feature >= 9) {
-                validateModules(session, java, bridge, nativeOptions);
+                boolean modules = !launch.resources.requirements().isEmpty();
+                for (org.glavo.janex.reader.ResourcePlan.Root root : launch.resources.roots()) {
+                    modules |= root.module();
+                }
+                String[] systemModules;
+                try {
+                    systemModules = (String[]) Class.forName("org.glavo.janex.bootstrap.loader.ModuleSupport")
+                            .getMethod("launchModules", byte[].class, String.class, List.class)
+                            .invoke(null, modules ? resourceIndex : null, launch.mainModule, options);
+                } catch (java.lang.reflect.InvocationTargetException failure) {
+                    throw new IOException("Cannot prepare Java modules", failure.getCause());
+                }
+                if (systemModules.length != 0) {
+                    nativeOptions.add("--add-modules=" + String.join(",", systemModules));
+                }
             }
             List<String> agents = prepareAgents(session.directory, launch, agentIndex);
             List<String> command = new ArrayList<String>();
             command.add(java);
             command.addAll(nativeOptions);
             command.addAll(agents);
-            if (feature >= 9) {
-                command.add("--add-modules=ALL-SYSTEM");
-            }
             command.add("-Djava.system.class.loader=org.glavo.janex.bootstrap.loader.ResourceLoader");
             command.add("-cp");
             command.add(bridge.toString());
@@ -113,35 +124,6 @@ public final class Standalone {
         builder.environment().remove("JAVA_TOOL_OPTIONS");
         builder.environment().remove("_JAVA_OPTIONS");
         return builder;
-    }
-
-    /// Checks indexed module resolution in a child without application entry points or agents.
-    private static void validateModules(Session session, String java, Path bridge, List<String> options)
-            throws IOException, InterruptedException {
-        List<String> command = new ArrayList<String>();
-        command.add(java);
-        command.add("--add-exports=java.base/jdk.internal.module=ALL-UNNAMED");
-        command.add("--add-modules=ALL-SYSTEM");
-        for (String option : options) {
-            if (option.equals("--enable-preview") || option.startsWith("--enable-native-access=")
-                    || option.equals("--add-opens=java.base/java.lang=ALL-UNNAMED")) {
-                command.add(option);
-            }
-        }
-        command.add("-cp");
-        command.add(bridge.toString());
-        command.add("org.glavo.janex.bootstrap.loader.ModuleSupport");
-        Path diagnostics = session.directory.resolve("module-check.txt");
-        session.process = process(command).redirectErrorStream(true).redirectOutput(diagnostics.toFile()).start();
-        session.process.getOutputStream().close();
-        if (session.process.waitFor() != 0) {
-            ByteArrayOutputStream output = new ByteArrayOutputStream();
-            try (InputStream input = Files.newInputStream(diagnostics)) {
-                transfer(input, output, 1024 * 1024);
-            }
-            throw new IOException("Java module validation failed: " + output.toString("UTF-8"));
-        }
-        Files.delete(diagnostics);
     }
 
     /// Returns whether this process runs on Windows.

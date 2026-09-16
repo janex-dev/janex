@@ -97,13 +97,29 @@ fn jar(target: &Path, name: &str, class: &Path, manifest: &str) {
     zip.finish().unwrap();
 }
 
-/// Launches both implementations and verifies preparation failures precede all agent execution.
+/// Launches both implementations and verifies invalid modules fail before agent execution.
 fn check(target: &Path, marker: &Path, directory: &Path, success: bool, java: Option<&Path>) {
+    check_launch(target, marker, directory, success, success, java);
+}
+
+/// Distinguishes candidate-selection failures from module-layer initialization failures.
+fn check_launch(
+    target: &Path,
+    marker: &Path,
+    directory: &Path,
+    preparation_success: bool,
+    success: bool,
+    java: Option<&Path>,
+) {
     let mut options = RunOptions::new(target);
     options.allow_unsigned = true;
     options.java.java = Some(java.unwrap_or_else(|| Path::new("java")).into());
     let prepared = prepare(&options);
-    assert_eq!(prepared.is_ok(), success, "{target:?}: {prepared:?}");
+    assert_eq!(
+        prepared.is_ok(),
+        preparation_success,
+        "{target:?}: {prepared:?}"
+    );
     assert!(!marker.exists(), "agent ran during native preparation");
     if let Ok(plan) = prepared {
         let output = plan
@@ -113,13 +129,18 @@ fn check(target: &Path, marker: &Path, directory: &Path, success: bool, java: Op
             .output()
             .unwrap();
         assert!(
-            output.status.success(),
+            output.status.success() == success,
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "modules-ok");
-        assert_eq!(fs::read(marker).unwrap(), b"agent");
-        fs::remove_file(marker).unwrap();
+        if success {
+            assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "modules-ok");
+            assert_eq!(fs::read(marker).unwrap(), b"agent");
+            fs::remove_file(marker).unwrap();
+        } else {
+            assert!(!marker.exists(), "agent ran before module failure");
+            assert!(!String::from_utf8_lossy(&output.stdout).contains("modules-ok"));
+        }
     }
     let output = Command::new(java.unwrap_or_else(|| Path::new("java")))
         .arg(format!("-Djava.io.tmpdir={}", directory.display()))
@@ -279,6 +300,19 @@ public class Agent {
         replace(config, 2, Value::array(paths))
     });
     check(&valid, &marker, &launch_directory, true, None);
+    // Access validation belongs to the actual JVM, but must still precede agent premain.
+    let bad_access = temp.path().join("bad-access.janex");
+    configure(&valid, &bad_access, |config| {
+        replace(
+            config,
+            5,
+            Value::array([Value::text(
+                "--add-opens=java.base/missing.package=ALL-UNNAMED",
+            )]),
+        )
+    });
+    check_launch(&bad_access, &marker, &launch_directory, true, false, None);
+
     for (index, uri) in [
         "pkg:janex/java-module/absent.module",
         "pkg:janex/java-module/auto.library@2",
