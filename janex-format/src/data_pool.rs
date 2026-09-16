@@ -8,12 +8,9 @@ use crate::{
     binary::{Decoder, Limits, write_sized, write_vuint},
     error::invalid,
 };
-use std::{
-    collections::{HashMap, HashSet},
-    ops::Deref,
-};
+use std::{collections::HashMap, ops::Deref};
 
-/// A read-only collection of unique byte sequences, with the empty sequence at index zero.
+/// A read-only collection of byte sequences, with the empty sequence at index zero.
 /// Entries occupy a contiguous byte buffer and are accessed by index. Interpretation belongs
 /// to consumers. Use [`DataPoolBuilder`] to intern additional entries before encoding.
 #[derive(Clone, Debug)]
@@ -39,9 +36,9 @@ impl DataPool {
         Self::default()
     }
 
-    /// Decodes exactly one pool, rejecting duplicates, invalid index zero, and trailing bytes.
-    /// Duplicate detection borrows the input temporarily; the returned pool owns only payloads
-    /// and entry offsets, with no reverse index or per-entry byte allocation.
+    /// Decodes exactly one pool, rejecting invalid index zero and trailing bytes.
+    /// Entries retain their encoded indices without checking uniqueness. The returned pool owns
+    /// only payloads and entry offsets, with no reverse index or per-entry byte allocation.
     pub fn decode(bytes: &[u8], limits: Limits) -> Result<Self> {
         let mut decoder = Decoder::new(bytes, limits)?;
         let count = decoder.count()?;
@@ -56,14 +53,10 @@ impl DataPool {
             offsets: Vec::with_capacity(count + 1),
         };
         pool.offsets.push(0);
-        let mut seen = HashSet::with_capacity(count);
         for index in 0..count {
             let value = decoder.sized()?;
             if index == 0 && !value.is_empty() {
                 return Err(invalid("data pool index zero must be empty"));
-            }
-            if !seen.insert(value) {
-                return Err(invalid("duplicate data pool entry"));
             }
             pool.bytes.extend_from_slice(value);
             pool.offsets.push(pool.bytes.len() as u64);

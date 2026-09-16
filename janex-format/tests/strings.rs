@@ -53,7 +53,21 @@ fn opaque_entries_are_valid_until_interpreted_as_text() {
             .is_err()
         );
     }
-    assert!(DataPool::decode(b"\x03\x00\x01\xff\x01\xff", Limits::default()).is_err());
+}
+
+/// Readers preserve wire indices even when a producer has not deduplicated entries.
+#[test]
+fn decoding_repeated_entries_preserves_indices() {
+    let wire = b"\x05\x00\x01\xff\x01x\x01\xff\x00";
+    let pool = DataPool::decode(wire, Limits::default()).unwrap();
+    assert_eq!(pool.len(), 5);
+    assert_eq!(pool.get(0).unwrap(), b"");
+    assert_eq!(pool.get(1).unwrap(), b"\xff");
+    assert_eq!(pool.get(2).unwrap(), b"x");
+    assert_eq!(pool.get(3).unwrap(), b"\xff");
+    assert_eq!(pool.get(4).unwrap(), b"");
+    assert_eq!(pool.encode().unwrap(), wire);
+    assert!(pool.get(5).is_err());
 }
 
 #[test]
@@ -86,12 +100,7 @@ fn pool_and_three_name_forms_share_class_basenames() {
 
 #[test]
 fn invalid_pools_references_and_concatenation_limits() {
-    for invalid in [
-        &b"\x00"[..],
-        &b"\x01\x01x"[..],
-        &b"\x02\x00\x00"[..],
-        &b"\x01\x00\x00"[..],
-    ] {
+    for invalid in [&b"\x00"[..], &b"\x01\x01x"[..], &b"\x01\x00\x00"[..]] {
         assert!(DataPool::decode(invalid, Limits::default()).is_err());
     }
     let mut pool = DataPoolBuilder::new();

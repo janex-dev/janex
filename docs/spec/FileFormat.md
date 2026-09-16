@@ -905,7 +905,7 @@ struct DataPoolData {
 }
 ```
 
-The pool contains unique byte sequences, with the empty sequence at index `0`.
+Index `0` contains the empty sequence. Writers must deduplicate entries; readers need not check uniqueness.
 A `DataPoolIndex` must select an existing element. Referencing fields define the interpretation
 and validity constraints of the selected bytes.
 

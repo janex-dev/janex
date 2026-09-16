@@ -8,8 +8,6 @@ import java.io.DataOutput;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
-import java.util.HashSet;
-import java.util.Set;
 
 import org.glavo.janex.reader.internal.Input;
 
@@ -18,6 +16,7 @@ import static org.glavo.janex.reader.internal.Input.require;
 /// An immutable, indexed collection of opaque bytes with an empty entry at index zero.
 /// Entries share a contiguous buffer. Views remain valid independently of the reader that
 /// created the pool, and concurrent reads do not require synchronization.
+/// Entries retain their supplied indices without checking uniqueness.
 public final class DataPool {
     /// Owned entry payloads; unused capacity may follow the last entry.
     private final byte[] bytes;
@@ -34,20 +33,18 @@ public final class DataPool {
     /// @param encoded nonnull encoded bytes, unchanged during this call
     /// @param limits nonnull byte and element limits
     /// @return an independently owned immutable pool
-    /// @throws IOException if framing, uniqueness, index zero, or limits are invalid
+    /// @throws IOException if framing, index zero, or limits are invalid
     public static DataPool decode(byte[] encoded, ReadLimits limits) throws IOException {
         Input input = new Input(encoded, limits);
         int count = limits.elements(input.uint());
         require(count > 0 && count < Integer.MAX_VALUE && count <= input.remaining(), "Invalid data pool count");
         byte[] bytes = new byte[encoded.length];
         int[] offsets = new int[count + 1];
-        Set<ByteBuffer> unique = new HashSet<ByteBuffer>();
         for (int i = 0; i < count; i++) {
             int length = limits.bytes(input.uint());
             int start = input.position();
             input.skip(length);
             require(i != 0 || length == 0, "Data pool must start with empty bytes");
-            require(unique.add(ByteBuffer.wrap(encoded, start, length)), "Duplicate data-pool entry");
             System.arraycopy(encoded, start, bytes, offsets[i], length);
             offsets[i + 1] = offsets[i] + length;
         }
@@ -55,18 +52,16 @@ public final class DataPool {
         return new DataPool(bytes, offsets);
     }
 
-    /// Copies an array of distinct entries under the default read limits.
+    /// Copies an array of entries under the default read limits.
     /// @param entries nonnull array of nonnull bytes, unchanged during this call
     /// @return a pool independent of the array and its entries
-    /// @throws IOException if entries are duplicate, index zero is invalid, or limits are exceeded
+    /// @throws IOException if index zero is invalid or limits are exceeded
     public static DataPool copyOf(byte[][] entries) throws IOException {
         int count = ReadLimits.DEFAULT.elements(entries.length);
         require(count > 0 && count < Integer.MAX_VALUE && entries[0].length == 0, "Invalid data pool");
         int[] offsets = new int[count + 1];
-        Set<ByteBuffer> unique = new HashSet<ByteBuffer>();
         for (int i = 0; i < count; i++) {
             offsets[i + 1] = ReadLimits.DEFAULT.bytes((long) offsets[i] + entries[i].length);
-            require(unique.add(ByteBuffer.wrap(entries[i])), "Duplicate data-pool entry");
         }
         byte[] bytes = new byte[offsets[count]];
         for (int i = 0; i < count; i++) System.arraycopy(entries[i], 0, bytes, offsets[i], entries[i].length);

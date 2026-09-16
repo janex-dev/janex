@@ -75,6 +75,7 @@ public final class ReaderTest {
         archives();
         resourcePlan();
         dataPools();
+        repeatedPoolEntries();
     }
 
     /// Checks contiguous-pool ownership, read-only views, framing, growth, and stream boundaries.
@@ -109,10 +110,8 @@ public final class ReaderTest {
         }
         reject(() -> pool.view(-1));
         reject(() -> pool.byteLength(3));
-        reject(() -> DataPool.decode(new byte[]{3, 0, 1, 42, 1, 42}, ReadLimits.DEFAULT));
         reject(() -> DataPool.decode(new byte[]{1, 1, 42}, ReadLimits.DEFAULT));
         reject(() -> DataPool.decode(new byte[]{1, 0, 0}, ReadLimits.DEFAULT));
-        reject(() -> DataPool.copyOf(new byte[][]{new byte[0], new byte[0]}));
         reject(() -> DataPool.decode(new byte[]{1, 0}, new ReadLimits(1, 1, 1)));
 
         byte[] large = new byte[20000];
@@ -145,6 +144,28 @@ public final class ReaderTest {
         reject(() -> DataPool.readIndex(new DataInputStream(new ByteArrayInputStream(bytes.toByteArray())),
                 new ReadLimits(20000, 3, 1)));
         reject(() -> DataPool.readIndex(new DataInputStream(new ByteArrayInputStream(new byte[4])), ReadLimits.DEFAULT));
+    }
+
+    /// Checks that all pool readers preserve indices without requiring distinct entry bytes.
+    private static void repeatedPoolEntries() throws Exception {
+        byte[][] entries = {new byte[0], {(byte) 0xff}, {'x'}, {(byte) 0xff}, new byte[0]};
+        DataPool decoded = DataPool.decode(new byte[]{5, 0, 1, (byte) 0xff, 1, 'x', 1, (byte) 0xff, 0},
+                ReadLimits.DEFAULT);
+        DataPool copied = DataPool.copyOf(entries);
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        DataOutputStream output = new DataOutputStream(bytes);
+        decoded.writeIndex(output);
+        output.writeByte(42);
+        DataInputStream input = new DataInputStream(new ByteArrayInputStream(bytes.toByteArray()));
+        DataPool restored = DataPool.readIndex(input, ReadLimits.DEFAULT);
+        check(input.read() == 42 && input.read() == -1);
+        for (DataPool pool : new DataPool[]{decoded, copied, restored}) {
+            check(pool.size() == entries.length);
+            for (int i = 0; i < entries.length; i++) {
+                check(pool.view(i).equals(java.nio.ByteBuffer.wrap(entries[i])));
+            }
+            reject(() -> pool.view(entries.length));
+        }
     }
 
     /// Checks that selected-resource descriptions do not expose mutable preparation state.
