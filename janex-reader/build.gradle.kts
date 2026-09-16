@@ -51,7 +51,7 @@ tasks.register<JavaExec>("checkReader") {
 }
 
 tasks.check {
-    dependsOn("checkReader", "checkChecksums", "checkZstandard")
+    dependsOn("checkReader", "checkChecksums", "checkZstandard", "checkReverseBits")
 }
 
 tasks.register<JavaExec>("checkChecksums") {
@@ -67,5 +67,13 @@ tasks.register<JavaExec>("checkZstandard") {
     description = "Checks Zstandard format boundaries and array contracts."
     classpath = sourceSets.testFixtures.get().runtimeClasspath
     mainClass = "org.glavo.janex.reader.internal.codec.ZstandardTest"
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+}
+
+tasks.register<JavaExec>("checkReverseBits") {
+    group = "verification"
+    description = "Checks reverse bit reads across cached windows and slice boundaries."
+    classpath = sourceSets.testFixtures.get().runtimeClasspath
+    mainClass = "org.glavo.janex.reader.internal.codec.zstd.ReverseBitsTest"
     javaLauncher = javaToolchains.launcherFor(java.toolchain)
 }

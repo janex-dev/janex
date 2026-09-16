@@ -24,6 +24,8 @@ public final class ResourceIndex implements Closeable {
     private final int maxElements;
     /// Open snapshot, retained until this reader is closed or the JVM exits.
     private final RandomAccessFile snapshot;
+    /// Length of the private snapshot when opened, shared by all source bounds checks.
+    private final long snapshotLength;
     /// Topologically ordered byte sources.
     private final Source[] sources;
     /// Data pools shared between CLASSFILE transforms.
@@ -58,6 +60,7 @@ public final class ResourceIndex implements Closeable {
             cacheLimit = Math.min(maxBytes, 64L * 1024 * 1024);
             opened = new RandomAccessFile(text(input), "r");
             snapshot = opened;
+            snapshotLength = snapshot.length();
             sources = new Source[count(input)];
             for (int i = 0; i < sources.length; i++) {
                 sources[i] = new Source(input, i);
@@ -179,7 +182,7 @@ public final class ResourceIndex implements Closeable {
                 extents = null;
                 offset = input.readLong();
                 stored = size(input);
-                if (offset < 0 || offset > snapshot.length() - stored) {
+                if (offset < 0 || offset > snapshotLength - stored) {
                     throw new IOException("Resource range exceeds snapshot");
                 }
                 filters = new int[count(input)];

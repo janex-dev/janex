@@ -4,7 +4,6 @@
 package org.glavo.janex.reader.internal.codec;
 
 import java.io.*;
-import java.nio.ByteBuffer;
 
 import org.glavo.janex.reader.DataPool;
 
@@ -56,7 +55,7 @@ public final class ClassFiles {
                 data.writeByte(1);
                 int lengthPosition = output.position;
                 data.writeShort(0);
-                expandTemplate(pool.view(template), pool, output);
+                expandTemplate(pool.cursor(template), pool, output);
                 int textLength = output.position - lengthPosition - 2;
                 result[lengthPosition] = (byte) (textLength >>> 8);
                 result[lengthPosition + 1] = (byte) textLength;
@@ -133,16 +132,15 @@ public final class ClassFiles {
     }
 
     /// Expands references directly into the result without allocating a restored string.
-    private static void expandTemplate(ByteBuffer template, DataPool pool, ByteArrayOutput output) throws IOException {
+    private static void expandTemplate(DataPool.Cursor template, DataPool pool, ByteArrayOutput output) throws IOException {
         int start = output.position;
-        while (template.hasRemaining()) {
-            int end = template.position();
-            while (end < template.limit() && template.get(end) != 0) end++;
-            int length = end - template.position();
-            checkTemplateLength((long) output.position - start + length);
-            output.write(template, length);
-            if (!template.hasRemaining()) break;
-            template.get();
+        while (template.remaining() != 0) {
+            int next = template.readUnsignedByte();
+            if (next != 0) {
+                checkTemplateLength((long) output.position - start + 1);
+                output.write(next);
+                continue;
+            }
             int packageName = entry(template, pool);
             int className = entry(template, pool);
             int packageLength = pool.byteLength(packageName);
@@ -191,11 +189,10 @@ public final class ClassFiles {
     }
 
     /// Reads a nonrecursive reference from a template, advancing past consumed bytes on failure.
-    private static int entry(ByteBuffer input, DataPool pool) throws IOException {
+    private static int entry(DataPool.Cursor input, DataPool pool) throws IOException {
         long value = 0;
         for (int shift = 0; shift < 70; shift += 7) {
-            if (!input.hasRemaining()) throw new EOFException("Truncated template index");
-            int next = input.get() & 255;
+            int next = input.readUnsignedByte();
             if (shift == 63 && next > 1) throw new IOException("Data-pool index overflow");
             value |= (long) (next & 127) << shift;
             if (next < 128) return checkedEntry(value, pool, false);
@@ -239,13 +236,6 @@ public final class ClassFiles {
             int length = pool.byteLength(index);
             if (length > bytes.length - position) throw new IOException("CLASSFILE exceeds declared size");
             pool.copyTo(index, bytes, position);
-            position += length;
-        }
-
-        /// Copies a literal template range and advances both source and destination positions.
-        void write(ByteBuffer source, int length) throws IOException {
-            if (length > bytes.length - position) throw new IOException("CLASSFILE exceeds declared size");
-            source.get(bytes, position, length);
             position += length;
         }
 

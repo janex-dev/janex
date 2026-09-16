@@ -5,6 +5,7 @@ package org.glavo.janex.reader;
 
 import java.io.DataInput;
 import java.io.DataOutput;
+import java.io.EOFException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 
@@ -139,6 +140,48 @@ public final class DataPool {
     public ByteBuffer view(int index) throws IOException {
         int length = byteLength(index);
         return ByteBuffer.wrap(bytes, offsets[index], length).slice().asReadOnlyBuffer();
+    }
+
+    /// Creates an independent forward cursor over one immutable entry without copying its bytes.
+    /// @param index zero-based entry index
+    /// @return a cursor positioned at the start, valid independently of the originating reader
+    /// @throws IOException if the index is negative or outside this pool
+    public Cursor cursor(int index) throws IOException {
+        int length = byteLength(index);
+        return new Cursor(bytes, offsets[index], length);
+    }
+
+    /// A forward reader over immutable pool bytes; each cursor has independent mutable state.
+    /// A cursor must not be accessed concurrently without external synchronization.
+    public static final class Cursor {
+        /// Shared immutable payload storage.
+        private final byte[] bytes;
+        /// Exclusive end of this entry in the shared storage.
+        private final int end;
+        /// Offset of the next byte in the shared storage.
+        private int position;
+
+        /// Binds a validated range without exposing the shared array.
+        private Cursor(byte[] bytes, int offset, int length) {
+            this.bytes = bytes;
+            position = offset;
+            end = offset + length;
+        }
+
+        /// Returns the number of unread bytes, or zero when exhausted.
+        public int remaining() {
+            return end - position;
+        }
+
+        /// Reads an unsigned byte and advances by one.
+        /// @return a value from zero through 255
+        /// @throws EOFException if exhausted; the position remains unchanged
+        public int readUnsignedByte() throws EOFException {
+            if (position == end) {
+                throw new EOFException("Data-pool entry exhausted");
+            }
+            return bytes[position++] & 255;
+        }
     }
 
     /// Copies a complete entry into caller-owned storage without changing this pool.

@@ -94,6 +94,16 @@ public final class ReaderTest {
         check(view.position() == 0 && view.limit() == 2 && view.isReadOnly() && !view.hasArray());
         view.get();
         check(pool.view(2).position() == 0);
+        DataPool.Cursor cursor = pool.cursor(2);
+        check(cursor.remaining() == 2 && cursor.readUnsignedByte() == 0xc0);
+        check(pool.cursor(2).readUnsignedByte() == 0xc0);
+        check(cursor.readUnsignedByte() == 0x80 && cursor.remaining() == 0);
+        reject(() -> cursor.readUnsignedByte());
+        check(cursor.remaining() == 0);
+        check(pool.cursor(0).remaining() == 0);
+        reject(() -> pool.cursor(0).readUnsignedByte());
+        reject(() -> pool.cursor(-1));
+        reject(() -> pool.cursor(3));
         try {
             view.put(0, (byte) 0);
             throw new AssertionError("Mutable pool view");

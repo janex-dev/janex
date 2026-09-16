@@ -300,6 +300,23 @@ public class Agent {
         replace(config, 2, Value::array(paths))
     });
     check(&valid, &marker, &launch_directory, true, None);
+    // A classpath application can still require observable system modules and exact versions.
+    for (index, (uri, success)) in [
+        (selected[0].as_str(), true),
+        ("pkg:janex/java-module/java.base@0", false),
+        ("pkg:janex/java-module/absent.module", false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let target = temp
+            .path()
+            .join(format!("classpath-requirement-{index}.janex"));
+        configure(&base, &target, |config| {
+            replace(config, 2, Value::array([requirement(uri)]))
+        });
+        check(&target, &marker, &launch_directory, success, None);
+    }
     // Access validation belongs to the actual JVM, but must still precede agent premain.
     let bad_access = temp.path().join("bad-access.janex");
     configure(&valid, &bad_access, |config| {

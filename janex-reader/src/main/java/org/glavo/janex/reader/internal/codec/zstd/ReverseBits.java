@@ -13,6 +13,10 @@ final class ReverseBits {
     private final int start;
     /// Number of unconsumed data bits, excluding the terminator.
     int remaining;
+    /// Low bit offset of the cached window, or negative before the first read.
+    private int windowLow = -1;
+    /// Up to eight input bytes in little-endian order.
+    private long window;
 
     /// Consumes a section as one bitstream, rejecting an absent end marker.
     ReverseBits(Input input) {
@@ -28,15 +32,21 @@ final class ReverseBits {
     /// Returns the next at most 31 bits, padding unavailable low bits with zero.
     int peek(int count) {
         int available = Math.min(count, remaining);
-        int low = remaining - available;
-        int index = start + (low >>> 3);
-        int shift = low & 7;
-        long value = 0;
-        int byteCount = (shift + available + 7) >>> 3;
-        for (int i = 0; i < byteCount; i++) {
-            value |= (long) (bytes[index + i] & 255) << (i * 8);
+        if (available == 0) {
+            return 0;
         }
-        return (int) (((value >>> shift) & ((1L << available) - 1)) << (count - available));
+        int low = remaining - available;
+        if (windowLow < 0 || low < windowLow) {
+            int end = (remaining + 7) >>> 3;
+            int first = Math.max(0, end - 8);
+            windowLow = first << 3;
+            long value = 0;
+            for (int i = first; i < end; i++) {
+                value |= (long) (bytes[start + i] & 255) << ((i - first) * 8);
+            }
+            window = value;
+        }
+        return (int) (((window >>> (low - windowLow)) & ((1L << available) - 1)) << (count - available));
     }
 
     /// Consumes at most 31 bits, rejecting a truncated field.

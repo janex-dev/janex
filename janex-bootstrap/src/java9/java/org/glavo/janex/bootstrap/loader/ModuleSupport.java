@@ -48,19 +48,18 @@ public final class ModuleSupport {
                 throw new IOException("Trailing JVM option data");
             }
         }
+        if (loader.moduleRoots.isEmpty() && mainModule.isEmpty() && !hasModuleOptions(options)
+                && loader.index.requirements.isEmpty()) {
+            loader.moduleLayer = ModuleLayer.boot();
+            return;
+        }
         Finder finder = new Finder(loader);
-        Map<String, ModuleDescriptor> available = new HashMap<String, ModuleDescriptor>();
-        for (ModuleReference reference : ModuleFinder.ofSystem().findAll()) {
-            available.put(reference.descriptor().name(), reference.descriptor());
-        }
-        for (ModuleReference reference : finder.findAll()) {
-            available.put(reference.descriptor().name(), reference.descriptor());
-        }
+        ModuleFinder system = ModuleFinder.ofSystem();
         for (Map.Entry<String, String> requirement : loader.index.requirements.entrySet()) {
-            ModuleDescriptor descriptor = available.get(requirement.getKey());
-            if (descriptor == null) {
-                throw new FindException("Required module is unavailable: " + requirement.getKey());
-            }
+            ModuleDescriptor descriptor = finder.find(requirement.getKey())
+                    .or(() -> system.find(requirement.getKey()))
+                    .orElseThrow(() -> new FindException("Required module is unavailable: " + requirement.getKey()))
+                    .descriptor();
             if (!requirement.getValue().isEmpty() && !descriptor.rawVersion().orElse("").equals(requirement.getValue())) {
                 throw new FindException("required module version is unavailable: " + requirement.getKey() + "@" + requirement.getValue());
             }
@@ -99,6 +98,25 @@ public final class ModuleSupport {
                 access("addOpens", module, entry.substring(0, dot), Bootstrap.class.getModule());
             }
         }
+    }
+
+    /// Returns whether launch options request module roots or deferred module access changes.
+    private static boolean hasModuleOptions(List<String> options) {
+        for (String option : options) {
+            int equal = option.indexOf('=');
+            String key = equal < 0 ? option : option.substring(0, equal);
+            switch (key) {
+                case "--add-modules":
+                case "--add-reads":
+                case "--add-exports":
+                case "--add-opens":
+                case "--enable-native-access":
+                    return true;
+                default:
+                    break;
+            }
+        }
+        return false;
     }
 
     /// Returns a required option operand.
