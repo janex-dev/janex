@@ -11,11 +11,12 @@ description = "Java runtime discovery, manifests, and launch preparation"
 [dependencies]
 janex-platform.workspace = true
 flate2 = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+tempfile = "3"
 thiserror = "2"
 zip = { version = "8.6", default-features = false, features = ["deflate-flate2"] }
-
-[dev-dependencies]
-tempfile = "3"
 
 [lints]
 workspace = true

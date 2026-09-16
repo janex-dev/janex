@@ -1289,6 +1289,9 @@ version = "0.1.0-SNAPSHOT"
 dependencies = [
  "flate2",
  "janex-platform",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
  "tempfile",
  "thiserror",
  "zip",

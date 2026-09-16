@@ -391,7 +391,7 @@ pub(crate) fn application_runtimes(
             })
             .map(|i| manager.lease(&i.id))
             .transpose()?;
-        match JavaRuntime::probe(&path) {
+        match JavaRuntime::probe_cached(&path) {
             Ok(runtime) => result.push((runtime, lease)),
             Err(e) if options.is_explicit() => return Err(e.into()),
             Err(e) => failures.push(format!("{}: {e}", path.display())),

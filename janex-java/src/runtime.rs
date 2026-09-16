@@ -49,6 +49,17 @@ pub struct JavaRuntime {
 }
 
 impl JavaRuntime {
+    /// Returns runtime information, reusing an unchanged installation's persistent cache when possible.
+    ///
+    /// Entries live under `JANEX_HOME/cache/java` and include the JVM's reported architecture
+    /// and system modules. Native launcher identity, release contents, and core runtime file
+    /// attributes invalidate entries after installation changes. This is a performance cache,
+    /// not runtime authentication. Unrecognized layouts, IKVM, and Java option or dynamic-loader
+    /// environment overrides bypass it. Cache I/O failures fall back to a fresh probe.
+    pub fn probe_cached(executable: &Path) -> Result<Self> {
+        crate::runtime_cache::probe(executable)
+    }
+
     /// Validates an indexed bootstrap's module graph without application main methods or agents.
     pub(crate) fn validate_indexed_modules(
         &self,
@@ -101,7 +112,7 @@ impl JavaRuntime {
         }
         Ok(names)
     }
-    /// Probes one executable's properties and, on Java 9 or later, system modules.
+    /// Probes one executable's properties and, on Java 9 or later, system modules without a cache.
     ///
     /// Probes start child processes without a shell, capture their output, and do not
     /// change the environment of the calling process. UTF-8 stream properties apply
@@ -249,7 +260,7 @@ pub fn candidates(options: &JavaOptions) -> Result<Vec<PathBuf>> {
     )
 }
 
-/// Probes discovered runtimes, preferring the native system architecture for automatic selection.
+/// Resolves discovered runtimes through [`JavaRuntime::probe_cached`], preferring the native system architecture.
 ///
 /// Explicit executable or home overrides are never replaced. Within each architecture group,
 /// JAVA_HOME and PATH order is retained. Other runnable architectures remain fallback candidates.
@@ -259,7 +270,7 @@ pub fn runtimes(options: &JavaOptions) -> Result<Vec<JavaRuntime>> {
     let mut runtimes = Vec::new();
     let mut failures = Vec::new();
     for path in candidates(options)? {
-        match JavaRuntime::probe(&path) {
+        match JavaRuntime::probe_cached(&path) {
             Ok(runtime) => runtimes.push(runtime),
             Err(error) if options.is_explicit() => return Err(error),
             Err(error) => failures.push(format!("{}: {error}", path.display())),
@@ -386,7 +397,7 @@ fn probe_output(
 }
 
 /// Extracts the feature number from a reported Java version; full version policy belongs to the caller.
-fn feature_version(version: &str) -> Result<u32> {
+pub(crate) fn feature_version(version: &str) -> Result<u32> {
     let version = version.strip_prefix("1.").unwrap_or(version);
     let feature = version.split(['.', '_', '-', '+']).next().unwrap_or("");
     if feature.is_empty() || !feature.bytes().all(|byte| byte.is_ascii_digit()) {
