@@ -55,6 +55,7 @@ public abstract class JanexPack extends DefaultTask {
         getArguments().convention(List.of());
         getWithLauncher().convention(true);
         getCompression().convention(true);
+        getCompressionLevel().convention(3);
         getTransformClassfiles().convention(true);
         getNativeLaunchMode().convention("bootstrap");
         getOutputs().upToDateWhen(task -> !((JanexPack) task).hasDirectoryInputs() && !((JanexPack) task).signing.isEnabled());
@@ -192,6 +193,14 @@ public abstract class JanexPack extends DefaultTask {
     @Input
     public abstract Property<Boolean> getCompression();
 
+    /// Returns the Zstandard level for blobs and table pages, defaulting to 3.
+    /// Zero selects the native default; negative levels favor speed. The writer rejects values
+    /// outside the native library's supported range when compression is enabled.
+    /// Ignored when compression is disabled.
+    /// @return the compression-level property
+    @Input
+    public abstract Property<Integer> getCompressionLevel();
+
     /// Returns whether to try shared CLASSFILE strings, defaulting to true.
     /// The writer retains the smaller complete pool representation.
     /// @return the CLASSFILE transform property
@@ -271,6 +280,7 @@ public abstract class JanexPack extends DefaultTask {
             options.arguments.addAll(getArguments().get());
             options.withLauncher = getWithLauncher().get();
             options.compression = getCompression().get();
+            options.compressionLevel = getCompressionLevel().get();
             options.transformClassfiles = getTransformClassfiles().get();
             minimization.configure(options);
             resources.configure(options);

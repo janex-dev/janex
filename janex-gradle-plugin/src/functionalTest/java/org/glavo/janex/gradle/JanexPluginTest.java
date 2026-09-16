@@ -302,7 +302,7 @@ public final class JanexPluginTest {
                 require(jar.getJarEntry(entry) != null, "Missing bundled plugin entry: " + entry);
             }
             require(jar.stream().noneMatch(entry -> entry.getName().startsWith("org/bouncycastle/")
-                    || entry.getName().startsWith("io/airlift/") || entry.getName().startsWith("org/gradle/")
+                    || entry.getName().startsWith("com/github/luben/zstd/") || entry.getName().startsWith("org/gradle/")
                     || entry.getName().startsWith("org/objectweb/asm/")),
                     "Plugin unexpectedly bundles external libraries or Gradle APIs");
         }
@@ -311,9 +311,10 @@ public final class JanexPluginTest {
             String metadata = Files.readString(publication.resolve(name));
             require(!metadata.contains("janex-reader") && !metadata.contains("janex-writer"),
                     "Published plugin depends on internal Janex modules: " + name);
-            for (String dependency : List.of("aircompressor", "bcpkix-jdk18on", "bcpg-jdk18on", "asm-commons")) {
+            for (String dependency : List.of("zstd-jni", "bcpkix-jdk18on", "bcpg-jdk18on", "asm-commons")) {
                 require(metadata.contains(dependency), "Missing published dependency: " + dependency);
             }
+            require(!metadata.contains("aircompressor"), "Published plugin retains the old compressor");
         }
     }
 
@@ -378,6 +379,31 @@ public final class JanexPluginTest {
                 .withArguments(arguments).build();
         require(recompressed.task(":janexPack").getOutcome() == TaskOutcome.FROM_CACHE, recompressed.getOutput());
         require(Arrays.equals(original, Files.readAllBytes(output)), "Compression cache key changed the package");
+        for (String configuration : List.of("janex { compressionLevel = 9 }",
+                "janex { compressionLevel.set(providers.provider { 15 }) }",
+                "tasks.named<org.glavo.janex.gradle.JanexPack>(\"janexPack\") { compressionLevel = 19 }")) {
+            write(project, "build.gradle.kts", script + "\n" + configuration + "\n");
+            BuildResult changed = GradleRunner.create().withProjectDir(project.toFile()).withPluginClasspath()
+                    .withArguments(arguments).build();
+            require(changed.task(":janexPack").getOutcome() == TaskOutcome.SUCCESS, changed.getOutput());
+            require(runJar(output).contains("hello|resource|configured|4"), "Selected compression level could not launch");
+            String java8Home = System.getenv("JANEX_TEST_JAVA8_HOME");
+            if (java8Home != null) {
+                Path java8 = Path.of(java8Home, "bin", System.getProperty("os.name").startsWith("Windows") ? "java.exe" : "java");
+                require(run(List.of(java8.toString(), "-jar", output.toString())).contains("hello|resource|configured|4"),
+                        "Java 8 could not decode the selected compression level");
+            }
+        }
+        write(project, "build.gradle.kts", script);
+        BuildResult defaultLevel = GradleRunner.create().withProjectDir(project.toFile()).withPluginClasspath()
+                .withArguments(arguments).build();
+        require(defaultLevel.task(":janexPack").getOutcome() == TaskOutcome.FROM_CACHE, defaultLevel.getOutput());
+        require(Arrays.equals(original, Files.readAllBytes(output)), "Compression-level cache restored the wrong output");
+        write(project, "build.gradle.kts", script + "\njanex { compressionLevel = Int.MAX_VALUE }\n");
+        BuildResult invalid = GradleRunner.create().withProjectDir(project.toFile()).withPluginClasspath()
+                .withArguments(arguments).buildAndFail();
+        require(invalid.getOutput().contains("compressionLevel must be between"), invalid.getOutput());
+        require(Arrays.equals(original, Files.readAllBytes(output)), "Invalid compression level replaced the previous package");
     }
 
     /// Verifies explicit reflection roots, resource filtering, and selection inputs in both Gradle caches.

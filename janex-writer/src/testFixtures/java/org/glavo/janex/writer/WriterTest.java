@@ -29,6 +29,7 @@ public final class WriterTest {
             jar(root);
             directory(root);
             compression(root);
+            compressionLevels(root);
             classfiles(root);
             rootStrings(root);
             external(root);
@@ -267,6 +268,45 @@ public final class WriterTest {
         }
     }
 
+    /// Checks native compression levels against the portable decoder and preserves failure boundaries.
+    private static void compressionLevels(Path root) throws Exception {
+        Path directory = root.resolve("compression");
+        for (int level : new int[]{-3, 0, 9, 15, 19, 22}) {
+            PackOptions options = new PackOptions(directory, root.resolve("level-" + level + ".janex"));
+            options.mainClass = "example.Main";
+            options.compressionLevel = level;
+            JanexWriter.write(options);
+            try (JanexReader reader = new JanexReader(options.output)) {
+                ResourcePlan plan = reader.launch("main").resources;
+                try (var paths = Files.list(directory)) {
+                    for (Path file : paths.toList()) {
+                        require(Arrays.equals(Files.readAllBytes(file), content(plan, file.getFileName().toString())),
+                                "Portable decoder failed at compression level " + level + ": " + file);
+                    }
+                }
+            }
+            PackOptions copy = new PackOptions(directory, root.resolve("level-copy-" + level + ".janex"));
+            copy.mainClass = options.mainClass;
+            copy.compressionLevel = level;
+            JanexWriter.write(copy);
+            require(Arrays.equals(Files.readAllBytes(options.output), Files.readAllBytes(copy.output)),
+                    "Compression level is not reproducible: " + level);
+        }
+        for (int invalid : new int[]{Integer.MIN_VALUE, Integer.MAX_VALUE}) {
+            PackOptions options = new PackOptions(directory, root.resolve("invalid-level-" + invalid + ".janex"));
+            options.mainClass = "example.Main";
+            options.compressionLevel = invalid;
+            fails(() -> JanexWriter.write(options));
+            require(!Files.exists(options.output), "Invalid compression level published output");
+            options.compression = false;
+            JanexWriter.write(options);
+            try (JanexReader reader = new JanexReader(options.output)) {
+                require(Arrays.equals(Files.readAllBytes(directory.resolve("random")), content(reader.launch("main").resources, "random")),
+                        "Disabled compression did not ignore its unused level");
+            }
+        }
+    }
+
     /// Checks independent root pools, exact restoration, and deterministic output.
     private static void rootStrings(Path root) throws Exception {
         List<Path> jars = new ArrayList<>();
@@ -385,8 +425,8 @@ public final class WriterTest {
         byte[] noise = new byte[131073];
         new Random(42).nextBytes(noise);
         contents.put("random", noise);
-        contents.put("overhead-tie", new byte[24]);
-        contents.put("overhead-saving", new byte[25]);
+        contents.put("overhead-tie", new byte[20]);
+        contents.put("overhead-saving", new byte[21]);
         for (int i = 0; i < 270; i++) {
             contents.put("small-" + i, ("content-" + i).getBytes(StandardCharsets.UTF_8));
         }

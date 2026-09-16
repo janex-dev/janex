@@ -130,6 +130,13 @@ public abstract class JanexExtension {
     /// @return the compression property, defaulting to `true`
     public abstract Property<Boolean> getCompression();
 
+    /// Returns the Zstandard level for blobs and table pages, defaulting to 3.
+    /// Zero selects the native default; negative levels favor speed. The writer rejects values
+    /// outside the native library's supported range when compression is enabled.
+    /// Ignored when compression is disabled.
+    /// @return the compression-level property
+    public abstract Property<Integer> getCompressionLevel();
+
     /// Returns whether to try shared CLASSFILE strings, defaulting to true.
     /// The writer retains the smaller complete pool representation.
     /// @return the CLASSFILE transform property

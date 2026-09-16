@@ -18,7 +18,7 @@ val functionalTest = sourceSets.create("functionalTest")
 dependencies {
     implementation(project(":janex-writer"))
     implementation(project(":janex-reader"))
-    shadow(libs.aircompressor)
+    shadow(libs.zstd.jni)
     shadow(libs.bouncycastle.pkix)
     shadow(libs.bouncycastle.pgp)
     shadow(libs.asm.commons)

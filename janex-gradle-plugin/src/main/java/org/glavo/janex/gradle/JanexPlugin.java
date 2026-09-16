@@ -34,6 +34,7 @@ public final class JanexPlugin implements Plugin<Project> {
         extension.getArguments().convention(Collections.emptyList());
         extension.getWithLauncher().convention(true);
         extension.getCompression().convention(true);
+        extension.getCompressionLevel().convention(3);
         extension.getTransformClassfiles().convention(true);
         extension.getNativeLaunchMode().convention("bootstrap");
         extension.getOutputFile().convention(
@@ -67,6 +68,7 @@ public final class JanexPlugin implements Plugin<Project> {
             task.getJavaVersion().convention(extension.getJavaVersion());
             task.getWithLauncher().convention(extension.getWithLauncher());
             task.getCompression().convention(extension.getCompression());
+            task.getCompressionLevel().convention(extension.getCompressionLevel());
             task.getTransformClassfiles().convention(extension.getTransformClassfiles());
             task.getSigning().convention(extension.getSigning());
             task.getMinimization().convention(extension.getMinimization());

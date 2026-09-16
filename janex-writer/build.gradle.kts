@@ -12,7 +12,7 @@ version = rootProject.version
 
 dependencies {
     api(project(":janex-reader"))
-    implementation(libs.aircompressor)
+    implementation(libs.zstd.jni)
     implementation(libs.bouncycastle.pkix)
     implementation(libs.bouncycastle.pgp)
     implementation(libs.asm.commons)

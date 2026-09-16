@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.*;
 
+import com.github.luben.zstd.ZstdCompressCtx;
 import org.glavo.janex.reader.Checksum;
 
 /// Holds one encoded blob pool with a string pool scoped to its resource root.
@@ -30,8 +31,10 @@ final class BlobPool {
 
     /// Builds one resource root with its own string pool.
     static BlobPool local(long id, Resources resources, PackOptions options, boolean transform) throws IOException {
-        Builder builder = new Builder(id, resources, options, transform);
-        return builder.finish();
+        try (ZstdCompressCtx compressor = StoredBlob.compressor(options)) {
+            Builder builder = new Builder(id, resources, options, transform);
+            return builder.finish(compressor);
+        }
     }
 
     /// Returns section bytes, the integrity-covered section-table row, and the application's root reference size.
@@ -117,12 +120,12 @@ final class BlobPool {
         }
 
         /// Finalizes this root's string pool and encodes its complete blob section.
-        BlobPool finish() throws IOException {
+        BlobPool finish(ZstdCompressCtx compressor) throws IOException {
             blobs.set(0, strings.encode());
             Encoding data = new Encoding();
             List<byte[]> descriptions = new ArrayList<>();
             for (byte[] blob : blobs) {
-                StoredBlob stored = StoredBlob.encode(blob, options.compression, data.size(), false);
+                StoredBlob stored = StoredBlob.encode(blob, compressor, data.size(), false);
                 Encoding description = new Encoding();
                 description.uint(data.size());
                 description.writeBytes(stored.encoding());
@@ -138,7 +141,7 @@ final class BlobPool {
                 }
                 options.limits.bytes(page.size());
                 byte[] decoded = page.toByteArray();
-                StoredBlob stored = StoredBlob.encode(decoded, options.compression, data.size(), true);
+                StoredBlob stored = StoredBlob.encode(decoded, compressor, data.size(), true);
                 pages.add(List.of(data.size(), stored.encoding(), JanexWriter.sha256(decoded)));
                 data.writeBytes(stored.bytes());
             }

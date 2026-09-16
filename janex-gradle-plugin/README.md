@@ -6,7 +6,7 @@ and makes `assemble` depend on the package. Packages include a `java -jar` launc
 publisher signing is optional.
 
 The published plugin JAR bundles `janex-reader` and `janex-writer`, including the writer's embedded
-bootstrap JAR. Aircompressor, Bouncy Castle, and ASM remain ordinary Maven dependencies. The source modules
+bootstrap JAR. Zstd-jni, Bouncy Castle, and ASM remain ordinary Maven dependencies. The source modules
 remain separate; using the plugin does not require separate Janex library publications.
 
 The plugin is built with JDK 25, targets Java 17, and is tested with the repository's Gradle 9.7.1
@@ -65,6 +65,7 @@ janex {
     arguments.addAll("", "two words", "\uD83D\uDE80")
     withLauncher = true
     compression = true
+    compressionLevel = 3
     transformClassfiles = true
     outputFile = layout.buildDirectory.file("distributions/application.janex")
 }
@@ -78,7 +79,14 @@ Both APIs are available on `JanexPack` tasks. This requirement does not change t
 `withLauncher = false` omits the appended JAR launcher; the result can still be launched with
 `janex run --allow-unsigned`. Arguments are passed as complete strings without shell splitting.
 Compression defaults to automatic Zstandard for blobs and table pages, including encoding overhead
-in the size comparison. Set `compression = false` to disable it.
+in the size comparison. `compressionLevel` defaults to 3 and also accepts Gradle providers. Zero
+selects Zstd's native default; negative levels favor speed. Values outside the loaded library's
+supported range fail packaging. Set `compression = false` to disable compression and ignore the level.
+
+Compression uses zstd-jni on the build JVM's platform. Its native library is a build-time dependency;
+it is not included in the bootstrap JAR or generated application. Applications continue to use the
+portable Java decoder. Each encoding pass reuses a single-threaded context for its blobs and table
+pages and closes it when finished. Reproducible builds should pin the plugin and compression-library versions.
 
 CLASSFILE transforms default to enabled. They share constant-pool strings and class-name components
 with resource names within each ResourceRoot. Every root uses its own string pool and retains

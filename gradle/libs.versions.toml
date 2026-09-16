@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: MPL-2.0
 
 [versions]
-aircompressor = "2.0.3"
+zstd-jni = "1.5.7-16"
 bouncycastle = "1.86"
 asm = "9.10.1"
 
 [libraries]
-aircompressor = { module = "io.airlift:aircompressor", version.ref = "aircompressor" }
+zstd-jni = { module = "com.github.luben:zstd-jni", version.ref = "zstd-jni" }
 bouncycastle-pkix = { module = "org.bouncycastle:bcpkix-jdk18on", version.ref = "bouncycastle" }
 bouncycastle-pgp = { module = "org.bouncycastle:bcpg-jdk18on", version.ref = "bouncycastle" }
 asm-commons = { module = "org.ow2.asm:asm-commons", version.ref = "asm" }

@@ -44,6 +44,10 @@ public final class PackOptions {
     /// Whether to use Zstandard when stored bytes plus encoding overhead shrink; defaults to true.
     /// Applies to blobs and table pages. False stores both without compression.
     public boolean compression = true;
+    /// Zstandard level for blobs and table pages; defaults to 3. Zero selects the native default,
+    /// and negative levels favor speed. Must be within the loaded Zstandard library's supported range.
+    /// Ignored when compression is disabled.
+    public int compressionLevel = 3;
     /// Whether to try shared CLASSFILE strings; defaults to true.
     /// Each resource root uses its own string pool. A root retains ordinary class bytes when
     /// the complete transformed representation, including its encoding overhead, would not shrink.
