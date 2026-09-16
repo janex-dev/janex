@@ -45,7 +45,19 @@ public final class ClassFiles {
         data.writeShort(count);
         for (int i = 1; i < count; i++) {
             int tag = input.readUnsignedByte();
-            if (tag == 0xff || tag == 0xfe) {
+            if (tag == 0xfd) {
+                byte[] template = entry(input, pool, true);
+                if (template.length > limits.maxBytes()) {
+                    throw new IOException("CLASSFILE byte limit exceeded");
+                }
+                data.writeByte(1);
+                int lengthPosition = output.position;
+                data.writeShort(0);
+                expandTemplate(template, pool, output);
+                int textLength = output.position - lengthPosition - 2;
+                result[lengthPosition] = (byte) (textLength >>> 8);
+                result[lengthPosition + 1] = (byte) textLength;
+            } else if (tag == 0xff || tag == 0xfe) {
                 byte[] text = entry(input, pool);
                 if (tag == 0xfe) {
                     byte[] name = entry(input, pool);
@@ -115,6 +127,37 @@ public final class ClassFiles {
         return result;
     }
 
+    /// Expands references directly into the result without allocating a restored string.
+    private static void expandTemplate(byte[] bytes, byte[][] pool, ByteArrayOutput output) throws IOException {
+        DataInputStream input = new DataInputStream(new ByteArrayInputStream(bytes));
+        int start = output.position;
+        while (input.available() != 0) {
+            int position = bytes.length - input.available();
+            int end = position;
+            while (end < bytes.length && bytes[end] != 0) end++;
+            checkTemplateLength((long) output.position - start + end - position);
+            output.write(bytes, position, end - position);
+            input.skipBytes(end - position);
+            if (input.available() == 0) break;
+            input.readUnsignedByte();
+            byte[] packageName = entry(input, pool);
+            byte[] className = entry(input, pool);
+            if (className.length == 0) throw new IOException("Empty external class name");
+            checkTemplateLength((long) output.position - start + packageName.length
+                    + className.length + (packageName.length == 0 ? 0 : 1));
+            if (packageName.length != 0) {
+                output.write(packageName);
+                output.write('/');
+            }
+            output.write(className);
+        }
+    }
+
+    /// Rejects a template expansion that cannot fit a CONSTANT_Utf8 byte length.
+    private static void checkTemplateLength(long length) throws IOException {
+        if (length > 65535) throw new IOException("External class string exceeds 65535 bytes");
+    }
+
     /// Copies a framed input range without interpreting unchanged class-file bytes.
     private static void copy(DataInputStream input, byte[] bytes, ByteArrayOutput output, int length) throws IOException {
         int remaining = input.available();
@@ -127,6 +170,11 @@ public final class ClassFiles {
 
     /// Reads a bounded ULEB128 data index, accepting zero padding permitted by the format.
     private static byte[] entry(DataInputStream input, byte[][] pool) throws IOException {
+        return entry(input, pool, false);
+    }
+
+    /// Reads a pool reference, allowing template bytes to exceed the restored string limit.
+    private static byte[] entry(DataInputStream input, byte[][] pool, boolean template) throws IOException {
         long value = 0;
         for (int shift = 0; shift < 70; shift += 7) {
             int next = input.readUnsignedByte();
@@ -139,7 +187,7 @@ public final class ClassFiles {
                     throw new IOException("Data-pool index out of range");
                 }
                 byte[] text = pool[(int) value];
-                if (text.length > 65535) {
+                if (!template && text.length > 65535) {
                     throw new IOException("External class string exceeds 65535 bytes");
                 }
                 return text;

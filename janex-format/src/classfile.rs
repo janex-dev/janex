@@ -103,6 +103,9 @@ pub fn transform(bytes: &[u8], strings: &mut DataPool, limits: Limits) -> Result
                         write_vuint(&mut replacement, strings.intern(package))?;
                         write_vuint(&mut replacement, strings.intern(name))?;
                     }
+                } else if let Some(template) = encode_template(original, strings)? {
+                    replacement.push(0xfd);
+                    write_vuint(&mut replacement, strings.intern(template))?;
                 } else {
                     replacement.push(0xff);
                     write_vuint(&mut replacement, strings.intern(text))?;
@@ -152,11 +155,17 @@ pub fn restore(bytes: &[u8], strings: &DataPool, limits: Limits) -> Result<Vec<u
     while index < count {
         let tag = decoder.u8()?;
         match tag {
-            0xff | 0xfe => {
+            0xfd..=0xff => {
                 let utf = if tag == 0xff {
                     let text = strings.get(decoder.vuint()?)?;
                     check_external_length(text.len())?;
                     Cow::Borrowed(text)
+                } else if tag == 0xfd {
+                    Cow::Owned(restore_template(
+                        strings.get(decoder.vuint()?)?,
+                        strings,
+                        limits,
+                    )?)
                 } else {
                     let package = strings.get(decoder.vuint()?)?;
                     let name = strings.get(decoder.vuint()?)?;
@@ -200,6 +209,97 @@ pub fn restore(bytes: &[u8], strings: &DataPool, limits: Limits) -> Result<Vec<u
     }
     limits.bytes(output.len() as u64 + decoder.remaining() as u64)?;
     output.extend_from_slice(decoder.take(decoder.remaining())?);
+    Ok(output)
+}
+
+/// Extracts byte-exact class-name fragments from descriptor and signature-shaped strings.
+/// This is a compression heuristic, not a Java grammar validator.
+fn encode_template(bytes: &[u8], pool: &mut DataPool) -> Result<Option<Vec<u8>>> {
+    if !matches!(bytes.first(), Some(b'(' | b'[' | b'L' | b'<')) {
+        return Ok(None);
+    }
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut position = 0;
+    let mut changed = false;
+    while position < bytes.len() {
+        let value = bytes[position];
+        output.push(value);
+        position += 1;
+        if value != b'L' {
+            continue;
+        }
+        let start = position;
+        let mut end = start;
+        while end < bytes.len() && !b";<.:>[()".contains(&bytes[end]) {
+            end += 1;
+        }
+        if end == start || end == bytes.len() || !b";<.".contains(&bytes[end]) {
+            output.extend_from_slice(&bytes[start..end]);
+            position = end;
+            continue;
+        }
+        let name = &bytes[start..end];
+        if name.starts_with(b"/") || name.ends_with(b"/") {
+            output.extend_from_slice(&bytes[start..end]);
+            position = end;
+            continue;
+        }
+        let (package, name) = match name.iter().rposition(|&byte| byte == b'/') {
+            Some(slash) => (&name[..slash], &name[slash + 1..]),
+            None => (&b""[..], name),
+        };
+        let checkpoint = pool.len();
+        let output_start = output.len();
+        output.push(0);
+        write_vuint(&mut output, pool.intern(package))?;
+        write_vuint(&mut output, pool.intern(name))?;
+        if output.len() - output_start < end - start {
+            position = end;
+            changed = true;
+        } else {
+            pool.truncate(checkpoint);
+            output.truncate(output_start);
+            output.extend_from_slice(&bytes[start..end]);
+            position = end;
+        }
+    }
+    Ok(changed.then_some(output))
+}
+
+/// Expands nonrecursive template references with a bounded UTF-8 result length.
+fn restore_template(bytes: &[u8], pool: &DataPool, limits: Limits) -> Result<Vec<u8>> {
+    let mut input = Decoder::new(bytes, limits)?;
+    let mut output = Vec::new();
+    while input.remaining() != 0 {
+        let start = input.position();
+        let literal = bytes[start..]
+            .iter()
+            .position(|&byte| byte == 0)
+            .unwrap_or(input.remaining());
+        check_external_length(output.len() + literal)?;
+        limits.bytes((output.len() + literal) as u64)?;
+        output.extend_from_slice(input.take(literal)?);
+        if input.remaining() == 0 {
+            break;
+        }
+        input.u8()?;
+        let package = pool.get(input.vuint()?)?;
+        let name = pool.get(input.vuint()?)?;
+        if name.is_empty() {
+            return Err(invalid("empty external class name"));
+        }
+        check_external_length(
+            output.len() + package.len() + name.len() + usize::from(!package.is_empty()),
+        )?;
+        limits.bytes(
+            (output.len() + package.len() + name.len() + usize::from(!package.is_empty())) as u64,
+        )?;
+        if !package.is_empty() {
+            output.extend_from_slice(package);
+            output.push(b'/');
+        }
+        output.extend_from_slice(name);
+    }
     Ok(output)
 }
 

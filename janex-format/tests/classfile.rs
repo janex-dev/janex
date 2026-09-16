@@ -11,6 +11,110 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+/// Builds one framed UTF-8 constant without requiring a semantically valid class body.
+fn string_class(text: &[u8]) -> Vec<u8> {
+    let mut bytes = vec![0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 52, 0, 2, 1];
+    bytes.extend_from_slice(&(text.len() as u16).to_be_bytes());
+    bytes.extend_from_slice(text);
+    bytes
+}
+
+#[test]
+fn descriptors_and_generic_signatures_share_byte_templates() {
+    let mut pool = DataPool::new();
+    pool.intern("java/lang");
+    pool.intern("String");
+    pool.intern("Object");
+    let original = string_class(b"(Ljava/lang/String;)Ljava/lang/Object;");
+    let encoded = classfile::transform(&original, &mut pool, Limits::default())
+        .unwrap()
+        .unwrap();
+    assert_eq!(&encoded[10..], &[0xfd, 4]);
+    assert_eq!(pool.get(4).unwrap(), b"(L\0\x01\x02;)L\0\x01\x03;");
+    let checkpoint = pool.len();
+    assert_eq!(
+        classfile::transform(&original, &mut pool, Limits::default())
+            .unwrap()
+            .unwrap(),
+        encoded
+    );
+    assert_eq!(pool.len(), checkpoint);
+    assert_eq!(
+        classfile::restore(&encoded, &pool, Limits::default()).unwrap(),
+        original
+    );
+    for text in [
+        "[[Ljava/lang/String;",
+        "<LONG:Ljava/lang/Object;:Ljava/io/Serializable;>(TLONG;[Ljava/lang/String;)TLONG;^Ljava/lang/Exception;",
+        "Ljava/util/Map<Ljava/lang/String;+Ljava/util/List<-[Ljava/lang/Number;>;>;",
+        "Lsample/Outer<TT;>.Inner<Ljava/lang/String;>;",
+        "(LDefaultName;L包/类型;)LDefaultName;",
+        "(ILjava/lang/String;[[DZ)V",
+        "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
+        "(Ljava/lang/String;not-a-valid-descriptor",
+    ] {
+        let original = string_class(text.as_bytes());
+        let encoded = classfile::transform(&original, &mut pool, Limits::default())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            classfile::restore(&encoded, &pool, Limits::default()).unwrap(),
+            original,
+            "{text}"
+        );
+    }
+    assert!(pool.find("java/util").is_some());
+    assert!(pool.find("Map").is_some());
+    assert!(pool.find("包").is_some());
+    assert!(pool.find("类型").is_some());
+}
+
+#[test]
+fn templates_bound_expansion_and_do_not_interpret_referenced_bytes() {
+    for (template, package, name, expected) in [
+        (
+            vec![0, 0, 2],
+            vec![],
+            vec![0xc0, 0x80],
+            Some(vec![0xc0, 0x80]),
+        ),
+        (
+            vec![0, 1, 2],
+            b"p".to_vec(),
+            vec![0, 1, 2],
+            Some(vec![b'p', b'/', 0, 1, 2]),
+        ),
+        (vec![0, 1], b"p".to_vec(), b"Name".to_vec(), None),
+        (vec![0, 1, 127], b"p".to_vec(), b"Name".to_vec(), None),
+        (vec![0, 1, 0], b"p".to_vec(), b"Name".to_vec(), None),
+        (
+            vec![0, 0, 2],
+            b"p".to_vec(),
+            vec![b'x'; 65535],
+            Some(vec![b'x'; 65535]),
+        ),
+        (vec![0, 1, 2], b"p".to_vec(), vec![b'x'; 65535], None),
+        (vec![b'x'; 65536], b"p".to_vec(), b"Name".to_vec(), None),
+    ] {
+        let mut pool = DataPool::new();
+        // Keep stable indices even for the unnamed-package vector.
+        pool.intern(if package.is_empty() {
+            b"unused".as_slice()
+        } else {
+            &package
+        });
+        pool.intern(&name);
+        let index = pool.intern(&template);
+        let mut encoded = vec![0xca, 0xfe, 0xca, 0x70, 0, 0, 0, 52, 0, 2, 0xfd];
+        janex_format::binary::write_vuint(&mut encoded, index).unwrap();
+        let result = classfile::restore(&encoded, &pool, Limits::default());
+        match expected {
+            Some(expected) => assert_eq!(result.unwrap(), string_class(&expected)),
+            None => assert!(result.is_err()),
+        }
+    }
+}
+
 /// Builds a minimal class with unused constants that exercise UTF-16 and wide slots.
 fn fixture() -> Vec<u8> {
     let mut bytes = vec![0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 52, 0, 10];

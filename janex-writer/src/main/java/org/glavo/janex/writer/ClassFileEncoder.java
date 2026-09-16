@@ -12,7 +12,7 @@ import java.util.Arrays;
 import org.glavo.janex.reader.ReadLimits;
 import org.glavo.janex.reader.internal.Input;
 
-/// Encodes the two lossless external constant-pool string forms in Janex 0.1.
+/// Encodes lossless external constant-pool strings and byte templates in Janex 0.1.
 final class ClassFileEncoder {
     /// Prevents instantiation.
     private ClassFileEncoder() { }
@@ -81,8 +81,9 @@ final class ClassFileEncoder {
                                 entry.uint(strings.intern(Encoding.utf8(slash < 0 ? "" : text.substring(0, slash))));
                                 entry.uint(strings.intern(Encoding.utf8(text.substring(slash + 1))));
                             } else {
-                                entry.write(0xff);
-                                entry.uint(strings.intern(raw));
+                                byte[] template = template(raw, strings);
+                                entry.write(template == null ? 0xff : 0xfd);
+                                entry.uint(strings.intern(template == null ? raw : template));
                             }
                             if (entry.size() < ends[i] - starts[i]) replacement = entry.toByteArray();
                         }
@@ -106,6 +107,45 @@ final class ClassFileEncoder {
         } finally {
             if (!accepted) strings.truncate(checkpoint);
         }
+    }
+
+    /// Extracts byte-exact class-name fragments without validating the Java type grammar.
+    private static byte[] template(byte[] bytes, DataPool pool) throws IOException {
+        if (bytes.length == 0 || "([L<".indexOf(bytes[0]) < 0) return null;
+        Encoding output = new Encoding();
+        boolean changed = false;
+        int position = 0;
+        while (position < bytes.length) {
+            int value = bytes[position++] & 255;
+            output.write(value);
+            if (value != 'L') continue;
+            int start = position;
+            int end = start;
+            while (end < bytes.length && ";<.:>[()".indexOf(bytes[end] & 255) < 0) end++;
+            if (end == start || end == bytes.length || ";<.".indexOf(bytes[end] & 255) < 0
+                    || bytes[start] == '/' || bytes[end - 1] == '/') {
+                output.write(bytes, start, end - start);
+                position = end;
+                continue;
+            }
+            int slash = end - 1;
+            while (slash >= start && bytes[slash] != '/') slash--;
+            int checkpoint = pool.size();
+            Encoding reference = new Encoding();
+            reference.write(0);
+            reference.uint(pool.intern(Arrays.copyOfRange(bytes, start, slash < start ? start : slash)));
+            reference.uint(pool.intern(Arrays.copyOfRange(bytes, slash < start ? start : slash + 1, end)));
+            if (reference.size() < end - start) {
+                output.writeBytes(reference.toByteArray());
+                position = end;
+                changed = true;
+            } else {
+                pool.truncate(checkpoint);
+                output.write(bytes, start, end - start);
+                position = end;
+            }
+        }
+        return changed ? output.toByteArray() : null;
     }
 
     /// Tests whether UTF-8 and Modified UTF-8 use the same bytes for this decoded text.

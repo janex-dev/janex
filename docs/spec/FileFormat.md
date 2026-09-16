@@ -824,13 +824,26 @@ struct CONSTANT_External_String_Class {
     /// The index of the nonempty class name without the package prefix.
     class_name_index: DataPoolIndex,
 }
+
+struct CONSTANT_External_String_Template {
+    tag: u8, // 0xFD
+
+    /// The index of a byte template in the selected data pool.
+    template_index: DataPoolIndex,
+}
 ```
 
 `CONSTANT_External_String` copies the selected bytes. `CONSTANT_External_String_Class` concatenates
 `package + "/" + class` as bytes when the package is nonempty, or just `class` otherwise. Array class names
-may use `CONSTANT_External_String` or remain unchanged.
+may use `CONSTANT_External_String`, `CONSTANT_External_String_Template`, or remain unchanged.
 
-Both entries decode to `CONSTANT_Utf8` (tag `0x01`), followed by a big-endian `u16` byte length and
+`CONSTANT_External_String_Template` expands its template from start to end. Nonzero bytes are copied
+literally; `00` is followed by a package index and a nonempty class-name index, both `DataPoolIndex`,
+expanded as for `CONSTANT_External_String_Class`. Referenced bytes are copied without recursive
+expansion. The template ends at the end of its pool entry. Descriptors and generic signatures can
+share class-name components this way while preserving their punctuation and other literal bytes.
+
+All three entries decode to `CONSTANT_Utf8` (tag `0x01`), followed by a big-endian `u16` byte length and
 the restored bytes without transcoding. The result must be valid Modified UTF-8 and fit in 65,535 bytes.
 
 Decoders check transform framing, pool references, and byte lengths. Validation of class-file

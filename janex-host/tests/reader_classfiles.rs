@@ -128,6 +128,8 @@ fn java_class_validation_and_restoration_match_native_structural_boundaries() {
     fs::write(temp.path().join("Fixture.java"), r#"
 package sample;
 public class Fixture implements Runnable {
+    public java.util.Map<String, java.util.List<? extends Number[]>> generic;
+    public <LONG extends Object & java.io.Serializable> LONG identity(LONG value, String[][] array) { return value; }
     static final String TEXT = "A long string with \u0000 and \ud83d\ude80 and \ud800";
     static final long LONG = 1234567890123L;
     static final double DOUBLE = 1.25;
@@ -277,6 +279,33 @@ public class Fixture implements Runnable {
             transformed.extend(&original[17..]);
             let length = classfile::restore(&transformed, &pool, limits)
                 .map_or(original.len(), |value| value.len());
+            for declared in [length.saturating_sub(1), length, length + 1] {
+                vector(&mut vectors, true, &transformed, declared, &pool, limits);
+            }
+        }
+    }
+    // Exercise nonrecursive templates, multi-byte indices, and malformed expansion framing.
+    for template in [
+        b"(L\0\x01\x02;)L\0\x01\x02;".to_vec(),
+        vec![0, 0, 2],
+        vec![0, 0x81, 0, 0x82, 0],
+        vec![0],
+        vec![0, 1],
+        vec![0, 1, 0],
+        vec![0, 1, 127],
+        vec![0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 2],
+        vec![b'x'; 65535],
+        vec![b'x'; 65536],
+    ] {
+        for name in [b"String".to_vec(), vec![0, 1, 2], vec![b'x'; 65535]] {
+            let mut pool = DataPool::new();
+            pool.intern("java/lang");
+            pool.intern(name);
+            let index = pool.intern(&template);
+            let mut transformed = minimal(&[0xfd, index as u8], false);
+            transformed[..4].copy_from_slice(&[0xca, 0xfe, 0xca, 0x70]);
+            let length =
+                classfile::restore(&transformed, &pool, limits).map_or(100, |value| value.len());
             for declared in [length.saturating_sub(1), length, length + 1] {
                 vector(&mut vectors, true, &transformed, declared, &pool, limits);
             }

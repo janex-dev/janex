@@ -32,6 +32,7 @@ public final class WriterTest {
             compression(root);
             compressionLevels(root);
             classfiles(root);
+            classTemplates();
             rootStrings(root);
             external(root);
             failures(root);
@@ -40,6 +41,48 @@ public final class WriterTest {
             try (var paths = Files.walk(root)) {
                 for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);
             }
+        }
+    }
+
+    /// Checks independent template bytes, component sharing, and generic-signature round trips.
+    private static void classTemplates() throws Exception {
+        DataPool pool = new DataPool(ReadLimits.DEFAULT);
+        for (String value : List.of("java/lang", "String", "Object")) pool.intern(Encoding.utf8(value));
+        List<String> texts = List.of(
+                "(Ljava/lang/String;)Ljava/lang/Object;",
+                "[[Ljava/lang/String;",
+                "<LONG:Ljava/lang/Object;:Ljava/io/Serializable;>(TLONG;[Ljava/lang/String;)TLONG;^Ljava/lang/Exception;",
+                "Ljava/util/Map<Ljava/lang/String;+Ljava/util/List<-[Ljava/lang/Number;>;>;",
+                "Lsample/Outer<TT;>.Inner<Ljava/lang/String;>;",
+                "(LDefaultName;L\u5305/\u7c7b\u578b;)LDefaultName;",
+                "(ILjava/lang/String;[[DZ)V",
+                "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
+                "(Ljava/lang/String;not-a-valid-descriptor");
+        for (int index = 0; index < texts.size(); index++) {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            DataOutputStream data = new DataOutputStream(bytes);
+            data.writeInt(0xcafebabe);
+            data.writeInt(52);
+            data.writeShort(2);
+            data.writeByte(1);
+            data.writeUTF(texts.get(index));
+            byte[] original = bytes.toByteArray();
+            byte[] encoded = ClassFileEncoder.transform(original, pool, ReadLimits.DEFAULT);
+            require(encoded != null, "Template fixture was not transformed");
+            Input input = new Input(pool.encode());
+            byte[][] values = new byte[(int) input.uint()][];
+            for (int i = 0; i < values.length; i++) values[i] = input.sized();
+            if (index == 0) {
+                require(Arrays.equals(Arrays.copyOfRange(encoded, 10, encoded.length), new byte[]{(byte) 0xfd, 4}),
+                        "Descriptor did not use the template form");
+                require(Arrays.equals(values[4], new byte[]{'(', 'L', 0, 1, 2, ';', ')', 'L', 0, 1, 3, ';'}),
+                        "Template differs from the independent format vector");
+            }
+            require(Arrays.equals(original, ClassFile.restore(encoded, values, original.length)),
+                    "Descriptor or generic signature changed");
+            int checkpoint = pool.size();
+            require(Arrays.equals(encoded, ClassFileEncoder.transform(original, pool, ReadLimits.DEFAULT))
+                    && pool.size() == checkpoint, "Template was not deduplicated");
         }
     }
 
