@@ -13,7 +13,7 @@ use janex_format::{
     container::{BLOB_POOL, Reader, Writer},
     content::Content,
     data_pool::{DataPool, DataPoolBuilder},
-    resource::{Directory, DirectoryEntry, Layer, Node, ResourceRoot},
+    resource::{Directory, DirectoryEntry, Layer, Node, ResourceRoot, ValidatedRoot},
 };
 use std::io::Cursor;
 
@@ -217,6 +217,54 @@ fn root_round_trip_shares_names_and_retains_metadata() {
             .kind(),
         ErrorKind::Verification
     );
+}
+
+/// Frozen roots keep structural validation while respecting stricter callers and new contexts.
+#[test]
+fn validated_roots_preserve_limits_and_conditional_conflict_checks() {
+    let limits = Limits::default();
+    let mut editable = root(vec![layer(vec![directory(
+        "a/b",
+        vec![file("x", b"value")],
+    )])]);
+    let encoded = editable.encode(limits).unwrap();
+    let mut blobs = store(&[editable.data.encode().unwrap()]);
+    let frozen = ValidatedRoot::decode(&encoded, &mut blobs).unwrap();
+    let tree = frozen.merge(&context(), limits).unwrap();
+    assert_eq!(tree.read_file("a/b/x", &mut blobs).unwrap(), b"value");
+    for limit in [
+        Limits {
+            max_bytes: 2,
+            ..limits
+        },
+        Limits {
+            max_elements: 1,
+            ..limits
+        },
+    ] {
+        assert!(frozen.merge(&context(), limit).is_err());
+    }
+    let mut overlay = layer(vec![directory("a/b", vec![])]);
+    overlay.condition =
+        Condition::from_value(Value::map([(Value::uint(1), Value::text("windows"))]).unwrap())
+            .unwrap();
+    let frozen = ValidatedRoot::new(
+        root(vec![
+            layer(vec![directory("", vec![file("a", b"")])]),
+            overlay,
+        ]),
+        limits,
+    )
+    .unwrap();
+    assert!(frozen.merge(&context(), limits).is_ok());
+    let mut windows = context();
+    windows.os = "windows".into();
+    assert!(frozen.merge(&windows, limits).is_err());
+    let mut invalid = layer(vec![directory("../escape", vec![])]);
+    invalid.condition =
+        Condition::from_value(Value::map([(Value::uint(1), Value::text("windows"))]).unwrap())
+            .unwrap();
+    assert!(ValidatedRoot::new(root(vec![invalid]), limits).is_err());
 }
 
 #[test]

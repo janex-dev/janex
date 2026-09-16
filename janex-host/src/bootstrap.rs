@@ -306,11 +306,12 @@ impl Builder<'_> {
         };
         let mut data = Vec::new();
         number(&mut data, pool.len())?;
+        number(&mut data, pool.payload().len() as u64)?;
         for i in 0..pool.len() {
             let bytes = pool.get(i)?;
             number(&mut data, bytes.len() as u64)?;
-            data.extend_from_slice(bytes);
         }
+        data.extend_from_slice(pool.payload());
         self.index_bytes += data.len() as u64;
         self.blobs.reader().limits().bytes(self.index_bytes)?;
         let id = identifier(self.pools.len() as u64)?;
@@ -642,9 +643,10 @@ public class Main {
             }],
         };
         let mut roots = crate::roots::Roots::default();
-        roots
-            .entries
-            .insert(crate::roots::RootKey::Local(reference(98)), root);
+        roots.entries.insert(
+            crate::roots::RootKey::Local(reference(98)),
+            janex_format::resource::ValidatedRoot::new(root, Limits::default()).unwrap(),
+        );
         let context = Context {
             os: "linux".into(),
             arch: "x86-64".into(),

@@ -7,7 +7,6 @@ import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.Arrays;
 
 import org.glavo.janex.reader.internal.Input;
 
@@ -18,7 +17,7 @@ import static org.glavo.janex.reader.internal.Input.require;
 /// created the pool, and concurrent reads do not require synchronization.
 /// Entries retain their supplied indices without checking uniqueness.
 public final class DataPool {
-    /// Owned entry payloads; unused capacity may follow the last entry.
+    /// Owned entry payloads in index order.
     private final byte[] bytes;
     /// Entry boundaries, including the final payload end.
     private final int[] offsets;
@@ -69,8 +68,8 @@ public final class DataPool {
     }
 
     /// Reads a pool from an already validated private bootstrap index.
-    /// The encoding is a big-endian signed int count followed by count pairs of nonnegative
-    /// int byte lengths and payloads. Uniqueness is the index producer's responsibility.
+    /// The encoding contains a big-endian nonnegative int entry count, total payload length,
+    /// one int length per entry, and the concatenated payloads. Uniqueness is the producer's responsibility.
     /// @param input nonnull input, consumed through this pool and not closed
     /// @param limits nonnull limits on entry count and total payload bytes
     /// @return an independently owned pool
@@ -79,25 +78,22 @@ public final class DataPool {
     public static DataPool readIndex(DataInput input, ReadLimits limits) throws IOException {
         int count = limits.elements(input.readInt());
         require(count > 0 && count < Integer.MAX_VALUE, "Invalid data pool count");
+        int total = limits.bytes(input.readInt());
         int[] offsets = new int[count + 1];
-        byte[] bytes = new byte[0];
-        byte[] scratch = null;
         for (int i = 0; i < count; i++) {
             int length = limits.bytes(input.readInt());
             require(i != 0 || length == 0, "Data pool must start with empty bytes");
-            int end = limits.bytes((long) offsets[i] + length);
-            if (end > bytes.length) {
-                int capacity = (int) Math.min(limits.maxBytes(), Math.max(end, Math.max(1024L, bytes.length * 2L)));
-                bytes = Arrays.copyOf(bytes, capacity);
-            }
-            if (length != 0 && scratch == null) scratch = new byte[Math.min(8192, limits.maxBytes())];
-            for (int copied = 0; copied < length;) {
-                int chunk = Math.min(length - copied, scratch.length);
-                input.readFully(scratch, 0, chunk);
-                System.arraycopy(scratch, 0, bytes, offsets[i] + copied, chunk);
-                copied += chunk;
-            }
-            offsets[i + 1] = end;
+            require(length <= total - offsets[i], "Data pool length exceeds payload");
+            offsets[i + 1] = offsets[i] + length;
+        }
+        require(offsets[count] == total, "Data pool payload length mismatch");
+        byte[] bytes = new byte[total];
+        byte[] scratch = new byte[Math.min(8192, total)];
+        for (int copied = 0; copied < total;) {
+            int chunk = Math.min(total - copied, scratch.length);
+            input.readFully(scratch, 0, chunk);
+            System.arraycopy(scratch, 0, bytes, copied, chunk);
+            copied += chunk;
         }
         return new DataPool(bytes, offsets);
     }
@@ -107,16 +103,17 @@ public final class DataPool {
     /// @throws IOException if writing fails; previously written bytes are retained
     public void writeIndex(DataOutput output) throws IOException {
         output.writeInt(size());
-        byte[] scratch = new byte[Math.min(8192, offsets[size()])];
+        int total = offsets[size()];
+        output.writeInt(total);
         for (int i = 0; i < size(); i++) {
-            int length = offsets[i + 1] - offsets[i];
-            output.writeInt(length);
-            for (int copied = 0; copied < length;) {
-                int count = Math.min(length - copied, scratch.length);
-                System.arraycopy(bytes, offsets[i] + copied, scratch, 0, count);
-                output.write(scratch, 0, count);
-                copied += count;
-            }
+            output.writeInt(offsets[i + 1] - offsets[i]);
+        }
+        byte[] scratch = new byte[Math.min(8192, total)];
+        for (int copied = 0; copied < total;) {
+            int count = Math.min(total - copied, scratch.length);
+            System.arraycopy(bytes, copied, scratch, 0, count);
+            output.write(scratch, 0, count);
+            copied += count;
         }
     }
 

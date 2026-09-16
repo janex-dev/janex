@@ -78,6 +78,11 @@ impl DataPool {
         Ok(bytes)
     }
 
+    /// Borrows all entry payloads concatenated in index order, without framing bytes.
+    pub fn payload(&self) -> &[u8] {
+        &self.bytes
+    }
+
     /// Returns the number of entries, including the empty sequence.
     pub fn len(&self) -> u64 {
         (self.offsets.len() - 1) as u64

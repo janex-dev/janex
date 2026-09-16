@@ -76,9 +76,10 @@ public final class ReaderTest {
         resourcePlan();
         dataPools();
         repeatedPoolEntries();
+        poolIndexFraming();
     }
 
-    /// Checks contiguous-pool ownership, read-only views, framing, growth, and stream boundaries.
+    /// Checks contiguous-pool ownership, read-only views, framing, and stream boundaries.
     private static void dataPools() throws Exception {
         byte[] encoded = {3, 0, 1, (byte) 0xff, 2, (byte) 0xc0, (byte) 0x80};
         DataPool pool = DataPool.decode(encoded, ReadLimits.DEFAULT);
@@ -166,6 +167,34 @@ public final class ReaderTest {
             }
             reject(() -> pool.view(entries.length));
         }
+    }
+
+    /// Checks the private index's independent length table and exact payload boundaries.
+    private static void poolIndexFraming() throws Exception {
+        byte[] wire = java.nio.ByteBuffer.allocate(23)
+                .putInt(3).putInt(3).putInt(0).putInt(1).putInt(2)
+                .put(new byte[]{42, 43, 44}).array();
+        DataPool pool = DataPool.readIndex(new DataInputStream(new ByteArrayInputStream(wire)), ReadLimits.DEFAULT);
+        check(pool.size() == 3 && pool.view(1).get() == 42 && pool.view(2).get(1) == 44);
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        pool.writeIndex(new DataOutputStream(output));
+        check(Arrays.equals(wire, output.toByteArray()));
+        for (int end = 0; end < wire.length; end++) {
+            byte[] truncated = Arrays.copyOf(wire, end);
+            reject(() -> DataPool.readIndex(new DataInputStream(new ByteArrayInputStream(truncated)), ReadLimits.DEFAULT));
+        }
+        for (int[] fields : new int[][]{
+                {0, 0}, {-1, 0}, {Integer.MAX_VALUE, 0}, {1, -1, 0},
+                {1, 1, 1}, {2, 1, 0, -1}, {2, 1, 0, 2}, {2, 2, 0, 1},
+                {3, Integer.MAX_VALUE, 0, Integer.MAX_VALUE, 1}}) {
+            java.nio.ByteBuffer malformed = java.nio.ByteBuffer.allocate(fields.length * 4);
+            for (int field : fields) malformed.putInt(field);
+            reject(() -> DataPool.readIndex(new DataInputStream(new ByteArrayInputStream(malformed.array())),
+                    ReadLimits.DEFAULT));
+        }
+        DataPool empty = DataPool.readIndex(new DataInputStream(new ByteArrayInputStream(new byte[]{
+                0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0})), ReadLimits.DEFAULT);
+        check(empty.size() == 1 && empty.byteLength(0) == 0);
     }
 
     /// Checks that selected-resource descriptions do not expose mutable preparation state.

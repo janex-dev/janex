@@ -66,6 +66,7 @@ fn decoding_repeated_entries_preserves_indices() {
     assert_eq!(pool.get(2).unwrap(), b"x");
     assert_eq!(pool.get(3).unwrap(), b"\xff");
     assert_eq!(pool.get(4).unwrap(), b"");
+    assert_eq!(pool.payload(), b"\xffx\xff");
     assert_eq!(pool.encode().unwrap(), wire);
     assert!(pool.get(5).is_err());
 }

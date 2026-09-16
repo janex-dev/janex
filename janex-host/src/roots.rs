@@ -12,7 +12,7 @@ use janex_format::{
     application::PathEntry,
     blob::{BlobRef, BlobStore},
     content::Source,
-    resource::{DirectoryEntry, ResourceRoot},
+    resource::{DirectoryEntry, ValidatedRoot},
 };
 use std::{collections::BTreeMap, io::Cursor};
 
@@ -44,7 +44,7 @@ impl RootKey {
 #[derive(Default)]
 pub(crate) struct Roots {
     /// Roots indexed by complete reference identity.
-    pub(crate) entries: BTreeMap<RootKey, ResourceRoot>,
+    pub(crate) entries: BTreeMap<RootKey, ValidatedRoot>,
     /// Aggregate imported bytes, including all multi-release layers, retained in memory.
     imported_bytes: u64,
     /// Aggregate raw JAR bytes fetched or read from cache for this launch.
@@ -93,7 +93,8 @@ impl Roots {
             // Imported files are inline and untransformed; this in-memory root never dereferences
             // or serializes its placeholder data-pool reference.
             let root = root.into_resource_root(BlobRef { pool: 0, index: 0 })?;
-            self.entries.insert(RootKey::of(entry), root);
+            self.entries
+                .insert(RootKey::of(entry), ValidatedRoot::new(root, import.limits)?);
         }
         Ok(())
     }
@@ -103,7 +104,7 @@ impl Roots {
         &mut self,
         entry: &PathEntry,
         blobs: &mut BlobStore<Cursor<Vec<u8>>>,
-    ) -> Result<&ResourceRoot> {
+    ) -> Result<&ValidatedRoot> {
         let key = RootKey::of(entry);
         if !self.entries.contains_key(&key) {
             let PathEntry::Local(reference) = entry else {
@@ -111,7 +112,7 @@ impl Roots {
             };
             let bytes = blobs.resolve(*reference)?;
             self.entries
-                .insert(key.clone(), ResourceRoot::decode(&bytes, blobs)?);
+                .insert(key.clone(), ValidatedRoot::decode(&bytes, blobs)?);
         }
         Ok(&self.entries[&key])
     }

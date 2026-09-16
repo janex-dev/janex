@@ -248,11 +248,27 @@ impl Value {
 
     /// Looks up an integer key, reporting a type error if this value is not a map.
     pub fn get(&self, key: u64) -> Result<Option<Self>> {
-        Ok(self
-            .as_map()?
-            .into_iter()
-            .find(|(k, _)| k.as_u64().ok() == Some(key))
-            .map(|(_, v)| v))
+        let mut decoder = minicbor::Decoder::new(&self.bytes);
+        let count = decoder
+            .map()
+            .map_err(decode_error)?
+            .ok_or_else(|| invalid("indefinite map"))?;
+        for _ in 0..count {
+            let start = decoder.position();
+            let matches = match decoder.u64() {
+                Ok(value) => value == key,
+                Err(_) => {
+                    decoder.set_position(start);
+                    decoder.skip().map_err(decode_error)?;
+                    false
+                }
+            };
+            if matches {
+                return self.next_value(&mut decoder).map(Some);
+            }
+            decoder.skip().map_err(decode_error)?;
+        }
+        Ok(None)
     }
 
     /// Returns a required integer-keyed field or reports its absence.

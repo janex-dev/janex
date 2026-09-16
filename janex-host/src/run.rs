@@ -8,7 +8,7 @@ use crate::{
     Error, Result,
     authentication::{Authentication, CmsTrust, OpenPgpCertificate},
     error::invalid,
-    materialize::materialize,
+    materialize::materialize_tree,
     roots::{RootKey, Roots},
 };
 use janex_format::{
@@ -471,9 +471,10 @@ impl Paths<'_> {
         let root = self.roots.get(entry, self.blobs)?;
         let directory = self.directory.join(self.paths.len().to_string());
         fs::create_dir(&directory)?;
-        let result = materialize(
-            root,
-            self.context,
+        let tree = root.merge(self.context, self.blobs.reader().limits())?;
+        let result = materialize_tree(
+            &tree,
+            root.jar_name()?,
             self.blobs,
             &directory,
             self.remaining_bytes,

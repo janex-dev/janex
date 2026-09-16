@@ -11,6 +11,28 @@ use janex_format::{
 };
 
 #[test]
+fn integer_map_lookup_skips_noninteger_keys_and_nested_values() {
+    let nested = Value::array([Value::uint(3), Value::empty_map()]);
+    let value = Value::map([
+        (Value::uint(7), nested.clone()),
+        (Value::uint(u64::MAX), Value::text("last integer")),
+        (Value::integer(-1), nested.clone()),
+        (Value::text("7"), Value::uint(99)),
+        (Value::array([Value::uint(7)]), nested.clone()),
+    ])
+    .unwrap();
+    assert_eq!(value.required(7).unwrap(), nested);
+    assert_eq!(
+        value.required(u64::MAX).unwrap().as_text().unwrap(),
+        "last integer"
+    );
+    assert!(value.get(99).unwrap().is_none());
+    assert!(value.get(0).unwrap().is_none());
+    assert!(Value::empty_map().get(7).unwrap().is_none());
+    assert!(Value::array([]).get(7).is_err());
+}
+
+#[test]
 fn signed_128_bit_integers_use_minimal_cbor_magnitudes() {
     for (value, wire) in [
         (0, vec![0]),

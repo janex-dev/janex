@@ -49,6 +49,18 @@ pub fn materialize<R: Read + Seek>(
     let limits = blobs.reader().limits();
     let tree = root.merge(context, limits)?;
     let name = root.jar_name()?;
+    materialize_tree(&tree, name, blobs, directory, max_bytes)
+}
+
+/// Writes an already merged tree, preserving the caller's validation and selection work.
+pub(crate) fn materialize_tree<R: Read + Seek>(
+    tree: &ResourceTree<'_>,
+    name: &str,
+    blobs: &mut BlobStore<R>,
+    directory: &Path,
+    max_bytes: u64,
+) -> Result<MaterializedRoot> {
+    let limits = blobs.reader().limits();
     validate_filename(name)?;
     let path = directory.join(name);
     let file = fs::OpenOptions::new()
@@ -62,7 +74,7 @@ pub fn materialize<R: Read + Seek>(
         children.entry(parent).or_default().push(path);
     }
     let mut state = Materializer {
-        tree: &tree,
+        tree,
         children,
         active: BTreeSet::new(),
         count: 0,

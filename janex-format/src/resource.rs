@@ -18,6 +18,7 @@ use crate::{
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     io::{Read, Seek},
+    ops::Deref,
 };
 
 /// A named file, symbolic link, or removal in one layer directory.
@@ -142,6 +143,55 @@ pub struct ResourceRoot {
     pub layers: Vec<Layer>,
 }
 
+/// Owns a structurally validated root without exposing mutable access to its fields.
+/// Merging reuses validation unless the caller supplies stricter limits. Conditions and
+/// cross-layer conflicts are still checked for every merge.
+#[derive(Clone, Debug)]
+pub struct ValidatedRoot {
+    /// Immutable root storage.
+    root: ResourceRoot,
+    /// Limits under which the structure was validated.
+    limits: Limits,
+}
+
+impl ValidatedRoot {
+    /// Validates and takes ownership of an editable root without copying its data.
+    pub fn new(root: ResourceRoot, limits: Limits) -> Result<Self> {
+        root.validate(limits)?;
+        Ok(Self { root, limits })
+    }
+
+    /// Decodes and validates a root once, retaining the blob reader's structural limits.
+    pub fn decode<R: Read + Seek>(bytes: &[u8], blobs: &mut BlobStore<R>) -> Result<Self> {
+        let root = ResourceRoot::decode(bytes, blobs)?;
+        Ok(Self {
+            root,
+            limits: blobs.reader().limits(),
+        })
+    }
+
+    /// Merges matching layers, rechecking structure only when any limit is stricter.
+    /// The returned tree borrows this root; file payloads remain lazy.
+    pub fn merge(&self, context: &Context, limits: Limits) -> Result<ResourceTree<'_>> {
+        if limits.max_bytes < self.limits.max_bytes
+            || limits.max_elements < self.limits.max_elements
+            || limits.max_depth < self.limits.max_depth
+        {
+            self.root.validate(limits)?;
+        }
+        self.root.merge_validated(context, limits)
+    }
+}
+
+impl Deref for ValidatedRoot {
+    type Target = ResourceRoot;
+
+    /// Borrows the root without allowing edits that would invalidate its validation state.
+    fn deref(&self) -> &ResourceRoot {
+        &self.root
+    }
+}
+
 impl ResourceRoot {
     /// Reads a complete root and its pool, resolving all directory-entry blobs.
     ///
@@ -261,6 +311,11 @@ impl ResourceRoot {
     /// replaced only by explicit directory records; implicit parents retain it.
     pub fn merge(&self, context: &Context, limits: Limits) -> Result<ResourceTree<'_>> {
         self.validate(limits)?;
+        self.merge_validated(context, limits)
+    }
+
+    /// Applies matching layers after structural validation under the supplied limits.
+    fn merge_validated(&self, context: &Context, limits: Limits) -> Result<ResourceTree<'_>> {
         let mut tree = ResourceTree {
             nodes: BTreeMap::from([(String::new(), Node::Directory(None))]),
             data: &self.data,
@@ -320,7 +375,7 @@ impl ResourceRoot {
         for layer in &self.layers {
             limits.elements(layer.directories.len() as u64)?;
             let mut previous: Option<&str> = None;
-            let mut directories = BTreeSet::from([String::new()]);
+            let mut directories = BTreeSet::from([""]);
             let mut files = BTreeSet::new();
             for directory in &layer.directories {
                 validate_path(&directory.path, true, false, limits)?;
@@ -331,7 +386,9 @@ impl ResourceRoot {
                 validate_metadata(&directory.metadata, false, true)?;
                 let mut path = directory.path.as_str();
                 loop {
-                    directories.insert(path.to_owned());
+                    if !directories.insert(path) {
+                        break;
+                    }
                     limits.elements(directories.len() as u64)?;
                     let Some((parent, _)) = path.rsplit_once('/') else {
                         break;
@@ -349,7 +406,11 @@ impl ResourceRoot {
                         return Err(invalid("entry names must be unique and sorted"));
                     }
                     previous = Some(name);
-                    limits.bytes(joined(&directory.path, name).len() as u64)?;
+                    limits.bytes(
+                        directory.path.len() as u64
+                            + name.len() as u64
+                            + u64::from(!directory.path.is_empty()),
+                    )?;
                     match entry {
                         DirectoryEntry::File { metadata, .. } => {
                             validate_metadata(metadata, true, true)?;
@@ -366,7 +427,7 @@ impl ResourceRoot {
                     limits.elements(files.len() as u64)?;
                 }
             }
-            if !directories.is_disjoint(&files) {
+            if directories.iter().any(|path| files.contains(*path)) {
                 return Err(invalid(
                     "file or symbolic link conflicts with a layer directory",
                 ));
@@ -501,21 +562,21 @@ impl<'a> ResourceTree<'a> {
 
     /// Adds implicit parents without replacing existing explicit directory metadata.
     fn add_directory(&mut self, path: &str) -> Result<()> {
-        let mut current = String::new();
-        for component in path.split('/').filter(|component| !component.is_empty()) {
-            current = joined(&current, component);
-            match self.nodes.get(&current) {
-                Some(Node::Directory(_)) => {}
+        let mut current = path;
+        while !current.is_empty() {
+            match self.nodes.get(current) {
+                Some(Node::Directory(_)) => break,
                 Some(_) => {
                     return Err(invalid(format!(
                         "resource entry conflicts with directory: {current}"
                     )));
                 }
                 None => {
-                    self.nodes.insert(current.clone(), Node::Directory(None));
+                    self.nodes.insert(current.to_owned(), Node::Directory(None));
                 }
             }
             self.limits.elements(self.nodes.len() as u64)?;
+            current = current.rsplit_once('/').map_or("", |(parent, _)| parent);
         }
         Ok(())
     }
