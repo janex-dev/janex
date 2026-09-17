@@ -98,6 +98,10 @@ pub(super) fn init(shell: Shell) -> Result<String> {
     let executable = executable
         .to_str()
         .ok_or_else(|| Error::InvalidInput("Janex executable path is not Unicode".into()))?;
+    let app_home = janex_java::runtime::java_path(&janex_platform::janex_home()?);
+    let app_home = app_home
+        .to_str()
+        .ok_or_else(|| Error::InvalidInput("Janex application directory is not Unicode".into()))?;
     let template = match shell {
         Shell::Sh => include_str!("shell/init.sh"),
         Shell::PowerShell => include_str!("shell/init.ps1"),
@@ -107,6 +111,7 @@ pub(super) fn init(shell: Shell) -> Result<String> {
         template,
         &[
             ("@JANEX_BIN@", quote_shell(shell, bin)),
+            ("@JANEX_HOME@", quote_shell(shell, app_home)),
             ("@JANEX_EXE@", quote_shell(shell, executable)),
         ],
     ))

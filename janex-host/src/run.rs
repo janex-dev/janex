@@ -445,8 +445,24 @@ fn prepare_runtime(
             .as_ref()
             .map(|resources| resources.data.as_slice()),
     )?;
+    let environment = launch_environment(&mut arguments, options.launch_mode);
+    Ok(ExecutionPlan {
+        environment,
+        runtime,
+        launch_mode: options.launch_mode,
+        arguments,
+        integrity,
+        authentication,
+        windowed: application.windowed(),
+        directory,
+        sdk_lease: None,
+    })
+}
+
+/// Moves large bootstrap handoff data into environment chunks for both package and JAR launches.
+fn launch_environment(arguments: &mut [OsString], mode: LaunchMode) -> Vec<(OsString, OsString)> {
     let mut environment = Vec::new();
-    if options.launch_mode == LaunchMode::Bootstrap
+    if mode == LaunchMode::Bootstrap
         && let Some(argument) = arguments.iter_mut().rev().find(|argument| {
             argument
                 .to_str()
@@ -468,17 +484,7 @@ fn prepare_runtime(
             *argument = format!("-Djanex.launch=env:{}", environment.len()).into();
         }
     }
-    Ok(ExecutionPlan {
-        environment,
-        runtime,
-        launch_mode: options.launch_mode,
-        arguments,
-        integrity,
-        authentication,
-        windowed: application.windowed(),
-        directory,
-        sdk_lease: None,
-    })
+    environment
 }
 
 /// Lazily decodes roots and materializes each distinct root once for a candidate runtime.
@@ -579,4 +585,122 @@ fn target_path(target: &Path) -> Result<PathBuf> {
         ));
     }
     Ok(target.into())
+}
+
+/// Reads a standalone executable JAR's main class and its minimum class-file Java feature.
+/// External manifest paths and native-launcher-only manifest actions are not supported here.
+pub(crate) fn jar_entry(input: impl Read + std::io::Seek) -> Result<(String, u32)> {
+    let mut jar = zip::ZipArchive::new(input)
+        .map_err(|e| invalid(format!("invalid application JAR: {e}")))?;
+    let mut manifest = Vec::new();
+    jar.by_name("META-INF/MANIFEST.MF")
+        .map_err(|_| invalid("application JAR has no manifest"))?
+        .take(1024 * 1024 + 1)
+        .read_to_end(&mut manifest)?;
+    if manifest.len() > 1024 * 1024 {
+        return Err(invalid("application manifest exceeds byte limit"));
+    }
+    let manifest = janex_java::manifest::Manifest::parse(&manifest, janex_java::Limits::default())?;
+    for name in [
+        "Class-Path",
+        "Launcher-Agent-Class",
+        "Add-Exports",
+        "Add-Opens",
+        "Enable-Native-Access",
+    ] {
+        if manifest
+            .get(name)
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Err(Error::Unsupported(format!(
+                "standalone JAR installation does not support manifest {name}; use a self-contained Janex package"
+            )));
+        }
+    }
+    let main = manifest
+        .get("Main-Class")
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| invalid("application JAR has no Main-Class"))?
+        .to_owned();
+    let mut header = [0; 8];
+    jar.by_name(&format!("{}.class", main.replace('.', "/")))
+        .map_err(|_| invalid("application main class is missing from the JAR"))?
+        .read_exact(&mut header)?;
+    if header[..4] != [0xca, 0xfe, 0xba, 0xbe] {
+        return Err(invalid("invalid application main class header"));
+    }
+    let feature = u32::from(u16::from_be_bytes([header[6], header[7]]))
+        .saturating_sub(44)
+        .max(8);
+    Ok((main, feature))
+}
+
+/// Prepares an installed standalone JAR using managed runtime discovery and lossless bootstrap arguments.
+/// The caller retains the original JAR unchanged until the returned plan finishes executing.
+pub(crate) fn prepare_jar(options: &RunOptions) -> Result<ExecutionPlan> {
+    if options.openpgp_trust.is_some() || !options.cms_trust.signers.is_empty() {
+        return Err(Error::Trust(
+            "Janex signer pins do not authenticate JAR signatures".into(),
+        ));
+    }
+    if options.application.is_some() {
+        return Err(invalid(
+            "JAR applications have a single manifest entry point",
+        ));
+    }
+    let target = fs::canonicalize(&options.target)?;
+    let file = fs::File::open(&target)?;
+    if file.metadata()?.len() > options.max_snapshot_bytes {
+        return Err(invalid("application JAR exceeds byte limit"));
+    }
+    let (main, feature) = jar_entry(file)?;
+    for (runtime, sdk_lease) in crate::sdk::application_runtimes(&options.java)? {
+        if runtime.feature < feature {
+            continue;
+        }
+        let mut arguments = if options.launch_mode == LaunchMode::Direct {
+            let mut arguments = vec![
+                OsString::from("-jar"),
+                janex_java::runtime::java_path(&target).into_os_string(),
+            ];
+            arguments.extend(options.arguments.iter().cloned());
+            arguments
+        } else {
+            LaunchRequest {
+                entry_point: EntryPoint {
+                    main_class: Some(main.clone()),
+                    main_module: None,
+                },
+                mode: options.launch_mode,
+                jvm_options: Vec::new(),
+                class_path: vec![janex_java::runtime::java_path(&target)],
+                module_path: Vec::new(),
+                agents: Vec::new(),
+                arguments: options.arguments.clone(),
+            }
+            .prepare(
+                &runtime,
+                target.parent().unwrap(),
+                java_limits(options.limits),
+            )?
+        };
+        let environment = launch_environment(&mut arguments, options.launch_mode);
+        return Ok(ExecutionPlan {
+            runtime,
+            launch_mode: options.launch_mode,
+            arguments,
+            environment,
+            integrity: IntegrityReport {
+                checksums_verified: 0,
+                complete_secure_coverage: false,
+            },
+            authentication: Authentication::Unsigned,
+            windowed: false,
+            directory: None,
+            sdk_lease,
+        });
+    }
+    Err(invalid(format!(
+        "application requires Java {feature} or later"
+    )))
 }

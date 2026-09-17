@@ -6,6 +6,12 @@ case ":${PATH-}:" in
     *) export PATH=@JANEX_BIN@${PATH+:"$PATH"} ;;
 esac
 
+if [ "${JANEX_HOME+x}" != x ]; then export JANEX_HOME=@JANEX_HOME@; fi
+case ":${PATH-}:" in
+    *":$JANEX_HOME/bin:"*) ;;
+    *) export PATH="$JANEX_HOME/bin"${PATH+:"$PATH"} ;;
+esac
+
 janex() {
     case "${1-}" in
         activate|use|deactivate)

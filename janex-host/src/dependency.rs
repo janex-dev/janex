@@ -76,6 +76,38 @@ pub fn resolve(
     require_secure: bool,
 ) -> Result<Dependency> {
     let (url, jar_name) = address(uri, options)?;
+    resolve_address(uri, url, jar_name, checksum, options, require_secure)
+}
+
+/// Acquires application artifacts or metadata over HTTPS using the shared content cache.
+pub(crate) fn artifact(uri: &str, options: &DependencyOptions) -> Result<Dependency> {
+    let url = Url::parse(uri).map_err(|_| invalid("invalid application URL"))?;
+    validate_url(&url)?;
+    if url.scheme() != "https" {
+        return Err(invalid(
+            "application repositories require HTTPS or a local file URL",
+        ));
+    }
+    let name = percent_encoding::percent_decode_str(
+        url.path_segments()
+            .and_then(|mut p| p.next_back())
+            .unwrap_or(""),
+    )
+    .decode_utf8()
+    .map_err(|_| invalid("application filename is not UTF-8"))?
+    .into_owned();
+    resolve_address(uri, url, name, None, options, false)
+}
+
+/// Resolves an already validated address and filename without changing cache or transport policy.
+fn resolve_address(
+    uri: &str,
+    url: Url,
+    jar_name: String,
+    checksum: Option<&Checksum>,
+    options: &DependencyOptions,
+    require_secure: bool,
+) -> Result<Dependency> {
     filename(&jar_name)?;
     let secure = checksum.is_some_and(|value| value.algorithm().is_secure());
     if (require_secure || url.scheme() == "http") && !secure {

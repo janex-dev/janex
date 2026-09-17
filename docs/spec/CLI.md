@@ -1,6 +1,6 @@
 # Using Janex
 
-Janex manages Java, Gradle, and Maven installations, and packages and runs Java applications.
+Janex manages Java, Gradle, and Maven installations, installs Maven applications, and packages and runs Java applications.
 Put `janex` (`janex.exe` on Windows) on your `PATH` to get started.
 
 Use `janex --help` to list commands, or add `--help` to any command for its full option list:
@@ -11,14 +11,12 @@ janex integration register --help
 ```
 
 - [Manage SDKs](#manage-sdks)
+- [Install applications](#install-applications)
 - [Run an application](#run-an-application)
 - [Package an application](#package-an-application)
 - [Inspect a package](#inspect-a-package)
 - [Register file-opening support](#register-file-opening-support)
 - [Files and caches](#files-and-caches)
-
-Application installation is still planned. For now, `janex install` installs SDKs;
-use `janex run` to launch a local `.janex` file.
 
 ## Manage SDKs
 
@@ -193,6 +191,68 @@ with `uninstall`.
 `available --offline` uses a cached catalog; `install --offline` reuses installed SDKs.
 Use `available --refresh` to refresh the catalog. For slow downloads, `install` and `update` accept
 `--timeout <SECONDS>`; the default is 1800 seconds per archive.
+
+## Install applications
+
+Use `maven:group:artifact` to install an application from Maven Central:
+
+```shell
+janex install maven:org.benf:cfr
+cfr --help
+```
+
+Load the scripts written by `janex init`, or add `JANEX_HOME/bin` to your `PATH`, to use installed
+commands. Native entries forward arguments without a shell script. They use the same `JANEX_HOME`
+as Janex; keep that variable set when using a custom home.
+
+Without a version, Janex follows the repository's `<release>` metadata. An explicit `@version`
+means that exact Maven release, not a version prefix. Updates are explicit, and old versions remain:
+
+```shell
+janex install maven:org.benf:cfr@0.152
+janex update maven:org.benf:cfr
+janex pin maven:org.benf:cfr
+janex unpin maven:org.benf:cfr
+janex default maven:org.benf:cfr@0.152
+janex run maven:org.benf:cfr@0.152 --help
+janex list
+```
+
+The first installation creates the command. Installing another version keeps its current selection;
+`default` changes it. A default chosen by request follows that request's updates; an `app-...` ID fixes
+one installation. `default --clear <TARGET>` removes the command while retaining the installed files.
+`uninstall` accepts an exact version or installation ID. Removing the command's selected release
+removes its entry; it never silently switches to an older version. Running applications cannot be removed.
+
+SDK and application targets can share one command:
+
+```shell
+janex install bellsoft/liberica-jdk@21 maven:org.benf:cfr
+```
+
+Qualifiers belong to each Maven target:
+
+| Qualifier | Meaning |
+| --- | --- |
+| `classifier=all` | Select a classifier, such as a self-contained JAR. |
+| `type=janex` | Download a `.janex` artifact instead of the default `.jar`. |
+| `command=my-tool` | Override the command name, which defaults to the lowercase artifact ID. |
+| `repository=https://example.org/maven/` | Use another HTTPS Maven repository. An absolute `file:` URL selects a local repository. |
+
+For example, `"maven:org.example:tool@1.0[classifier=all,command=my-tool]"`. Command names use lowercase
+ASCII letters, digits, hyphens, and underscores, starting with a letter. Existing unmanaged commands
+and names owned by other products are not overwritten.
+
+JARs are kept unchanged and must contain `Main-Class` and its class. POM dependency resolution and
+snapshots are not implemented. JAR manifest `Class-Path`, `Launcher-Agent-Class`, `Add-Exports`,
+`Add-Opens`, and `Enable-Native-Access` are not yet supported by this installation path.
+Janex packages must contain one application. Signed packages still require explicit signer pins
+through `janex run`; command entries do not store trust configuration. Installing a package never runs it.
+
+Application downloads use the shared cache, but installations own separate files under
+`JANEX_HOME/apps`. Clearing download caches does not remove installed artifacts. A package's remote
+dependencies may still need their cache or network access at launch. `list --json` includes application
+records under `applications`; `update --all` updates saved SDK and application requests, respecting pins.
 
 ## Run an application
 
@@ -443,7 +503,7 @@ these files. macOS export uses the system AppleScript compiler.
 
 ## Files and caches
 
-Janex stores SDKs, state, shell scripts, and caches in `~/.janex` by default
+Janex stores SDKs, applications, command entries, state, shell scripts, and caches in `~/.janex` by default
 (`%USERPROFILE%\.janex` on Windows). Set `JANEX_HOME` to an absolute path to use another directory.
 The Janex executable itself can live elsewhere.
 

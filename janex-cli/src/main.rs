@@ -52,7 +52,7 @@ enum Command {
     Sdk(sdk::SdkCommand),
     /// Package a directory or JAR as a Janex application.
     Pack(Box<PackArgs>),
-    /// Run an application from a local Janex file.
+    /// Run a local Janex file or an installed Maven application.
     #[command(override_usage = "janex run [OPTIONS] <TARGET> [ARGS...]")]
     Run(Box<RunArgs>),
     /// Open a local Janex file using desktop invocation conditions.
@@ -93,7 +93,7 @@ struct RunArgs {
     /// Publisher authentication and unsigned execution policy.
     #[command(flatten)]
     trust: TrustArgs,
-    /// Local path or file URI, then program arguments forwarded without Janex option parsing.
+    /// Local path, file URI, or installed application selector, then uninterpreted program arguments.
     #[arg(value_name = "TARGET", required = true, num_args = 1.., trailing_var_arg = true, allow_hyphen_values = true)]
     target: Vec<OsString>,
 }
@@ -260,7 +260,7 @@ impl From<CmsAlgorithmArg> for CmsAlgorithm {
 
 /// Parses arguments, performs the requested operation, and reports service failures.
 fn main() {
-    let code = match run(Cli::parse()) {
+    let code = match dispatch() {
         Ok(code) => code,
         Err(error) => {
             eprintln!("error: {error}");
@@ -268,6 +268,20 @@ fn main() {
         }
     };
     std::process::exit(code);
+}
+
+/// Dispatches native application entry points before interpreting application arguments as CLI options.
+fn dispatch() -> janex_host::Result<i32> {
+    let executable = std::env::current_exe()?;
+    if executable.file_stem().and_then(|s| s.to_str()) != Some("janex") {
+        let manager = janex_host::app::AppManager::user()?;
+        if let Some(name) = manager.entry_name(&executable)? {
+            let mut options = RunOptions::new("");
+            options.arguments = std::env::args_os().skip(1).collect();
+            return manager.execute(&name, true, options).map(exit_code);
+        }
+    }
+    run(Cli::parse())
 }
 
 /// Executes a parsed command without interpreting argument contents as shell text.
@@ -376,6 +390,17 @@ fn run(cli: Cli) -> janex_host::Result<i32> {
                 .map(|path| authentication::load_revocation_list(path, MATERIAL_LIMITS))
                 .collect::<janex_host::Result<_>>()?;
             options.arguments = target.collect();
+            if options.target.to_str().is_some_and(|s| {
+                s.starts_with("maven:")
+                    || s.strip_prefix("app-").is_some_and(|id| {
+                        id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit())
+                    })
+            }) {
+                let target = options.target.to_str().unwrap().to_owned();
+                return janex_host::app::AppManager::user()?
+                    .execute(&target, false, options)
+                    .map(exit_code);
+            }
             return prepare(&options)?.execute().map(exit_code);
         }
     }

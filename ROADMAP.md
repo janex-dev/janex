@@ -4,7 +4,7 @@ Janex aims to become a cross-platform, cross-language SDK manager, package manag
 The `.janex` format will serve as a general application container for managed languages.
 
 Janex currently packages and launches Java applications and manages Java, Gradle, and Maven
-installations. The directions below describe future work; concrete implementation tasks and
+installations, plus standalone JAR and Janex applications from Maven repositories. The directions below describe future work; concrete implementation tasks and
 acceptance criteria belong in [PLANS.md](PLANS.md).
 
 ## Long-Term Scope

@@ -34,7 +34,7 @@ for the project's long-term direction and delivery priorities.
   ownership, and lease machinery. Query official metadata and require SHA-256/SHA-512 sidecars.
 - Keep defaults and project selections independent for Java, Gradle, and Maven. Combine selected
   homes during shell activation and execution; preserve Windows batch launcher behavior.
-- Keep Maven application installation and additional SDK providers as subsequent work.
+- Keep transitive Maven application dependency resolution and additional SDK providers as subsequent work.
 - Provide thin Bash, Zsh, sh, Fish, and PowerShell integration around native environment rendering.
   Make `use` shell-local and `use --project` explicit. Retain the activation-time environment,
   remove stale SDK PATH entries, apply project selections without stale generated home overrides,
@@ -45,8 +45,24 @@ for the project's long-term direction and delivery priorities.
   and user directory. Keep shell rendering internal and retain integration after `deactivate`.
   Reinitialization updates only managed scripts. Root Gradle installation accepts an explicit
   executable directory; platform archives contain executables and documentation at the root.
-- Keep SDK switching based on shell environment updates. Future application installation exposes
+- Keep SDK switching based on shell environment updates. Application installation exposes
   stable command entry points in `JANEX_HOME/bin`, independently of the active SDK environment.
+
+## Maven Application Installation
+
+- Accept `maven:group:artifact@version` targets alongside SDK selectors. Omitted versions track
+  repository `<release>` metadata; explicit versions select exact releases. Support `classifier`,
+  `type=jar|janex`, `command`, and `repository` qualifiers per target.
+- Keep immutable application releases under `JANEX_HOME/apps`, CBOR installation and selection
+  records under `state`, disposable downloads under `cache`, and native command entries under `bin`.
+- Install executable standalone JARs without repackaging and Janex containers without changing their
+  signature policy. Do not resolve POM dependencies or mutable snapshots in the initial implementation.
+- Preserve versions, pin request bindings, select command defaults, and update only explicit requests.
+  Prevent command collisions and removal of active applications. Publish complete files before records.
+- Reuse native runtime selection, managed SDK leases, and both Java launch modes. Forward command
+  arguments directly, including Unicode, empty strings, and exit codes, without shell-script quoting.
+- Verify mixed SDK/application dispatch, independent selectors, cache-independent execution, updates,
+  pinning, command switching, failure cleanup, and native command entries in isolated homes.
 
 ## Goals and Boundaries
 

@@ -5,6 +5,13 @@ if not contains -- @JANEX_BIN@ $PATH
     set -gx PATH @JANEX_BIN@ $PATH
 end
 
+if not set -q JANEX_HOME
+    set -gx JANEX_HOME @JANEX_HOME@
+end
+if not contains -- "$JANEX_HOME/bin" $PATH
+    set -gx PATH "$JANEX_HOME/bin" $PATH
+end
+
 function janex
     if test (count $argv) -gt 0; and contains -- $argv[1] activate use deactivate
         for arg in $argv

@@ -1,16 +1,18 @@
 // Copyright (c) 2026 Glavo
 // SPDX-License-Identifier: MPL-2.0
 
-//! Shared CLI entry points for native SDK management.
+//! Shared CLI entry points for SDK and application management.
 
 use clap::{Args, Subcommand, ValueEnum};
 use janex_host::{
     Error, Result,
+    app::{AppManager, AppRequest},
+    dependency::DependencyOptions,
     sdk::{CatalogOptions, Installation, PRODUCTS, SdkManager, SdkRequest, Shell},
 };
 use std::{ffi::OsString, path::PathBuf};
 
-/// SDK operations in the shared Janex command namespace.
+/// SDK and application operations in the shared Janex command namespace.
 #[derive(Subcommand)]
 pub(super) enum SdkCommand {
     /// Write initialization scripts for all supported shells into JANEX_HOME.
@@ -21,19 +23,19 @@ pub(super) enum SdkCommand {
     Deactivate(DeactivateArgs),
     /// List downloadable SDK versions without installing them.
     Available(AvailableArgs),
-    /// Install SDK versions while retaining all existing versions.
+    /// Install SDKs or Maven applications while retaining all existing versions.
     Install(InstallArgs),
-    /// List installed SDKs and their persistent IDs.
+    /// List installed SDKs and applications with their persistent IDs.
     List(ListArgs),
-    /// Update saved SDK requirements, retaining old versions and respecting pins.
+    /// Update saved SDK and application requirements, retaining old versions and respecting pins.
     Update(UpdateArgs),
-    /// Uninstall one exact SDK version or registration.
+    /// Uninstall one exact SDK or application version.
     Uninstall(TargetArgs),
-    /// Set or clear the global SDK default without downloading.
+    /// Select or clear an SDK default or application command version.
     Default(DefaultArgs),
     /// Show SDK homes selected by the shell, project, or global defaults.
     Current(CurrentArgs),
-    /// Print the home for an installed SDK target.
+    /// Print the directory for an installed SDK or application.
     Home(TargetArgs),
     /// Execute a command with selected SDK homes and tools on PATH.
     Exec(ExecArgs),
@@ -41,9 +43,9 @@ pub(super) enum SdkCommand {
     Env(EnvArgs),
     /// Select SDKs in the current shell, or save one project selection with --project.
     Use(UseArgs),
-    /// Prevent updates from changing a saved SDK requirement's selected build.
+    /// Prevent updates from changing a saved requirement's selected build.
     Pin(PinArgs),
-    /// Allow updates within a saved SDK version requirement again.
+    /// Allow updates of a saved SDK or application requirement again.
     Unpin(PinArgs),
 }
 
@@ -74,7 +76,7 @@ pub(super) struct AvailableArgs {
 /// Installation or external registration request.
 #[derive(Args)]
 pub(super) struct InstallArgs {
-    /// Product[@version][variant=...,os=...,arch=...,libc=...] selectors; installed independently.
+    /// SDK product@version or maven:group:artifact@version, with per-target [key=value] qualifiers.
     #[arg(required = true)]
     targets: Vec<String>,
     /// Fix the selected build against subsequent update commands.
@@ -83,7 +85,7 @@ pub(super) struct InstallArgs {
     /// Register an existing SDK home without copying or owning it; requires one target.
     #[arg(long, value_name = "SDK_HOME")]
     path: Option<PathBuf>,
-    /// Reuse installed SDKs without network access.
+    /// Reuse installed SDKs, cached applications, or local repositories without network access.
     #[arg(long)]
     offline: bool,
     /// Maximum seconds for an archive download, including segment retries.
@@ -94,10 +96,10 @@ pub(super) struct InstallArgs {
     json: bool,
 }
 
-/// Installed SDK listing options.
+/// Installed SDK and application listing options.
 #[derive(Args)]
 pub(super) struct ListArgs {
-    /// Emit structured JSON including saved requests and the global default.
+    /// Emit structured JSON including saved requests, SDK defaults, and application commands.
     #[arg(long)]
     json: bool,
 }
@@ -108,7 +110,7 @@ pub(super) struct UpdateArgs {
     /// Saved requirements to update; use --all for every request.
     #[arg(required_unless_present = "all", conflicts_with = "all")]
     targets: Vec<String>,
-    /// Update every saved SDK requirement.
+    /// Update every saved SDK and application requirement.
     #[arg(long)]
     all: bool,
     /// Maximum seconds per archive download, including segment retries.
@@ -122,17 +124,17 @@ pub(super) struct UpdateArgs {
 /// An exact installed target.
 #[derive(Args)]
 pub(super) struct TargetArgs {
-    /// Installed SDK target or full installation ID.
+    /// Installed SDK or application selector, or an exact installation ID.
     target: String,
 }
 
 /// Global default selection request.
 #[derive(Args)]
 pub(super) struct DefaultArgs {
-    /// Installed SDK target or full installation ID.
+    /// Installed SDK or application selector, or an exact installation ID.
     #[arg(required_unless_present = "clear")]
     target: Option<String>,
-    /// Clear the target's family/platform default, or the native Java default if omitted.
+    /// Clear the target's SDK default or application command; omitting the target clears native Java.
     #[arg(long)]
     clear: bool,
     /// SDK family whose default is cleared; setting a target infers its family.
@@ -256,6 +258,7 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
         return Ok(0);
     }
     let manager = SdkManager::user()?;
+    let applications = AppManager::user()?;
     match command {
         SdkCommand::Init(_) => unreachable!(),
         SdkCommand::Activate(args) => {
@@ -283,11 +286,19 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
             print!("{}", manager.shell_deactivate(shell)?);
         }
         SdkCommand::Pin(args) => {
-            manager.set_pin(&SdkRequest::parse(&args.target)?, true)?;
+            if app_target(&args.target) {
+                applications.set_pin(&AppRequest::parse(&args.target)?, true)?;
+            } else {
+                manager.set_pin(&SdkRequest::parse(&args.target)?, true)?;
+            }
             println!("Pinned {}", args.target);
         }
         SdkCommand::Unpin(args) => {
-            manager.set_pin(&SdkRequest::parse(&args.target)?, false)?;
+            if app_target(&args.target) {
+                applications.set_pin(&AppRequest::parse(&args.target)?, false)?;
+            } else {
+                manager.set_pin(&SdkRequest::parse(&args.target)?, false)?;
+            }
             println!("Unpinned {}", args.target);
         }
         SdkCommand::Available(args) => {
@@ -337,9 +348,35 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
             let requests = args
                 .targets
                 .iter()
-                .map(|target| SdkRequest::parse(target))
+                .map(|target| InstallRequest::parse(target))
                 .collect::<Result<Vec<_>>>()?;
+            if args.path.is_some() && requests.iter().any(|r| matches!(r, InstallRequest::App(_))) {
+                return Err(Error::InvalidInput("--path registers SDK homes; use a file repository qualifier for local applications".into()));
+            }
             for request in requests {
+                let request = match request {
+                    InstallRequest::Sdk(request) => request,
+                    InstallRequest::App(request) => {
+                        if !args.json {
+                            eprintln!("Installing {}", request.target());
+                        }
+                        let application = applications.install(
+                            &request,
+                            args.pin,
+                            &DependencyOptions {
+                                offline: args.offline,
+                                timeout: std::time::Duration::from_secs(args.timeout),
+                                ..Default::default()
+                            },
+                            &std::env::current_exe()?,
+                        )?;
+                        if !args.json {
+                            show_application(&applications, &application)?;
+                        }
+                        installed.push(value(&application)?);
+                        continue;
+                    }
+                };
                 if !args.json {
                     eprintln!("Installing {}", request.target());
                 }
@@ -360,7 +397,7 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
                 if !args.json {
                     show(&manager, &installation)?;
                 }
-                installed.push(installation);
+                installed.push(value(&installation)?);
             }
             if args.json {
                 json(&installed)?;
@@ -368,29 +405,64 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
         }
         SdkCommand::List(args) => {
             let status = manager.status()?;
+            let app_status = applications.status()?;
             if args.json {
+                let mut status = value(&status)?;
+                status["applications"] = value(&app_status)?;
                 json(&status)?;
             } else {
                 for installed in status.installations {
                     show(&manager, &installed)?;
                 }
+                for installed in app_status.installations {
+                    show_application(&applications, &installed)?;
+                }
             }
         }
         SdkCommand::Update(args) => {
             let requests = if args.all {
-                manager
+                let mut requests = manager
                     .selections()?
                     .into_iter()
-                    .map(|s| s.request)
-                    .collect()
+                    .map(|s| InstallRequest::Sdk(s.request))
+                    .collect::<Vec<_>>();
+                requests.extend(
+                    applications
+                        .status()?
+                        .selections
+                        .into_iter()
+                        .map(|s| InstallRequest::App(s.request)),
+                );
+                requests
             } else {
                 args.targets
                     .iter()
-                    .map(|t| SdkRequest::parse(t))
+                    .map(|t| InstallRequest::parse(t))
                     .collect::<Result<Vec<_>>>()?
             };
             let mut installed = Vec::new();
             for request in requests {
+                let request = match request {
+                    InstallRequest::Sdk(request) => request,
+                    InstallRequest::App(request) => {
+                        if !args.json {
+                            eprintln!("Updating {}", request.target());
+                        }
+                        let application = applications.update(
+                            &request,
+                            &DependencyOptions {
+                                timeout: std::time::Duration::from_secs(args.timeout),
+                                ..Default::default()
+                            },
+                            &std::env::current_exe()?,
+                        )?;
+                        if !args.json {
+                            show_application(&applications, &application)?;
+                        }
+                        installed.push(value(&application)?);
+                        continue;
+                    }
+                };
                 if !args.json {
                     eprintln!("Updating {}", request.target());
                 }
@@ -405,17 +477,40 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
                 if !args.json {
                     show(&manager, &installation)?;
                 }
-                installed.push(installation);
+                installed.push(value(&installation)?);
             }
             if args.json {
                 json(&installed)?;
             }
         }
         SdkCommand::Uninstall(args) => {
+            if app_target(&args.target) {
+                let removed = applications.uninstall(&args.target)?;
+                println!(
+                    "Uninstalled {} ({})",
+                    removed.application.target(),
+                    removed.id
+                );
+                return Ok(0);
+            }
             let removed = manager.uninstall(&args.target)?;
             println!("Uninstalled {} ({})", removed.sdk.target(), removed.id);
         }
         SdkCommand::Default(args) => {
+            if let Some(target) = &args.target
+                && app_target(target)
+            {
+                if args.clear {
+                    applications.clear_default(target)?;
+                    println!("Cleared the application command selection");
+                } else {
+                    show_application(
+                        &applications,
+                        &applications.set_default(target, &std::env::current_exe()?)?,
+                    )?;
+                }
+                return Ok(0);
+            }
             if args.clear {
                 let family = if let Some(target) = &args.target {
                     let request = manager.resolve(target)?.sdk;
@@ -438,6 +533,10 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
             }
         }
         SdkCommand::Home(args) => {
+            if app_target(&args.target) {
+                println!("{}", applications.home(&args.target)?.display());
+                return Ok(0);
+            }
             println!(
                 "{}",
                 manager.home(&manager.resolve(&args.target)?)?.display()
@@ -555,4 +654,45 @@ fn json(value: &impl serde::Serialize) -> Result<()> {
         serde_json::to_string_pretty(value).map_err(|e| Error::InvalidInput(e.to_string()))?
     );
     Ok(())
+}
+
+/// A fully parsed target; all targets are validated before any installation begins.
+enum InstallRequest {
+    /// A runtime or toolchain product.
+    Sdk(SdkRequest),
+    /// A Maven application with independent repository and command qualifiers.
+    App(AppRequest),
+}
+
+impl InstallRequest {
+    /// Selects the ecosystem from an explicit application prefix or SDK product identity.
+    fn parse(target: &str) -> Result<Self> {
+        if target.starts_with("maven:") {
+            AppRequest::parse(target).map(Self::App)
+        } else {
+            SdkRequest::parse(target).map(Self::Sdk)
+        }
+    }
+}
+
+/// Recognizes Maven application selectors and exact application installation IDs.
+fn app_target(target: &str) -> bool {
+    target.starts_with("maven:") || target.starts_with("app-")
+}
+
+/// Displays the original coordinates, command name, and persistent installation directory.
+fn show_application(manager: &AppManager, installed: &janex_host::app::Installation) -> Result<()> {
+    println!(
+        "{}  command={}\n  {}\n  {}",
+        installed.application.target(),
+        installed.application.command,
+        installed.id,
+        manager.home(&installed.id)?.display()
+    );
+    Ok(())
+}
+
+/// Converts either installation kind without changing SDK JSON record fields.
+fn value(input: &impl serde::Serialize) -> Result<serde_json::Value> {
+    serde_json::to_value(input).map_err(|e| Error::InvalidInput(e.to_string()))
 }
