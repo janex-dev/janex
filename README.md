@@ -31,7 +31,7 @@ janex activate
 ```
 
 After moving the executable, run `janex init` again and reload the script.
-See the [CLI specification](docs/spec/CLI.md) for packaging, launching, and SDK commands.
+See the [CLI guide](docs/spec/CLI.md) for packaging, launching, and SDK commands.
 
 Use `janex integration register` to add Janex to the system's file-opening options, and
 `janex integration unregister` to remove the registration. Registration defaults to the current
