@@ -906,11 +906,18 @@ public final class JanexReader implements Closeable {
             }
         }
         input.end();
-        return finishRoot(jarName, module, tree, agent);
+        String moduleName = metadata.containsKey("janex.java.automatic_module_name")
+                ? text(metadata.get("janex.java.automatic_module_name")) : null;
+        if (moduleName != null) {
+            require(!moduleName.isEmpty() && moduleName.indexOf('\r') < 0 && moduleName.indexOf('\n') < 0
+                    && moduleName.indexOf(0) < 0, "Invalid automatic module name");
+        }
+        return finishRoot(jarName, module, tree, agent, moduleName);
     }
 
     /// Rewrites manifests and expands aliases for an imported or embedded root.
-    private Root finishRoot(String jarName, boolean module, Map<String, Node> tree, boolean agent) throws IOException {
+    private Root finishRoot(String jarName, boolean module, Map<String, Node> tree, boolean agent,
+                            String moduleName) throws IOException {
         boolean links = false;
         for (Node node : tree.values()) {
             if (node.source == -2) {
@@ -925,7 +932,7 @@ public final class JanexReader implements Closeable {
                 String name = entry.getKey();
                 Node node = entry.getValue();
                 if (node.source >= 0) {
-                    node = prepareFile(name, node, agent);
+                    node = prepareFile(name, node, agent, moduleName);
                     if (node != null) {
                         entry.setValue(node);
                         countFile(node);
@@ -940,6 +947,7 @@ public final class JanexReader implements Closeable {
                 if (node == null || name.isEmpty() && !includeRoot) entries.remove();
             }
             limits.elements(tree.size());
+            completeManifest(tree, moduleName);
             return new Root(jarName, module, tree);
         }
         Map<String, List<String>> children = new HashMap<String, List<String>>();
@@ -951,21 +959,49 @@ public final class JanexReader implements Closeable {
             }
         }
         Map<String, Node> expanded = new LinkedHashMap<String, Node>();
-        expand(tree, children, "", "", expanded, new HashSet<String>(), agent);
+        expand(tree, children, "", "", expanded, new HashSet<String>(), agent, moduleName);
+        completeManifest(expanded, moduleName);
         return new Root(jarName, module, expanded);
     }
 
+    /// Supplies a manifest for an explicit automatic module name when the visible tree has none.
+    private void completeManifest(Map<String, Node> tree, String moduleName) throws IOException {
+        if (moduleName == null) return;
+        Node existing = tree.get("META-INF/MANIFEST.MF");
+        if (existing != null) {
+            require(existing.source >= 0, "Resource conflicts with runtime manifest");
+            return;
+        }
+        for (Map.Entry<String, Node> entry : tree.entrySet()) {
+            if (entry.getValue().source >= 0 && asciiEquals(entry.getKey(), "META-INF/MANIFEST.MF")) return;
+        }
+        Node directory = tree.get("META-INF");
+        require(directory == null || directory.source == -1, "Resource conflicts with runtime manifest");
+        limits.depth(1);
+        limits.text("META-INF/MANIFEST.MF");
+        Node manifest = new Node();
+        manifest.source = inline(runtimeManifest(new byte[0], moduleName));
+        tree.putIfAbsent("META-INF", new Node());
+        tree.put("META-INF/MANIFEST.MF", manifest);
+        limits.elements(tree.size());
+        countFile(manifest);
+    }
+
     /// Prepares a file at its visible path, returning null for a stale JAR signature.
-    private Node prepareFile(String path, Node node, boolean agent) throws IOException {
+    private Node prepareFile(String path, Node node, boolean agent, String moduleName) throws IOException {
         if (jarSignature(path)) return null;
         materialize(node);
-        if (!agent && asciiEquals(path, "META-INF/MANIFEST.MF")) {
+        if ((!agent || moduleName != null) && asciiEquals(path, "META-INF/MANIFEST.MF")) {
             require(node.transforms.length == 0, "Manifest cannot contain class-file transforms");
             byte[] original = bytes(node.source);
             if (has(node.metadata, 0)) verify(binary(get(node.metadata, 0)), original);
             Node manifest = new Node();
-            manifest.source = inline(runtimeManifest(original));
+            manifest.source = inline(runtimeManifest(original, moduleName));
             manifest.metadata = node.metadata;
+            if (agent && has(node.metadata, 0)) {
+                manifest.metadata = new LinkedHashMap<Object, Object>(node.metadata);
+                manifest.metadata.remove(0L);
+            }
             return manifest;
         }
         return node;
@@ -1023,8 +1059,14 @@ public final class JanexReader implements Closeable {
     /// @return newly encoded manifest bytes
     /// @throws IOException if the manifest cannot be parsed or encoded
     public static byte[] runtimeManifest(byte[] bytes) throws IOException {
+        return runtimeManifest(bytes, null);
+    }
+
+    /// Rewrites runtime attributes and optionally overrides the automatic module name.
+    private static byte[] runtimeManifest(byte[] bytes, String moduleName) throws IOException {
         java.util.jar.Manifest manifest = new java.util.jar.Manifest(new ByteArrayInputStream(bytes));
         java.util.jar.Attributes main = manifest.getMainAttributes();
+        if (moduleName != null) main.putValue("Automatic-Module-Name", moduleName);
         main.remove(java.util.jar.Attributes.Name.CLASS_PATH);
         if (main.getValue(java.util.jar.Attributes.Name.MANIFEST_VERSION) == null) {
             main.put(java.util.jar.Attributes.Name.MANIFEST_VERSION, "1.0");
@@ -1109,7 +1151,7 @@ public final class JanexReader implements Closeable {
 
     /// Expands directory aliases into the selected resource tree.
     private void expand(Map<String, Node> tree, Map<String, List<String>> children, String canonical, String alias,
-                        Map<String, Node> output, Set<String> active, boolean agent) throws IOException {
+                        Map<String, Node> output, Set<String> active, boolean agent, String moduleName) throws IOException {
         Node node = tree.get(canonical);
         if (node.source == -2) {
             canonical = resolve(tree, canonical);
@@ -1117,7 +1159,7 @@ public final class JanexReader implements Closeable {
         }
         limits.text(alias);
         if (node.source >= 0) {
-            node = prepareFile(alias, node, agent);
+            node = prepareFile(alias, node, agent, moduleName);
             if (node == null) return;
         }
         if (!alias.isEmpty() || includeRoot) {
@@ -1133,7 +1175,7 @@ public final class JanexReader implements Closeable {
         String prefix = canonical.isEmpty() ? "" : canonical + "/";
         for (String child : children.getOrDefault(canonical, Collections.emptyList())) {
             String name = child.substring(prefix.length());
-            expand(tree, children, child, join(alias, name), output, active, agent);
+            expand(tree, children, child, join(alias, name), output, active, agent, moduleName);
         }
         active.remove(canonical);
     }
@@ -1500,7 +1542,7 @@ public final class JanexReader implements Closeable {
                 mergeJarLayer(tree, layer.getValue());
             }
         }
-        return finishRoot(jarName, module, tree, agent);
+        return finishRoot(jarName, module, tree, agent, null);
     }
 
     /// Merges one JAR layer without permitting implicit file/directory replacement.

@@ -13,6 +13,23 @@ use janex_format::{
 use janex_java::runtime::JavaRuntime;
 use std::borrow::Cow;
 
+/// Java-specific resource-root metadata for an explicit automatic module name.
+pub(crate) const AUTOMATIC_MODULE_NAME: &str = "janex.java.automatic_module_name";
+
+/// Reads an automatic module name, rejecting values that cannot form one manifest header.
+pub(crate) fn automatic_module_name(root: &ResourceRoot) -> Result<Option<String>> {
+    root.metadata
+        .get_text(AUTOMATIC_MODULE_NAME)?
+        .map(|value| {
+            let name = value.as_text()?;
+            if name.is_empty() || name.contains(['\r', '\n', '\0']) {
+                return Err(crate::error::invalid("invalid automatic module name"));
+            }
+            Ok(name.to_owned())
+        })
+        .transpose()
+}
+
 /// Derives the Java path filename from a root name, borrowing names that already end in `.jar`.
 pub(crate) fn jar_name(root: &ResourceRoot) -> Result<Cow<'_, str>> {
     let name = root.name()?.unwrap_or("resources.jar");

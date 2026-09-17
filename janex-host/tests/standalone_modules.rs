@@ -210,7 +210,7 @@ public class Agent {
         &temp.path().join("agent.jar"),
         "Agent.class",
         &temp.path().join("agent/Agent.class"),
-        "Manifest-Version: 1.0\r\nPremain-Class: Agent\r\n\r\n",
+        "Manifest-Version: 1.0\r\nPremain-Class: Agent\r\nAutomatic-Module-Name: agent.library\r\n\r\n",
     );
     jar(
         &temp.path().join("auto-library-1.2.jar"),

@@ -118,6 +118,70 @@ fn resource_names_determine_java_export_filenames() {
 }
 
 #[test]
+fn automatic_module_names_rewrite_or_create_manifests() {
+    for linked in [false, true] {
+        let original = b"Manifest-Version: 1.0\r\nAutomatic-Module-Name: old.name\r\nPremain-Class: Agent\r\n\r\n";
+        for present in [false, true] {
+            let mut entries = vec![file("data", b"payload")];
+            let mut directories = Vec::new();
+            if present {
+                if linked {
+                    entries.push(file("original", original));
+                    directories.push(("META-INF", vec![link("MANIFEST.MF", "../original")]));
+                } else {
+                    directories.push(("META-INF", vec![file("MANIFEST.MF", original)]));
+                }
+            }
+            directories.push(("", entries));
+            let mut root = root(directories);
+            root.metadata = Value::map([(
+                Value::text("janex.java.automatic_module_name"),
+                Value::text("new.name"),
+            )])
+            .unwrap();
+            let temp = tempfile::tempdir().unwrap();
+            let result = materialize(
+                &root,
+                &context(),
+                &mut blobs(Limits::default()),
+                temp.path(),
+                1024,
+            )
+            .unwrap();
+            let mut jar = zip::ZipArchive::new(fs::File::open(&result.path).unwrap()).unwrap();
+            let mut bytes = Vec::new();
+            jar.by_name("META-INF/MANIFEST.MF")
+                .unwrap()
+                .read_to_end(&mut bytes)
+                .unwrap();
+            let manifest = Manifest::parse(&bytes, janex_java::Limits::default()).unwrap();
+            assert_eq!(manifest.get("Automatic-Module-Name"), Some("new.name"));
+            assert_eq!(manifest.get("Premain-Class"), present.then_some("Agent"));
+            assert_eq!(manifest.get("Manifest-Version"), Some("1.0"));
+            if present && linked {
+                let mut bytes = Vec::new();
+                jar.by_name("original")
+                    .unwrap()
+                    .read_to_end(&mut bytes)
+                    .unwrap();
+                assert_eq!(bytes, original);
+            }
+            let small = tempfile::tempdir().unwrap();
+            assert!(
+                materialize(
+                    &root,
+                    &context(),
+                    &mut blobs(Limits::default()),
+                    small.path(),
+                    result.logical_bytes - 1
+                )
+                .is_err()
+            );
+        }
+    }
+}
+
+#[test]
 fn expands_links_and_removes_only_signature_files() {
     let root = root(vec![
         ("", vec![link("alias", "real"), link("linked", "real/data")]),

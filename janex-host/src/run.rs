@@ -511,6 +511,7 @@ impl Paths<'_> {
         let result = materialize_tree(
             &tree,
             &crate::adapters::jar_name(root)?,
+            crate::adapters::automatic_module_name(root)?.as_deref(),
             self.blobs,
             &directory,
             self.remaining_bytes,

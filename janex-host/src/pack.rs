@@ -569,7 +569,7 @@ fn build_pool(
         data_pool,
         data: strings.finish(),
         layers,
-        metadata: Value::map([(Value::uint(0), Value::text(&input.jar_name))])?,
+        metadata: input.metadata()?,
     };
     let root_bytes = root.encode(options.import.limits)?;
     let strings = root.data.encode()?;

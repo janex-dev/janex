@@ -3,7 +3,7 @@
 
 //! Materialization of merged resource trees as temporary Java path entries.
 
-use crate::adapters::{jar_name, java_limits};
+use crate::adapters::{automatic_module_name, jar_name, java_limits};
 use crate::{Result, error::invalid};
 use janex_format::{
     binary::Limits,
@@ -37,7 +37,8 @@ pub struct MaterializedRoot {
 /// written directly into the archive and never interpreted as native filesystem paths.
 ///
 /// Runtime manifests omit Class-Path and signature attributes; top-level META-INF signature
-/// files are omitted. Original resource bytes remain unchanged in the source container.
+/// files are omitted. An explicit automatic module name overrides the manifest attribute,
+/// creating a manifest when absent. Original resource bytes remain unchanged in the source container.
 /// On failure a partially written JAR may remain; the caller owns directory cleanup.
 pub fn materialize<R: Read + Seek>(
     root: &ResourceRoot,
@@ -49,13 +50,21 @@ pub fn materialize<R: Read + Seek>(
     let limits = blobs.reader().limits();
     let tree = root.merge(context, limits)?;
     let name = jar_name(root)?;
-    materialize_tree(&tree, &name, blobs, directory, max_bytes)
+    materialize_tree(
+        &tree,
+        &name,
+        automatic_module_name(root)?.as_deref(),
+        blobs,
+        directory,
+        max_bytes,
+    )
 }
 
 /// Writes an already merged tree, preserving the caller's validation and selection work.
 pub(crate) fn materialize_tree<R: Read + Seek>(
     tree: &ResourceTree<'_>,
     name: &str,
+    module_name: Option<&str>,
     blobs: &mut BlobStore<R>,
     directory: &Path,
     max_bytes: u64,
@@ -81,8 +90,29 @@ pub(crate) fn materialize_tree<R: Read + Seek>(
         bytes: 0,
         max_bytes,
         limits,
+        module_name,
+        manifest_written: false,
     };
     state.write_directory("", "", &mut writer, blobs, 0)?;
+    if module_name.is_some() && !state.manifest_written {
+        if tree.get("META-INF").is_some()
+            && !matches!(tree.resolve("META-INF")?.1, Node::Directory(_))
+        {
+            return Err(invalid("resource conflicts with runtime manifest"));
+        }
+        state.count += 1;
+        limits.elements(state.count)?;
+        limits.bytes("META-INF/MANIFEST.MF".len() as u64)?;
+        if limits.max_depth < 1 {
+            return Err(invalid("resource directory expansion limit exceeded"));
+        }
+        let bytes = Manifest::default().for_runtime_with_module_name(module_name);
+        state.count_bytes(bytes.len() as u64)?;
+        writer
+            .start_file("META-INF/MANIFEST.MF", zip_options(None)?)
+            .map_err(zip_error)?;
+        writer.write_all(&bytes)?;
+    }
     writer.finish().map_err(zip_error)?;
     Ok(MaterializedRoot {
         path: path.canonicalize()?,
@@ -106,9 +136,23 @@ struct Materializer<'a, 'root> {
     max_bytes: u64,
     /// Limits on expansion depth, path length, and entry count.
     limits: Limits,
+    /// Explicit automatic module name to apply to the runtime manifest.
+    module_name: Option<&'a str>,
+    /// Whether traversal emitted a manifest, including a manifest reached through a link.
+    manifest_written: bool,
 }
 
 impl Materializer<'_, '_> {
+    /// Charges runtime bytes, including a synthesized manifest, against the output allowance.
+    fn count_bytes(&mut self, length: u64) -> Result<()> {
+        self.bytes = self
+            .bytes
+            .checked_add(length)
+            .filter(|size| *size <= self.max_bytes)
+            .ok_or_else(|| invalid("materialized resource byte limit exceeded"))?;
+        Ok(())
+    }
+
     /// Writes a directory subtree, rejecting cycles along the canonical source ancestry.
     fn write_directory<R: Read + Seek>(
         &mut self,
@@ -134,6 +178,12 @@ impl Materializer<'_, '_> {
             };
             self.limits.bytes(destination.len() as u64)?;
             let (canonical, node) = self.tree.resolve(path)?;
+            if self.module_name.is_some()
+                && destination == "META-INF/MANIFEST.MF"
+                && matches!(node, Node::Directory(_))
+            {
+                return Err(invalid("resource conflicts with runtime manifest"));
+            }
             if matches!(node, Node::File { .. }) && jar_signature(&destination) {
                 continue;
             }
@@ -149,13 +199,11 @@ impl Materializer<'_, '_> {
                 Node::File { metadata, .. } => {
                     let mut bytes = self.tree.read_file(canonical, blobs)?;
                     if destination.eq_ignore_ascii_case("META-INF/MANIFEST.MF") {
-                        bytes = Manifest::parse(&bytes, java_limits(self.limits))?.for_runtime();
+                        bytes = Manifest::parse(&bytes, java_limits(self.limits))?
+                            .for_runtime_with_module_name(self.module_name);
+                        self.manifest_written = true;
                     }
-                    self.bytes = self
-                        .bytes
-                        .checked_add(bytes.len() as u64)
-                        .filter(|size| *size <= self.max_bytes)
-                        .ok_or_else(|| invalid("materialized resource byte limit exceeded"))?;
+                    self.count_bytes(bytes.len() as u64)?;
                     writer
                         .start_file(destination, zip_options(Some(metadata))?)
                         .map_err(zip_error)?;

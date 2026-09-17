@@ -38,6 +38,8 @@ pub(crate) fn inventory(
                     .map(|r| r.name)
                     .collect(),
             }
+        } else if let Some(name) = crate::adapters::automatic_module_name(root)? {
+            janex_java::modules::automatic(&crate::adapters::jar_name(root)?, Some(&name))
         } else {
             let manifest = tree
                 .entries()

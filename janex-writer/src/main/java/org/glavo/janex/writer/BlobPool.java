@@ -114,7 +114,13 @@ final class BlobPool {
             Encoding resource = new Encoding();
             resource.uint(id);
             resource.uint(0);
-            resource.map(Map.of(0, resources.name));
+            Map<Object, Object> metadata = new LinkedHashMap<>();
+            metadata.put(0, resources.name);
+            if (resources.manifest != null) {
+                String moduleName = resources.manifest.getMainAttributes().getValue("Automatic-Module-Name");
+                if (moduleName != null) metadata.put("janex.java.automatic_module_name", moduleName);
+            }
+            resource.map(metadata);
             resource.writeBytes(layers.toByteArray());
             root = append(resource.toByteArray());
         }

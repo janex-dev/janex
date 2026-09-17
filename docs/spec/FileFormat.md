@@ -1352,6 +1352,13 @@ uses `resources.jar`. This filename also determines filename-derived automatic m
 JAR importers preserve the original filename in `name`. Consumers materialize different roots in
 separate directories to avoid filename collisions.
 
+Resource-root metadata may contain `"janex.java.automatic_module_name"`, a text string specifying a
+valid Java module name. Module naming uses `module-info.class` from the merged tree first, then this
+attribute, then the manifest's `Automatic-Module-Name`, and finally the JAR filename. Java consumers
+validate module names. JAR importers preserve `Automatic-Module-Name` in this attribute. When preparing
+runtime resources or exporting a JAR, consumers write the attribute into the manifest, creating one
+if absent.
+
 In a `JavaPathEntryObject`, a `janex` PURL must use the `java-module` requirement kind and is allowed
 only in `module_path`. Resolving it produces zero or more physical path entries at the same position.
 No path entry is needed when the selected runtime already provides the module. The selected runtime
