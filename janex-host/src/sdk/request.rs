@@ -3,106 +3,84 @@
 
 //! Provider-independent SDK requirements.
 
-use super::JavaRequest;
+use super::{Product, SdkPlatform};
 use crate::{Result, error::invalid};
 use serde::{Deserialize, Serialize};
 
-/// An SDK requirement with provider-specific version and platform semantics.
+/// A product version and variant, optionally bound to a target platform.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", content = "request", rename_all = "lowercase")]
-pub enum SdkRequest {
-    /// A Java distribution and platform variant.
-    Java(JavaRequest),
-    /// A portable Gradle binary distribution.
-    Gradle(String),
-    /// A portable Apache Maven binary distribution.
-    Maven(String),
+pub struct SdkRequest {
+    /// Canonical publisher/product identity.
+    pub product: String,
+    /// Product-specific version requirement, or `latest`.
+    pub version: String,
+    /// Product-defined variant, including the product's default when omitted by the user.
+    pub variant: String,
+    /// Target platform; `None` denotes a platform-independent distribution.
+    pub platform: Option<SdkPlatform>,
 }
 
 impl SdkRequest {
     /// Parses a product selector with optional `[variant=...,os=...,arch=...,libc=...]` qualifiers.
-    /// Missing versions mean `latest`; missing platform components use the native platform.
+    /// Missing versions mean `latest`; the product defines its default variant and platform support.
     pub fn parse(text: &str) -> Result<Self> {
         let (base, qualifiers) = split_selector(text)?;
         let (id, version) = base.split_once('@').unwrap_or((base, "latest"));
         let product = super::product::product(id)?;
-        let mut request = match product.family {
-            "gradle" => Self::Gradle(version.into()),
-            "maven" => Self::Maven(version.into()),
-            _ => Self::Java(JavaRequest::parse_base(base)?),
+        let mut platform = if product.platform_specific {
+            Some(SdkPlatform::native()?)
+        } else {
+            None
         };
-        if let Self::Java(java) = &mut request {
+        if let Some(platform) = &mut platform {
             if let Some(os) = qualifiers.get("os") {
-                java.platform.os = os.clone();
-                java.platform.libc = super::SdkPlatform::default_libc(os).into();
+                platform.os = os.clone();
+                platform.libc = SdkPlatform::default_libc(os).into();
             }
             if let Some(arch) = qualifiers.get("arch") {
-                java.platform.arch = normalize_arch(arch).into();
+                platform.arch = normalize_arch(arch).into();
             }
             if let Some(libc) = qualifiers.get("libc") {
-                java.platform.libc = libc.clone();
+                platform.libc = libc.clone();
             }
-            if let Some(variant) = qualifiers.get("variant") {
-                java.variant = variant.clone();
-            }
-        } else if qualifiers
-            .iter()
-            .any(|(key, value)| key != "variant" || value != "standard")
-        {
-            return Err(invalid(
-                "platform and variant qualifiers do not apply to portable SDKs",
-            ));
+        } else if qualifiers.keys().any(|key| key != "variant") {
+            return Err(invalid("platform qualifiers do not apply to this product"));
         }
+        let request = Self {
+            product: product.id.into(),
+            version: version.into(),
+            variant: qualifiers
+                .get("variant")
+                .cloned()
+                .unwrap_or_else(|| product.variants[0].into()),
+            platform,
+        };
         request.validate()?;
         Ok(request)
     }
 
-    /// Merges explicit qualifiers into a selector without freezing omitted native platform values.
-    /// Installation IDs cannot be combined with qualifiers.
-    pub fn qualify(text: &str, values: &[(&str, Option<&str>)]) -> Result<String> {
-        let (base, mut qualifiers) = split_selector(text)?;
-        for (key, value) in values {
-            if let Some(value) = value {
-                qualifiers.insert((*key).into(), (*value).into());
-            }
-        }
-        if qualifiers.is_empty() {
-            return Ok(text.into());
-        }
-        let result = format!(
-            "{}[{}]",
-            base,
-            qualifiers
-                .iter()
-                .map(|(k, v)| format!("{k}={v}"))
-                .collect::<Vec<_>>()
-                .join(",")
-        );
-        Self::parse(&result)?;
-        Ok(result)
+    /// Returns the descriptor for this product, or an error for an unknown identity.
+    pub(super) fn descriptor(&self) -> Result<&'static Product> {
+        super::product::product(&self.product)
     }
 
-    /// Returns the default slot for this family and target, or its portable family.
+    /// Returns the default slot for a validated request's family and optional target platform.
     pub fn default_key(&self) -> String {
-        match self {
-            Self::Java(java) => format!("java/{}", java.platform.key()),
-            _ => self.family().into(),
+        match &self.platform {
+            Some(platform) => format!("{}/{}", self.family(), platform.key()),
+            None => self.family().into(),
         }
     }
 
-    /// Returns the canonical product identity.
+    /// Returns the product identity stored in this request.
     pub fn product(&self) -> &str {
-        match self {
-            Self::Java(java) => &java.product,
-            Self::Gradle(_) => "gradle/gradle",
-            Self::Maven(_) => "apache/maven",
-        }
+        &self.product
     }
 
-    /// Rejects activation of foreign-OS SDKs; CPU emulation remains the operating system's responsibility.
+    /// Rejects foreign-OS activation; CPU emulation remains the operating system's responsibility.
     pub(super) fn check_host(&self) -> Result<()> {
-        if let Self::Java(java) = self
-            && java.platform.os != std::env::consts::OS
+        if let Some(platform) = &self.platform
+            && platform.os != std::env::consts::OS
         {
             return Err(invalid(
                 "cannot activate an SDK for another operating system",
@@ -111,110 +89,119 @@ impl SdkRequest {
         Ok(())
     }
 
-    /// Returns the SDK family used for storage and independent defaults.
+    /// Returns the tool family of a validated product request.
     pub fn family(&self) -> &'static str {
-        match self {
-            Self::Java(_) => "java",
-            Self::Gradle(_) => "gradle",
-            Self::Maven(_) => "maven",
-        }
+        self.descriptor().expect("validated SDK product").family
     }
 
     /// Returns the requested version or `latest`.
     pub fn version(&self) -> &str {
-        match self {
-            Self::Java(java) => &java.version,
-            Self::Gradle(version) | Self::Maven(version) => version,
-        }
+        &self.version
     }
 
-    /// Replaces the version while retaining provider and platform selection.
+    /// Replaces the version while retaining product, variant and platform selection.
     pub(super) fn with_version(&self, version: &str) -> Self {
         let mut exact = self.clone();
-        match &mut exact {
-            Self::Java(java) => java.version = version.into(),
-            Self::Gradle(value) | Self::Maven(value) => *value = version.into(),
-        }
+        exact.version = version.into();
         exact
     }
 
-    /// Returns a lossless selector including Java product, variant and platform qualifiers.
+    /// Returns a lossless selector including the product variant and any target platform.
     pub fn target(&self) -> String {
-        match self {
-            Self::Java(java) => java.target(),
-            _ => format!("{}@{}", self.product(), self.version()),
+        let mut result = format!("{}@{}[variant={}", self.product, self.version, self.variant);
+        if let Some(platform) = &self.platform {
+            result.push_str(&format!(
+                ",os={},arch={},libc={}",
+                platform.os, platform.arch, platform.libc
+            ));
         }
+        result.push(']');
+        result
     }
 
-    /// Returns Java-specific information when this is a Java requirement.
-    pub fn java(&self) -> Option<&JavaRequest> {
-        match self {
-            Self::Java(java) => Some(java),
-            _ => None,
-        }
+    /// Returns this validated request if the product belongs to the Java tool family.
+    pub fn java(&self) -> Option<&Self> {
+        (self.family() == "java").then_some(self)
     }
 
-    /// Validates a requirement received from callers or persistent metadata.
+    /// Validates canonical product identity, its variant, version and platform applicability.
     pub fn validate(&self) -> Result<()> {
-        match self {
-            Self::Java(java) => java.validate(),
-            _ if self.version() == "latest" => Ok(()),
-            _ => tool_version(self.version()).map(|_| ()),
+        let product = self.descriptor()?;
+        if product.id != self.product || !product.variants.contains(&self.variant.as_str()) {
+            return Err(invalid("unsupported variant or noncanonical SDK product"));
         }
-    }
-
-    /// Tests both provider variant and version constraints against a concrete installation.
-    pub(super) fn accepts(&self, actual: &Self) -> bool {
-        match (self, actual) {
-            (Self::Java(wanted), Self::Java(actual)) => {
-                let mut variant = actual.clone();
-                variant.version.clone_from(&wanted.version);
-                variant == *wanted && wanted.matches(&actual.version)
+        match (&self.platform, product.platform_specific) {
+            (Some(platform), true) => platform.validate()?,
+            (None, false) => {}
+            _ => {
+                return Err(invalid(
+                    "SDK platform does not match the product's platform support",
+                ));
             }
-            _ => self.family() == actual.family() && self.matches(actual.version()),
         }
+        if self.version != "latest" {
+            if product.family == "java" {
+                super::numeric_version(&self.version)?;
+            } else {
+                tool_version(&self.version)?;
+            }
+        }
+        Ok(())
     }
 
-    /// Matches stable versions. Tool requirements with one or two components select a series;
-    /// three components select an exact release. Java retains its own release rules.
+    /// Tests product, variant, platform and version constraints against an installation.
+    pub(super) fn accepts(&self, actual: &Self) -> bool {
+        self.product == actual.product
+            && self.variant == actual.variant
+            && self.platform == actual.platform
+            && self.matches(&actual.version)
+    }
+
+    /// Matches stable versions using the selected product family's version rules.
     pub fn matches(&self, version: &str) -> bool {
-        if let Self::Java(java) = self {
-            return java.matches(version);
+        if self.family() == "java" {
+            return super::java_matches(&self.version, version);
         }
         let Ok(actual) = tool_version(version) else {
             return false;
         };
-        if self.version() == "latest" {
+        if self.version == "latest" {
             return true;
         }
-        let Ok(wanted) = tool_version(self.version()) else {
+        let Ok(wanted) = tool_version(&self.version) else {
             return false;
         };
         if wanted.len() < 3 {
             actual.starts_with(&wanted)
         } else {
-            wanted == actual
+            actual == wanted
         }
     }
 
     /// Compares validated concrete versions belonging to the same SDK family.
     pub(super) fn compare(&self, other: &Self) -> std::cmp::Ordering {
-        match self {
-            Self::Java(_) => super::version_order(self.version(), other.version()),
-            _ => tool_version(self.version())
+        if self.family() == "java" {
+            super::version_order(&self.version, &other.version)
+        } else {
+            tool_version(&self.version)
                 .unwrap()
-                .cmp(&tool_version(other.version()).unwrap()),
+                .cmp(&tool_version(&other.version).unwrap())
         }
     }
 
-    /// Returns the platform entry point whose presence is required for an installed SDK.
+    /// Returns the platform entry point required for an installed SDK of this family.
     pub(super) fn executable(&self) -> String {
-        match self {
-            Self::Java(java) => java.platform.executable("java"),
-            Self::Gradle(_) if cfg!(windows) => "gradle.bat".into(),
-            Self::Gradle(_) => "gradle".into(),
-            Self::Maven(_) if cfg!(windows) => "mvn.cmd".into(),
-            Self::Maven(_) => "mvn".into(),
+        match self.family() {
+            "java" => self
+                .platform
+                .as_ref()
+                .expect("Java target platform")
+                .executable("java"),
+            "gradle" if cfg!(windows) => "gradle.bat".into(),
+            "gradle" => "gradle".into(),
+            "maven" if cfg!(windows) => "mvn.cmd".into(),
+            "maven" => "mvn".into(),
+            _ => unreachable!("supported SDK family"),
         }
     }
 }
@@ -302,7 +289,7 @@ mod tests {
             SdkRequest::parse("bellsoft/liberica-jdk@21[variant=full,arch=arm64,os=windows]")
                 .unwrap();
         assert_eq!(SdkRequest::parse(&full.target()).unwrap(), full);
-        assert_eq!(full.java().unwrap().platform.arch, "aarch64");
+        assert_eq!(full.platform.as_ref().unwrap().arch, "aarch64");
         let nik = SdkRequest::parse("bellsoft/liberica-nik@21[os=windows,arch=aarch64]").unwrap();
         assert!(!full.accepts(&nik));
         assert_eq!(
@@ -321,9 +308,31 @@ mod tests {
         ] {
             assert!(SdkRequest::parse(invalid).is_err(), "{invalid}");
         }
-        assert_eq!(
-            SdkRequest::qualify("bellsoft/liberica-jdk@21", &[("variant", Some("full"))]).unwrap(),
-            "bellsoft/liberica-jdk@21[variant=full]"
-        );
+    }
+    #[test]
+    fn portable_variants_are_part_of_the_common_product_request() {
+        let bin = SdkRequest::parse("gradle@9").unwrap();
+        let all = SdkRequest::parse("gradle@9[variant=all]").unwrap();
+        assert_eq!(bin.variant, "bin");
+        assert_eq!(all.variant, "all");
+        assert!(bin.platform.is_none() && all.platform.is_none());
+        assert_eq!(bin.default_key(), all.default_key());
+        assert!(!bin.accepts(&all.with_version("9.1.0")));
+        assert!(all.accepts(&all.with_version("9.1.0")));
+        assert_eq!(all.with_version("9.1.0").variant, "all");
+        assert_eq!(SdkRequest::parse(&all.target()).unwrap(), all);
+        assert_eq!(SdkRequest::parse("maven@3.9").unwrap().variant, "standard");
+        for invalid in [
+            "gradle@9[variant=standard]",
+            "gradle@9[variant=full]",
+            "gradle@9[arch=aarch64]",
+            "maven@3.9[variant=all]",
+        ] {
+            assert!(SdkRequest::parse(invalid).is_err(), "{invalid}");
+        }
+        let value = serde_json::to_value(&all).unwrap();
+        assert_eq!(value["variant"], "all");
+        assert!(value["platform"].is_null());
+        assert_eq!(serde_json::from_value::<SdkRequest>(value).unwrap(), all);
     }
 }

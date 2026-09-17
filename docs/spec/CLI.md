@@ -53,7 +53,9 @@ Products use `publisher/product` names. `bellsoft/liberica-jdk`, `bellsoft/liber
 Java has a separate default for each target platform. Gradle and Maven each have one portable
 default. Installing another SDK keeps existing installations. Updating a request used as a default
 moves that default to the new build, unless pinned. To clear the native Java default, use
-`janex default --clear`; add `--arch aarch64` to clear that architecture's default instead.
+`janex default --clear`. To clear the family/platform default of an installed SDK, use
+`janex default --clear "bellsoft/liberica-jdk@21[arch=aarch64]"`. Its version and variant identify
+an installation; the cleared default is shared by that installation's family and platform.
 For Gradle or Maven, use `--family gradle` or `--family maven`.
 
 ### Select versions
@@ -76,36 +78,36 @@ Java version separately as `java_version`.
 
 ### Keep several architectures or variants
 
-Choose a product's named edition with `--variant`; `available java` lists supported products and
-editions. Liberica JDK offers `standard`, `full`, and `lite`. Availability depends on the release
-and target platform.
+Write variant and platform choices inside the target: `product@version[variant=...,arch=...]`.
+Quote selectors containing brackets to prevent shell expansion. Each target carries its own
+choices, whether installing one SDK or several:
 
 ```shell
-janex install bellsoft/liberica-jdk@21 --variant full --arch aarch64
-janex install bellsoft/liberica-jdk@21 --variant full --arch x86-64
-janex default bellsoft/liberica-jdk@21 --variant full --arch aarch64
-janex default bellsoft/liberica-jdk@21 --variant full --arch x86-64
-janex use bellsoft/liberica-jdk@21 --variant full --arch x86-64
-janex exec --arch x86-64 -- java -version
+janex install "bellsoft/liberica-jdk@21[variant=full,arch=aarch64]" "gradle@9[variant=all]"
+janex default "bellsoft/liberica-jdk@21[variant=full,arch=aarch64]"
+janex use "bellsoft/liberica-jdk@21[variant=full,arch=aarch64]"
+janex exec --java "bellsoft/liberica-jdk@21[variant=full,arch=x86-64]" -- java -version
 ```
 
-Both installations and defaults coexist. Without platform options, Janex selects the operating
-system's native architecture, even when Janex itself runs under emulation. Explicit selections do
-not fall back to another architecture. Running a non-native architecture requires OS support.
+`available java` and `available gradle` list products and their variants. Liberica JDK offers
+`standard`, `full`, and `lite`. Gradle offers `bin` (the default) and `all` (also includes sources
+and documentation). Gradle variants can coexist and update independently, but share one default.
+A registered Gradle `all` directory must contain both `docs` and `src`.
 
-`--os` selects an operating system; `--libc glibc|musl` selects a Linux C library. Foreign-OS SDKs
-can be stored and registered but cannot be activated on the current OS. These options and
-`--variant` also apply to `home`, `use`, `default`, `update`, `pin`, `unpin`, and `uninstall`.
-`update --all` updates each saved variant and platform request independently.
+Java defaults for different platforms coexist. Omitted platform qualifiers select the operating
+system's native platform, even when Janex runs under emulation. Explicit selections do not fall
+back to another architecture; running a non-native architecture requires OS support.
+Use `os=windows|linux|macos|freebsd` and, on Linux, `libc=glibc|musl`. Foreign-OS SDKs can be stored
+and registered but cannot be activated on the current OS. Portable products such as Gradle and
+Maven do not accept platform qualifiers.
 
-For different choices in one command, use quoted selectors:
-
-```shell
-janex install 'bellsoft/liberica-jdk@21[variant=full,arch=aarch64]' 'bellsoft/liberica-jdk@21[arch=x86-64]'
-```
+The same selectors work with `available`, `home`, `use`, `default`, `update`, `pin`, `unpin`, and
+`uninstall`. `update --all` updates each saved request independently. Operation options such as
+`--offline` and `--timeout` apply to the whole command. Install validates all selectors before
+starting, then installs them sequentially; a failure stops the command and retains completed installs.
 
 `list` displays complete selectors and installation IDs. An ID selects one exact installation
-and cannot be combined with variant or platform options.
+and cannot carry additional qualifiers.
 
 ### Use SDKs in your shell
 
@@ -148,7 +150,7 @@ janex use --project gradle@8
 These commands update `.janex-toolchains.toml`, one tool family at a time. Add `--pin` to save an
 exact local installation ID instead of a version request. The selected SDK must already be installed.
 Unspecified platform values remain unspecified in the project file, so another machine uses its own
-native platform. Explicit `--arch`, `--os`, `--libc`, and `--variant` values are retained.
+native platform. Explicit `arch`, `os`, `libc`, and `variant` qualifiers are retained.
 
 To run one command without changing your shell, use `exec`:
 

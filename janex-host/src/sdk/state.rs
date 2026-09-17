@@ -379,7 +379,7 @@ impl SdkManager {
     }
 
     /// Registers an existing SDK home without copying or owning its contents. Java registration
-    /// probes the runtime; portable tools are identified from their versioned core library.
+    /// reads release metadata; portable tools are identified from their core library and variant files.
     pub fn register(&self, request: &SdkRequest, path: &Path) -> Result<Installation> {
         request.validate()?;
         let path = path.canonicalize()?;
@@ -392,7 +392,7 @@ impl SdkManager {
                 archive::java_version(&home)?
             };
             java.validate()?;
-            (home, SdkRequest::Java(java))
+            (home, java)
         } else {
             super::tools::external_home(&path, request)?
         };
@@ -919,6 +919,15 @@ mod tests {
                     format!("maven-core-{version}.jar"),
                 )
             };
+            if requested.family() == "gradle" && requested.variant == "all" {
+                for path in [
+                    format!("{directory}/docs/index.html"),
+                    format!("{directory}/src/source.txt"),
+                ] {
+                    writer.start_file(path, options).unwrap();
+                    writer.write_all(b"fixture").unwrap();
+                }
+            }
             for path in [
                 format!("{directory}/bin/{}", requested.executable()),
                 format!("{directory}/lib/{core}"),
@@ -936,12 +945,12 @@ mod tests {
                 } else {
                     version.split('+').next().unwrap()
                 },
-                requested.java().unwrap().platform.arch
+                requested.platform.as_ref().unwrap().arch
             )
             .unwrap();
             for name in [
-                requested.java().unwrap().platform.executable("java"),
-                requested.java().unwrap().platform.executable("javac"),
+                requested.platform.as_ref().unwrap().executable("java"),
+                requested.platform.as_ref().unwrap().executable("javac"),
             ] {
                 writer
                     .start_file(format!("jdk/bin/{name}"), options)
@@ -1155,7 +1164,7 @@ mod tests {
         let new_x64 = fixture(&manager, &x64, "21.0.9+10", false);
         assert_eq!(
             manager
-                .default_for("java", &x64.java().unwrap().platform)
+                .default_for("java", x64.platform.as_ref().unwrap())
                 .unwrap()
                 .unwrap()
                 .id,
@@ -1163,7 +1172,7 @@ mod tests {
         );
         assert_eq!(
             manager
-                .default_for("java", &arm.java().unwrap().platform)
+                .default_for("java", arm.platform.as_ref().unwrap())
                 .unwrap()
                 .unwrap()
                 .id,
@@ -1186,7 +1195,7 @@ mod tests {
         assert!(manager.uninstall(&old_arm.id).is_err());
         assert!(manager.uninstall(&new_x64.id).is_err());
         manager
-            .clear_default_for("java", &arm.java().unwrap().platform)
+            .clear_default_for("java", arm.platform.as_ref().unwrap())
             .unwrap();
         manager.uninstall(&old_arm.id).unwrap();
         assert_eq!(manager.resolve(&x64.target()).unwrap().id, new_x64.id);
@@ -1247,5 +1256,54 @@ mod tests {
         );
         assert!(manager.resolve("bellsoft/liberica-jdk@21").is_err());
         assert!(manager.resolve("bellsoft/liberica-nik@21").is_err());
+    }
+    #[test]
+    fn gradle_variants_coexist_and_keep_independent_update_bindings() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = SdkManager::new(temp.path().join("home")).unwrap();
+        let bin = SdkRequest::parse("gradle@9").unwrap();
+        let all = SdkRequest::parse("gradle@9[variant=all]").unwrap();
+        let first_bin = fixture(&manager, &bin, "9.0.0", false);
+        let first_all = fixture(&manager, &all, "9.0.0", false);
+        assert_ne!(first_bin.id, first_all.id);
+        assert_eq!(manager.resolve("gradle@9").unwrap().id, first_bin.id);
+        manager.set_default("gradle@9[variant=all]").unwrap();
+        manager.set_pin(&all, true).unwrap();
+        let next_bin = fixture(&manager, &bin, "9.1.0", false);
+        assert_eq!(
+            manager.default_installation("gradle").unwrap().unwrap().id,
+            first_all.id
+        );
+        assert_eq!(
+            manager
+                .update(
+                    &all,
+                    &CatalogOptions {
+                        offline: true,
+                        ..Default::default()
+                    }
+                )
+                .unwrap()
+                .id,
+            first_all.id
+        );
+        assert_eq!(manager.resolve("gradle@9").unwrap().id, next_bin.id);
+        manager.set_pin(&all, false).unwrap();
+        let next_all = fixture(&manager, &all, "9.1.0", false);
+        assert_eq!(
+            manager.default_installation("gradle").unwrap().unwrap().id,
+            next_all.id
+        );
+        assert_eq!(manager.list().unwrap().len(), 4);
+        assert_eq!(manager.selections().unwrap().len(), 2);
+        assert_eq!(
+            manager.uninstall("gradle@9.0.0[variant=all]").unwrap().id,
+            first_all.id
+        );
+        assert!(manager.home(&first_bin).unwrap().exists());
+        assert_eq!(
+            manager.resolve("gradle@9[variant=all]").unwrap().id,
+            next_all.id
+        );
     }
 }

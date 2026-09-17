@@ -3,7 +3,7 @@
 
 //! Bounded extraction into a new, private SDK staging tree.
 
-use super::JavaRequest;
+use super::SdkRequest;
 use crate::{Result, error::invalid};
 use std::{
     collections::BTreeSet,
@@ -265,7 +265,7 @@ fn link(path: PathBuf, target: &str, symbolic: bool) -> Result<Link> {
 
 /// Finds exactly one SDK root with a release file and the requested tools, without executing Java.
 pub(super) fn find_home(root: &Path, request: &super::SdkRequest) -> Result<PathBuf> {
-    let super::SdkRequest::Java(request) = request else {
+    let Some(request) = request.java() else {
         return super::tools::find_home(root, request);
     };
     let mut homes = Vec::new();
@@ -274,12 +274,12 @@ pub(super) fn find_home(root: &Path, request: &super::SdkRequest) -> Result<Path
         if path.join("release").is_file()
             && path
                 .join("bin")
-                .join(request.platform.executable("java"))
+                .join(request.platform.as_ref().unwrap().executable("java"))
                 .is_file()
             && (request.descriptor()?.kind() == "jre"
                 || path
                     .join("bin")
-                    .join(request.platform.executable("javac"))
+                    .join(request.platform.as_ref().unwrap().executable("javac"))
                     .is_file())
         {
             validate_release(&path, request)?;
@@ -304,7 +304,7 @@ pub(super) fn find_home(root: &Path, request: &super::SdkRequest) -> Result<Path
 }
 
 /// Checks archive-reported release and architecture against the selected package.
-fn validate_release(home: &Path, request: &JavaRequest) -> Result<()> {
+fn validate_release(home: &Path, request: &SdkRequest) -> Result<()> {
     let mut text = String::new();
     fs::File::open(home.join("release"))?
         .take(65537)
@@ -340,14 +340,14 @@ fn validate_release(home: &Path, request: &JavaRequest) -> Result<()> {
             "FreeBSD" => "freebsd",
             other => other,
         };
-        if os != request.platform.os {
+        if os != request.platform.as_ref().unwrap().os {
             return Err(invalid(
                 "SDK operating system does not match selected target",
             ));
         }
     }
     let arch = property("OS_ARCH")?;
-    if janex_platform::normalize_architecture(&arch) != request.platform.arch {
+    if janex_platform::normalize_architecture(&arch) != request.platform.as_ref().unwrap().arch {
         return Err(invalid("SDK architecture does not match catalog"));
     }
     Ok(())

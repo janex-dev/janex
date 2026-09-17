@@ -6,7 +6,7 @@
 use clap::{Args, Subcommand, ValueEnum};
 use janex_host::{
     Error, Result,
-    sdk::{CatalogOptions, Installation, PRODUCTS, SdkManager, SdkPlatform, SdkRequest, Shell},
+    sdk::{CatalogOptions, Installation, PRODUCTS, SdkManager, SdkRequest, Shell},
 };
 use std::{ffi::OsString, path::PathBuf};
 
@@ -50,90 +50,8 @@ pub(super) enum SdkCommand {
 /// Pin policy for one saved requirement and platform variant.
 #[derive(Args)]
 pub(super) struct PinArgs {
-    /// Saved Java requirement.
+    /// Saved SDK product, variant and version requirement.
     target: String,
-    /// Variant identifying the saved requirement.
-    #[command(flatten)]
-    variant: VariantArgs,
-}
-
-/// Product variant and target platform overrides shared by SDK selection commands.
-#[derive(Args, Default)]
-pub(super) struct VariantArgs {
-    /// Target CPU architecture; defaults to the native operating-system architecture.
-    #[arg(long, value_name = "ARCH")]
-    arch: Option<String>,
-    /// Target operating system; defaults to the current operating system.
-    #[arg(long, value_parser = ["windows", "linux", "macos", "freebsd"])]
-    os: Option<String>,
-    /// Product-defined archive variant, such as standard, full, or lite.
-    #[arg(long)]
-    variant: Option<String>,
-    /// Linux C library for the selected target.
-    #[arg(long, value_parser = ["glibc", "musl"])]
-    libc: Option<String>,
-}
-
-impl VariantArgs {
-    /// Preserves omitted qualifiers so project requirements remain portable.
-    fn target(&self, target: &str) -> Result<String> {
-        SdkRequest::qualify(
-            target,
-            &[
-                ("arch", self.arch.as_deref()),
-                ("os", self.os.as_deref()),
-                ("variant", self.variant.as_deref()),
-                ("libc", self.libc.as_deref()),
-            ],
-        )
-    }
-
-    /// Resolves a product selector and explicit overrides to a complete request.
-    fn request(&self, target: &str) -> Result<SdkRequest> {
-        SdkRequest::parse(&self.target(target)?)
-    }
-
-    /// Resolves platform-only flags without choosing a product or version.
-    fn platform(&self) -> Result<SdkPlatform> {
-        let mut platform = SdkPlatform::native()?;
-        if let Some(os) = &self.os {
-            platform.os = os.clone();
-            platform.libc = SdkPlatform::default_libc(os).into();
-        }
-        if let Some(arch) = &self.arch {
-            platform.arch = match arch.as_str() {
-                "amd64" | "x64" | "x86_64" => "x86-64",
-                "arm64" => "aarch64",
-                other => other,
-            }
-            .into();
-        }
-        if let Some(libc) = &self.libc {
-            platform.libc = libc.clone();
-        }
-        platform.validate()?;
-        Ok(platform)
-    }
-
-    /// Selects an explicit Java product or the default for an explicitly requested platform.
-    fn java_selection(&self, manager: &SdkManager, target: Option<&str>) -> Result<Option<String>> {
-        if let Some(target) = target {
-            return self.target(target).map(Some);
-        }
-        if self.variant.is_some() {
-            return Err(Error::InvalidInput(
-                "--variant requires an explicit SDK product".into(),
-            ));
-        }
-        if self.arch.is_none() && self.os.is_none() && self.libc.is_none() {
-            return Ok(None);
-        }
-        let platform = self.platform()?;
-        manager
-            .default_for("java", &platform)?
-            .map(|i| Some(i.id))
-            .ok_or_else(|| Error::InvalidInput(format!("no default Java for {}", platform.key())))
-    }
 }
 
 /// Catalog listing request.
@@ -142,9 +60,6 @@ pub(super) struct AvailableArgs {
     /// Product selector, or a tool family such as java to list its products.
     #[arg(default_value = "java")]
     target: String,
-    /// Archive variant filters.
-    #[command(flatten)]
-    variant: VariantArgs,
     /// Use only cached catalog metadata.
     #[arg(long, conflicts_with = "refresh")]
     offline: bool,
@@ -159,12 +74,9 @@ pub(super) struct AvailableArgs {
 /// Installation or external registration request.
 #[derive(Args)]
 pub(super) struct InstallArgs {
-    /// SDK requests; each is installed independently.
+    /// Product[@version][variant=...,os=...,arch=...,libc=...] selectors; installed independently.
     #[arg(required = true)]
     targets: Vec<String>,
-    /// Archive variant filters.
-    #[command(flatten)]
-    variant: VariantArgs,
     /// Fix the selected build against subsequent update commands.
     #[arg(long)]
     pin: bool,
@@ -199,9 +111,6 @@ pub(super) struct UpdateArgs {
     /// Update every saved SDK requirement.
     #[arg(long)]
     all: bool,
-    /// Archive variant filters for explicitly named requests.
-    #[command(flatten)]
-    variant: VariantArgs,
     /// Maximum seconds per archive download, including segment retries.
     #[arg(long, default_value_t = 1800, value_parser = clap::value_parser!(u64).range(1..))]
     timeout: u64,
@@ -213,9 +122,6 @@ pub(super) struct UpdateArgs {
 /// An exact installed target.
 #[derive(Args)]
 pub(super) struct TargetArgs {
-    /// Product variant and platform selection.
-    #[command(flatten)]
-    variant: VariantArgs,
     /// Installed SDK target or full installation ID.
     target: String,
 }
@@ -223,26 +129,20 @@ pub(super) struct TargetArgs {
 /// Global default selection request.
 #[derive(Args)]
 pub(super) struct DefaultArgs {
-    /// Product variant and platform selection.
-    #[command(flatten)]
-    variant: VariantArgs,
     /// Installed SDK target or full installation ID.
-    #[arg(required_unless_present = "clear", conflicts_with = "clear")]
+    #[arg(required_unless_present = "clear")]
     target: Option<String>,
-    /// Remove the global default without uninstalling SDKs.
+    /// Clear the target's family/platform default, or the native Java default if omitted.
     #[arg(long)]
     clear: bool,
     /// SDK family whose default is cleared; setting a target infers its family.
-    #[arg(long, value_parser = ["java", "gradle", "maven"], default_value = "java", requires = "clear")]
+    #[arg(long, value_parser = ["java", "gradle", "maven"], default_value = "java", requires = "clear", conflicts_with = "target")]
     family: String,
 }
 
 /// Current SDK selection query.
 #[derive(Args)]
 pub(super) struct CurrentArgs {
-    /// Java product variant and platform selection.
-    #[command(flatten)]
-    variant: VariantArgs,
     /// Emit structured JSON.
     #[arg(long)]
     json: bool,
@@ -251,9 +151,6 @@ pub(super) struct CurrentArgs {
 /// Command and SDK selection for a child process.
 #[derive(Args)]
 pub(super) struct ExecArgs {
-    /// Java product variant and platform selection.
-    #[command(flatten)]
-    variant: VariantArgs,
     /// Explicit installed Java target or installation ID.
     #[arg(long, value_name = "TARGET")]
     java: Option<String>,
@@ -318,9 +215,6 @@ pub(super) struct DeactivateArgs {
 /// Shell environment rendering options.
 #[derive(Args)]
 pub(super) struct EnvArgs {
-    /// Java product variant and platform selection.
-    #[command(flatten)]
-    variant: VariantArgs,
     /// Explicit installed Java target or installation ID.
     #[arg(long, value_name = "TARGET")]
     java: Option<String>,
@@ -338,9 +232,6 @@ pub(super) struct EnvArgs {
 /// Shell or project selection request.
 #[derive(Args)]
 pub(super) struct UseArgs {
-    /// Java product variant and platform selection.
-    #[command(flatten)]
-    variant: VariantArgs,
     /// Installed SDK target or installation ID.
     targets: Vec<String>,
     /// Save one selection in the current project without changing the shell.
@@ -392,24 +283,15 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
             print!("{}", manager.shell_deactivate(shell)?);
         }
         SdkCommand::Pin(args) => {
-            manager.set_pin(&args.variant.request(&args.target)?, true)?;
+            manager.set_pin(&SdkRequest::parse(&args.target)?, true)?;
             println!("Pinned {}", args.target);
         }
         SdkCommand::Unpin(args) => {
-            manager.set_pin(&args.variant.request(&args.target)?, false)?;
+            manager.set_pin(&SdkRequest::parse(&args.target)?, false)?;
             println!("Unpinned {}", args.target);
         }
         SdkCommand::Available(args) => {
             if matches!(args.target.as_str(), "java" | "gradle" | "maven") {
-                if args.variant.arch.is_some()
-                    || args.variant.os.is_some()
-                    || args.variant.variant.is_some()
-                    || args.variant.libc.is_some()
-                {
-                    return Err(Error::InvalidInput(
-                        "select a product before filtering its variants or platforms".into(),
-                    ));
-                }
                 let products = PRODUCTS
                     .iter()
                     .filter(|p| p.family == args.target)
@@ -423,7 +305,7 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
                 }
                 return Ok(0);
             }
-            let request = args.variant.request(&args.target)?;
+            let request = SdkRequest::parse(&args.target)?;
             let packages = manager.available(
                 &request,
                 &CatalogOptions {
@@ -452,8 +334,12 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
                 ));
             }
             let mut installed = Vec::new();
-            for target in args.targets {
-                let request = args.variant.request(&target)?;
+            let requests = args
+                .targets
+                .iter()
+                .map(|target| SdkRequest::parse(target))
+                .collect::<Result<Vec<_>>>()?;
+            for request in requests {
                 if !args.json {
                     eprintln!("Installing {}", request.target());
                 }
@@ -491,14 +377,6 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
             }
         }
         SdkCommand::Update(args) => {
-            if args.all
-                && (args.variant.arch.is_some()
-                    || args.variant.os.is_some()
-                    || args.variant.variant.is_some()
-                    || args.variant.libc.is_some())
-            {
-                return Err(Error::InvalidInput("--all updates every saved platform and variant; specify targets to apply selection options".into()));
-            }
             let requests = if args.all {
                 manager
                     .selections()?
@@ -508,7 +386,7 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
             } else {
                 args.targets
                     .iter()
-                    .map(|t| args.variant.request(t))
+                    .map(|t| SdkRequest::parse(t))
                     .collect::<Result<Vec<_>>>()?
             };
             let mut installed = Vec::new();
@@ -534,46 +412,39 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
             }
         }
         SdkCommand::Uninstall(args) => {
-            let removed = manager.uninstall(&args.variant.target(&args.target)?)?;
+            let removed = manager.uninstall(&args.target)?;
             println!("Uninstalled {} ({})", removed.sdk.target(), removed.id);
         }
         SdkCommand::Default(args) => {
             if args.clear {
-                if args.variant.variant.is_some() {
-                    return Err(Error::InvalidInput(
-                        "--variant does not apply to clearing a platform default".into(),
-                    ));
-                }
-                if args.family != "java"
-                    && (args.variant.arch.is_some()
-                        || args.variant.os.is_some()
-                        || args.variant.libc.is_some())
-                {
-                    return Err(Error::InvalidInput(
-                        "portable tools have no platform-specific defaults".into(),
-                    ));
-                }
-                manager.clear_default_for(&args.family, &args.variant.platform()?)?;
-                println!("Cleared the default {} selection", args.family);
+                let family = if let Some(target) = &args.target {
+                    let request = manager.resolve(target)?.sdk;
+                    if let Some(platform) = &request.platform {
+                        manager.clear_default_for(request.family(), platform)?;
+                    } else {
+                        manager.clear_default(request.family())?;
+                    }
+                    request.family()
+                } else {
+                    manager.clear_default(&args.family)?;
+                    &args.family
+                };
+                println!("Cleared the default {family} selection");
             } else {
                 show(
                     &manager,
-                    &manager.set_default(&args.variant.target(args.target.as_deref().unwrap())?)?,
+                    &manager.set_default(args.target.as_deref().unwrap())?,
                 )?;
             }
         }
         SdkCommand::Home(args) => {
             println!(
                 "{}",
-                manager
-                    .home(&manager.resolve(&args.variant.target(&args.target)?)?)?
-                    .display()
+                manager.home(&manager.resolve(&args.target)?)?.display()
             );
         }
         SdkCommand::Current(args) => {
-            let selected = args.variant.java_selection(&manager, None)?;
-            let execution =
-                manager.execution(selected.as_deref(), Some(&std::env::current_dir()?))?;
+            let execution = manager.execution(None, Some(&std::env::current_dir()?))?;
             if args.json {
                 json(
                     &serde_json::json!({"java_home": execution.home(), "homes": execution.homes()}),
@@ -585,11 +456,8 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
             }
         }
         SdkCommand::Exec(args) => {
-            let selected = args
-                .variant
-                .java_selection(&manager, args.java.as_deref())?;
             let execution = manager.execution_with(
-                selected.as_deref(),
+                args.java.as_deref(),
                 args.gradle.as_deref(),
                 args.maven.as_deref(),
                 Some(&std::env::current_dir()?),
@@ -599,11 +467,8 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
                 .map(super::exit_code);
         }
         SdkCommand::Env(args) => {
-            let selected = args
-                .variant
-                .java_selection(&manager, args.java.as_deref())?;
             let execution = manager.execution_with(
-                selected.as_deref(),
+                args.java.as_deref(),
                 args.gradle.as_deref(),
                 args.maven.as_deref(),
                 Some(&std::env::current_dir()?),
@@ -616,21 +481,6 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
             print!("{}", execution.environment(shell)?);
         }
         SdkCommand::Use(args) => {
-            let targets = args
-                .targets
-                .iter()
-                .map(|t| args.variant.target(t))
-                .collect::<Result<Vec<_>>>()?;
-            if targets.is_empty()
-                && (args.variant.arch.is_some()
-                    || args.variant.os.is_some()
-                    || args.variant.variant.is_some()
-                    || args.variant.libc.is_some())
-            {
-                return Err(Error::InvalidInput(
-                    "platform options require an explicit SDK selection".into(),
-                ));
-            }
             if args.project {
                 if args.targets.len() != 1 {
                     return Err(Error::InvalidInput(
@@ -640,7 +490,7 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
                 println!(
                     "{}",
                     manager
-                        .use_project(&targets[0], &std::env::current_dir()?, args.pin)?
+                        .use_project(&args.targets[0], &std::env::current_dir()?, args.pin)?
                         .display()
                 );
             } else {
@@ -648,7 +498,7 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
                 print!(
                     "{}",
                     manager.shell_environment(
-                        &targets,
+                        &args.targets,
                         &std::env::current_dir()?,
                         shell,
                         args.targets.is_empty()
@@ -667,8 +517,9 @@ fn show(manager: &SdkManager, installed: &Installation) -> Result<()> {
         installed.sdk.target(),
         installed
             .sdk
-            .java()
-            .map(|java| java.platform.key())
+            .platform
+            .as_ref()
+            .map(|platform| platform.key())
             .unwrap_or_else(|| "portable".into()),
         if installed.managed {
             "managed"

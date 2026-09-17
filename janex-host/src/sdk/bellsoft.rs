@@ -3,14 +3,14 @@
 
 //! BellSoft's product API keeps JDK editions and NIK product versions distinct.
 
-use super::{AvailableSdk, CatalogOptions, JavaRequest, SdkRequest, catalog, version_order};
+use super::{AvailableSdk, CatalogOptions, SdkRequest, catalog, version_order};
 use crate::{Result, error::invalid};
 use serde_json::Value;
 use std::path::Path;
 use url::Url;
 
 /// Returns the provider product path and precise bundle type.
-fn bundle(request: &JavaRequest) -> Result<(&'static str, String)> {
+fn bundle(request: &SdkRequest) -> Result<(&'static str, String)> {
     let product = request.descriptor()?;
     if product.is_nik() {
         return Ok(("nik", request.variant.clone()));
@@ -42,15 +42,17 @@ fn architecture(arch: &str) -> Result<(&'static str, u32)> {
 /// Lists stable archives using named bundle variants rather than a JavaFX approximation.
 pub(super) fn available(
     root: &Path,
-    request: &JavaRequest,
+    request: &SdkRequest,
     options: &CatalogOptions,
 ) -> Result<Vec<AvailableSdk>> {
     let (product, bundle) = bundle(request)?;
-    let (arch, bits) = architecture(&request.platform.arch)?;
-    let os = if request.platform.os == "linux" && request.platform.libc == "musl" {
+    let (arch, bits) = architecture(&request.platform.as_ref().unwrap().arch)?;
+    let os = if request.platform.as_ref().unwrap().os == "linux"
+        && request.platform.as_ref().unwrap().libc == "musl"
+    {
         "linux-musl"
     } else {
-        &request.platform.os
+        &request.platform.as_ref().unwrap().os
     };
     let format = if os == "windows" { "zip" } else { "tar.gz" };
     let mut url = Url::parse(&format!("https://api.bell-sw.com/v1/{product}/releases")).unwrap();
@@ -69,13 +71,15 @@ pub(super) fn available(
 }
 
 /// Validates platform, product component, edition and version before advertising an archive.
-fn parse_packages(value: &Value, request: &JavaRequest) -> Result<Vec<AvailableSdk>> {
+fn parse_packages(value: &Value, request: &SdkRequest) -> Result<Vec<AvailableSdk>> {
     let (product, bundle) = bundle(request)?;
-    let (arch, bits) = architecture(&request.platform.arch)?;
-    let os = if request.platform.os == "linux" && request.platform.libc == "musl" {
+    let (arch, bits) = architecture(&request.platform.as_ref().unwrap().arch)?;
+    let os = if request.platform.as_ref().unwrap().os == "linux"
+        && request.platform.as_ref().unwrap().libc == "musl"
+    {
         "linux-musl"
     } else {
-        &request.platform.os
+        &request.platform.as_ref().unwrap().os
     };
     let format = if os == "windows" { "zip" } else { "tar.gz" };
     let rows = value
@@ -104,7 +108,7 @@ fn parse_packages(value: &Value, request: &JavaRequest) -> Result<Vec<AvailableS
             version: version.into(),
             filename: filename.into(),
             archive_type: format.into(),
-            request: SdkRequest::Java(request.clone()),
+            request: request.clone(),
         });
     }
     packages.sort_by(|a, b| version_order(&b.version, &a.version).then(a.id.cmp(&b.id)));

@@ -359,12 +359,12 @@ pub(crate) fn application_runtimes(
             .filter(|i| {
                 i.sdk
                     .java()
-                    .is_some_and(|j| j.platform.os == std::env::consts::OS)
+                    .is_some_and(|j| j.platform.as_ref().unwrap().os == std::env::consts::OS)
             })
             .collect::<Vec<_>>();
         installed.sort_by(|a, b| {
-            (Some(&a.sdk.java().unwrap().platform.arch) != native.as_ref())
-                .cmp(&(Some(&b.sdk.java().unwrap().platform.arch) != native.as_ref()))
+            (Some(&a.sdk.platform.as_ref().unwrap().arch) != native.as_ref())
+                .cmp(&(Some(&b.sdk.platform.as_ref().unwrap().arch) != native.as_ref()))
                 .then_with(|| {
                     super::version_order(
                         b.java_version.as_deref().unwrap_or(b.sdk.version()),

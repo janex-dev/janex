@@ -3,7 +3,7 @@
 
 //! Bounded catalog queries and authenticated HTTPS artifact transport.
 
-use super::{JavaRequest, SdkRequest, hex, version_order};
+use super::{SdkRequest, hex, version_order};
 use crate::{Result, error::invalid};
 use janex_format::checksum::{Algorithm, Checksum};
 use serde::Serialize;
@@ -76,7 +76,7 @@ pub(super) fn available(
     options: &CatalogOptions,
 ) -> Result<Vec<AvailableSdk>> {
     request.validate()?;
-    let SdkRequest::Java(request) = request else {
+    let Some(request) = request.java() else {
         return super::tools::available(root, request, options);
     };
     let mut url = Url::parse("https://api.foojay.io/disco/v3.0/packages").unwrap();
@@ -84,12 +84,12 @@ pub(super) fn available(
         return super::bellsoft::available(root, request, options);
     }
     let product = request.descriptor()?;
-    let archive = if request.platform.os == "windows" {
+    let archive = if request.platform.as_ref().unwrap().os == "windows" {
         "zip"
     } else {
         "tar.gz"
     };
-    let arch = match request.platform.arch.as_str() {
+    let arch = match request.platform.as_ref().unwrap().arch.as_str() {
         "x86-64" => "x64",
         "x86" => "x32",
         other => other,
@@ -97,7 +97,10 @@ pub(super) fn available(
     url.query_pairs_mut().extend_pairs([
         ("distribution", product.disco.unwrap()),
         ("version", request.version.split('+').next().unwrap()),
-        ("operating_system", disco_os(&request.platform.os)),
+        (
+            "operating_system",
+            disco_os(&request.platform.as_ref().unwrap().os),
+        ),
         ("architecture", arch),
         ("archive_type", archive),
         ("package_type", product.kind()),
@@ -111,7 +114,10 @@ pub(super) fn available(
                 "false"
             },
         ),
-        ("lib_c_type", disco_libc(&request.platform.libc)),
+        (
+            "lib_c_type",
+            disco_libc(&request.platform.as_ref().unwrap().libc),
+        ),
     ]);
     if request.version == "latest" {
         let pairs = url
@@ -127,11 +133,7 @@ pub(super) fn available(
 }
 
 /// Checks every returned variant rather than trusting that the service applied its filters.
-fn parse_packages(
-    value: &Value,
-    request: &JavaRequest,
-    archive: &str,
-) -> Result<Vec<AvailableSdk>> {
+fn parse_packages(value: &Value, request: &SdkRequest, archive: &str) -> Result<Vec<AvailableSdk>> {
     let rows = value
         .get("result")
         .and_then(Value::as_array)
@@ -145,14 +147,15 @@ fn parse_packages(
             janex_platform::normalize_architecture(architecture)
         };
         if text(row, "distribution")? != request.descriptor()?.disco.unwrap()
-            || text(row, "operating_system")? != disco_os(&request.platform.os)
-            || normalized != request.platform.arch
+            || text(row, "operating_system")? != disco_os(&request.platform.as_ref().unwrap().os)
+            || normalized != request.platform.as_ref().unwrap().arch
             || text(row, "package_type")? != request.descriptor()?.kind()
             || text(row, "archive_type")? != archive
             || text(row, "release_status")? != "ga"
             || row.get("javafx_bundled").and_then(Value::as_bool) != Some(request.variant == "fx")
             || row.get("directly_downloadable").and_then(Value::as_bool) != Some(true)
-            || (request.platform.os == "linux" && text(row, "lib_c_type")? != request.platform.libc)
+            || (request.platform.as_ref().unwrap().os == "linux"
+                && text(row, "lib_c_type")? != request.platform.as_ref().unwrap().libc)
         {
             continue;
         }
@@ -171,7 +174,7 @@ fn parse_packages(
             version: version.into(),
             filename: filename.into(),
             archive_type: archive.into(),
-            request: SdkRequest::Java(request.clone()),
+            request: request.clone(),
         });
     }
     result.sort_by(|a, b| version_order(&b.version, &a.version).then(a.id.cmp(&b.id)));
@@ -654,11 +657,11 @@ mod tests {
 
     #[test]
     fn metadata_cannot_override_requested_platform_or_version() {
-        let request = JavaRequest::parse("adoptium/temurin-jdk@21").unwrap();
+        let request = SdkRequest::parse("adoptium/temurin-jdk@21").unwrap();
         let row = serde_json::json!({"id": "1234abcd", "distribution": "temurin", "java_version": "21.0.8+12",
-            "operating_system": disco_os(&request.platform.os), "architecture": request.platform.arch,
+            "operating_system": disco_os(&request.platform.as_ref().unwrap().os), "architecture": request.platform.as_ref().unwrap().arch,
             "package_type": "jdk", "archive_type": "zip", "release_status": "ga", "javafx_bundled": false,
-            "directly_downloadable": true, "lib_c_type": disco_libc(&request.platform.libc), "filename": "jdk.zip"});
+            "directly_downloadable": true, "lib_c_type": disco_libc(&request.platform.as_ref().unwrap().libc), "filename": "jdk.zip"});
         let mut wrong = row.clone();
         wrong["architecture"] = serde_json::json!("unknown");
         let mut newer = row.clone();

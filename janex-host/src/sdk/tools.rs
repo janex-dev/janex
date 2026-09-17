@@ -19,12 +19,12 @@ pub(super) fn available(
     request: &SdkRequest,
     options: &CatalogOptions,
 ) -> Result<Vec<AvailableSdk>> {
-    let mut packages = match request {
-        SdkRequest::Gradle(_) => {
+    let mut packages = match request.family() {
+        "gradle" => {
             let value = catalog::metadata(root, GRADLE_VERSIONS, options)?;
             gradle_packages(&value, request)?
         }
-        SdkRequest::Maven(_) => {
+        "maven" => {
             let bytes =
                 catalog::cached_bytes(root, &format!("{MAVEN_BASE}/maven-metadata.xml"), options)?;
             maven_packages(&bytes, request)?
@@ -103,13 +103,13 @@ fn maven_packages(bytes: &[u8], request: &SdkRequest) -> Result<Vec<AvailableSdk
 
 /// Constructs canonical archive names rather than accepting arbitrary paths from metadata.
 fn package(request: &SdkRequest, version: &str) -> AvailableSdk {
-    let (filename, archive_type) = match request {
-        SdkRequest::Gradle(_) => (format!("gradle-{version}-bin.zip"), "zip"),
+    let (filename, archive_type) = match request.family() {
+        "gradle" => (format!("gradle-{version}-{}.zip", request.variant), "zip"),
         _ if cfg!(windows) => (format!("apache-maven-{version}-bin.zip"), "zip"),
         _ => (format!("apache-maven-{version}-bin.tar.gz"), "tar.gz"),
     };
     AvailableSdk {
-        id: version.into(),
+        id: filename.clone(),
         version: version.into(),
         filename,
         archive_type: archive_type.into(),
@@ -130,8 +130,8 @@ pub(super) fn artifact(
     if canonical.filename != package.filename || canonical.archive_type != package.archive_type {
         return Err(invalid("invalid SDK archive identity"));
     }
-    let (url, algorithm, suffix) = match &package.request {
-        SdkRequest::Gradle(_) => (
+    let (url, algorithm, suffix) = match package.request.family() {
+        "gradle" => (
             format!(
                 "https://services.gradle.org/distributions/{}",
                 package.filename
@@ -139,7 +139,7 @@ pub(super) fn artifact(
             Algorithm::Sha256,
             "sha256",
         ),
-        SdkRequest::Maven(_) => (
+        "maven" => (
             format!("{MAVEN_BASE}/{}/{}", package.version, package.filename),
             Algorithm::Sha512,
             "sha512",
@@ -156,12 +156,12 @@ pub(super) fn artifact(
 pub(super) fn find_home(root: &Path, request: &SdkRequest) -> Result<std::path::PathBuf> {
     let version = request.version();
     tool_version(version)?;
-    let (directory, library) = match request {
-        SdkRequest::Gradle(_) => (
+    let (directory, library) = match request.family() {
+        "gradle" => (
             format!("gradle-{version}"),
             format!("gradle-core-{version}.jar"),
         ),
-        SdkRequest::Maven(_) => (
+        "maven" => (
             format!("apache-maven-{version}"),
             format!("maven-core-{version}.jar"),
         ),
@@ -175,6 +175,7 @@ pub(super) fn find_home(root: &Path, request: &SdkRequest) -> Result<std::path::
             "SDK archive is missing its versioned core library or launcher",
         ));
     }
+    validate_variant(&home, request)?;
     Ok(home)
 }
 
@@ -183,9 +184,9 @@ pub(super) fn external_home(
     root: &Path,
     request: &SdkRequest,
 ) -> Result<(std::path::PathBuf, SdkRequest)> {
-    let prefix = match request {
-        SdkRequest::Gradle(_) => "gradle-core-",
-        SdkRequest::Maven(_) => "maven-core-",
+    let prefix = match request.family() {
+        "gradle" => "gradle-core-",
+        "maven" => "maven-core-",
         _ => return Err(invalid("unsupported portable SDK provider")),
     };
     let mut matches = Vec::new();
@@ -209,7 +210,23 @@ pub(super) fn external_home(
             "external SDK must contain one matching versioned core library and launcher",
         ));
     }
+    validate_variant(root, request)?;
     Ok((root.to_owned(), matches.remove(0)))
+}
+
+/// Distinguishes complete Gradle distributions from binaries without scanning their contents.
+fn validate_variant(home: &Path, request: &SdkRequest) -> Result<()> {
+    if request.family() == "gradle" {
+        let complete = home.join("docs").is_dir() && home.join("src").is_dir();
+        let actual = if complete { "all" } else { "bin" };
+        if request.variant != actual {
+            return Err(invalid(format!(
+                "Gradle home contains variant {actual}, expected {}",
+                request.variant
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -233,5 +250,57 @@ mod tests {
             1
         );
         assert!(maven_packages(b"<metadata/>", &request).is_err());
+    }
+    #[test]
+    fn gradle_variants_resolve_distinct_archives_and_checksums() {
+        let temp = tempfile::tempdir().unwrap();
+        let metadata = temp.path().join("cache/sdk");
+        std::fs::create_dir_all(&metadata).unwrap();
+        let mut packages = Vec::new();
+        for (variant, digit) in [("bin", "a"), ("all", "b")] {
+            let request = SdkRequest::parse(&format!("gradle@9[variant={variant}]")).unwrap();
+            let package = package(&request, "9.1.0");
+            let url =
+                format!("https://services.gradle.org/distributions/gradle-9.1.0-{variant}.zip");
+            let checksum_url = format!("{url}.sha256");
+            let key = super::super::hex(
+                janex_format::checksum::Checksum::compute(
+                    Algorithm::Sha256,
+                    checksum_url.as_bytes(),
+                )
+                .unwrap()
+                .digest(),
+            );
+            std::fs::write(metadata.join(format!("{key}.metadata")), digit.repeat(64)).unwrap();
+            let resolved = artifact(
+                temp.path(),
+                &package,
+                &CatalogOptions {
+                    offline: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(resolved.url, url);
+            assert_eq!(
+                super::super::hex(resolved.checksum.digest()),
+                digit.repeat(64)
+            );
+            packages.push(package);
+        }
+        assert_ne!(packages[0].id, packages[1].id);
+        let mut mixed = packages[0].clone();
+        mixed.request = packages[1].request.clone();
+        assert!(
+            artifact(
+                temp.path(),
+                &mixed,
+                &CatalogOptions {
+                    offline: true,
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
     }
 }
