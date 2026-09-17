@@ -67,6 +67,42 @@ public final class ResourcePlan {
         return roots;
     }
 
+    /// An immutable range of decoded bytes from a source.
+    public static final class Extent {
+        /// Index in the associated source table.
+        private final int sourceIndex;
+        /// Byte offset within the decoded source.
+        private final int offset;
+        /// Number of bytes in the range.
+        private final int length;
+
+        /// Creates a range from resolved resource metadata.
+        ///
+        /// @param sourceIndex nonnegative index in the associated source table
+        /// @param offset nonnegative decoded byte offset
+        /// @param length positive byte length within the source
+        public Extent(int sourceIndex, int offset, int length) {
+            this.sourceIndex = sourceIndex;
+            this.offset = offset;
+            this.length = length;
+        }
+
+        /// Returns the source index.
+        public int sourceIndex() {
+            return sourceIndex;
+        }
+
+        /// Returns the decoded byte offset.
+        public int offset() {
+            return offset;
+        }
+
+        /// Returns the byte length.
+        public int length() {
+            return length;
+        }
+    }
+
     /// An inline, stored, external JAR, or extent-assembled byte source.
     public static final class Source {
         /// Inline content, or null for other source kinds.
@@ -79,17 +115,18 @@ public final class ResourcePlan {
         private final int storedLength;
         /// Successive Zstandard decoded byte lengths.
         private final int[] filters;
-        /// Source index, decoded offset, and length triples; empty for other source kinds.
-        private final int[][] extents;
+        /// Immutable decoded source ranges in assembly order; empty for other source kinds.
+        private final List<Extent> extents;
 
         /// Retains validated source data and an optional immutable external JAR descriptor.
-        Source(byte[] inline, long offset, int storedLength, int[] filters, int[][] extents, JarSource jar) {
+        Source(byte[] inline, long offset, int storedLength, int[] filters, Extent[] extents, JarSource jar) {
             this.inline = inline == null ? null : inline.clone();
             this.jar = jar;
             this.offset = offset;
             this.storedLength = storedLength;
             this.filters = filters == null ? null : filters.clone();
-            this.extents = copy(extents);
+            this.extents = extents.length == 0 ? Collections.emptyList()
+                    : Collections.unmodifiableList(Arrays.asList(extents.clone()));
         }
 
         /// Returns inline content, or null for other source kinds.
@@ -117,9 +154,9 @@ public final class ResourcePlan {
             return filters == null ? null : filters.clone();
         }
 
-        /// Returns source index, decoded offset, and length triples; empty for other source kinds.
-        public int[][] extents() {
-            return copy(extents);
+        /// Returns an immutable list of decoded source ranges in assembly order; empty for other source kinds.
+        public List<Extent> extents() {
+            return extents;
         }
     }
 
@@ -238,15 +275,6 @@ public final class ResourcePlan {
         public Integer permissions() {
             return permissions;
         }
-    }
-
-    /// Copies each row of a rectangular or ragged integer table.
-    private static int[][] copy(int[][] values) {
-        int[][] copy = values.clone();
-        for (int i = 0; i < copy.length; i++) {
-            copy[i] = copy[i].clone();
-        }
-        return copy;
     }
 
 }

@@ -495,15 +495,16 @@ public final class JanexReader implements Closeable {
                 }
             } else {
                 require(kind == 1, "Unsupported blob entry");
-                result.extents = new int[limits.elements(entry.uint())][3];
+                result.extents = new ResourcePlan.Extent[limits.elements(entry.uint())];
                 require(result.extents.length != 0, "Empty extents");
                 long total = 0;
-                for (int[] extent : result.extents) {
-                    extent[0] = source(entry.uint(), true);
-                    extent[1] = limits.bytes(entry.uint());
-                    extent[2] = limits.bytes(entry.uint());
-                    require(extent[2] > 0 && extent[1] <= sources.get(extent[0]).length - extent[2], "Invalid extent range");
-                    total += extent[2];
+                for (int i = 0; i < result.extents.length; i++) {
+                    int sourceIndex = source(entry.uint(), true);
+                    int offset = limits.bytes(entry.uint());
+                    int length = limits.bytes(entry.uint());
+                    require(length > 0 && offset <= sources.get(sourceIndex).length - length, "Invalid extent range");
+                    result.extents[i] = new ResourcePlan.Extent(sourceIndex, offset, length);
+                    total += length;
                 }
                 result.length = limits.bytes(total);
             }
@@ -524,8 +525,8 @@ public final class JanexReader implements Closeable {
         long offset;
         /// Stored encoding, or null for inline and extents sources.
         Encoding encoding;
-        /// Extent triples, or null for inline and stored sources.
-        int[][] extents;
+        /// Decoded source ranges, or null for inline and stored sources.
+        ResourcePlan.Extent[] extents;
         /// Decoded byte length.
         int length;
     }
@@ -593,9 +594,9 @@ public final class JanexReader implements Closeable {
         }
         byte[] result = new byte[source.length];
         int offset = 0;
-        for (int[] extent : source.extents) {
-            System.arraycopy(bytes(extent[0], dictionary), extent[1], result, offset, extent[2]);
-            offset += extent[2];
+        for (ResourcePlan.Extent extent : source.extents) {
+            System.arraycopy(bytes(extent.sourceIndex(), dictionary), extent.offset(), result, offset, extent.length());
+            offset += extent.length();
         }
         return result;
     }
@@ -1284,11 +1285,12 @@ public final class JanexReader implements Closeable {
             for (int i = 0; i < filters.length; i++) {
                 filters[i] = limits.bytes(source.encoding.filters[i]);
             }
-            int[][] extents = new int[source.inline == null && source.extents != null ? source.extents.length : 0][3];
+            ResourcePlan.Extent[] extents = new ResourcePlan.Extent[source.inline == null && source.extents != null ? source.extents.length : 0];
             for (int i = 0; i < extents.length; i++) {
-                extents[i][0] = sourceIds.get(source.extents[i][0]);
-                extents[i][1] = source.extents[i][1];
-                extents[i][2] = source.extents[i][2];
+                ResourcePlan.Extent extent = source.extents[i];
+                int sourceIndex = sourceIds.get(extent.sourceIndex());
+                extents[i] = sourceIndex == extent.sourceIndex() ? extent
+                        : new ResourcePlan.Extent(sourceIndex, extent.offset(), extent.length());
             }
             selectedSources.add(new ResourcePlan.Source(source.inline, source.encoding == null ? -1 : source.offset,
                     source.inline == null && source.encoding != null ? limits.bytes(source.encoding.stored) : 0,
@@ -1325,8 +1327,8 @@ public final class JanexReader implements Closeable {
     private void collectSource(int id, Set<Integer> used) {
         Source source = sources.get(id);
         if (used.add(id) && source.inline == null && source.extents != null) {
-            for (int[] extent : source.extents) {
-                collectSource(extent[0], used);
+            for (ResourcePlan.Extent extent : source.extents) {
+                collectSource(extent.sourceIndex(), used);
             }
         }
     }

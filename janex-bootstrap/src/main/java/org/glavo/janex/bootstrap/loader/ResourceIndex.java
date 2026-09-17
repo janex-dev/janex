@@ -23,10 +23,8 @@ import org.glavo.janex.reader.internal.codec.zstd.Zstandard;
 /// trust policy. This reader does not establish publisher trust or repeat container entry checksums.
 /// External JAR payload framing and CRCs are checked when their decoded bytes enter the cache.
 public final class ResourceIndex implements Closeable {
-    /// Maximum size of an individual decoded value.
-    private final int maxBytes;
-    /// Maximum number of elements in one collection.
-    private final int maxElements;
+    /// Immutable read limits shared by metadata and payload decoders.
+    private final ReadLimits limits;
     /// Open snapshot, retained until this reader is closed or the JVM exits.
     private final RandomAccessFile snapshot;
     /// Length of the container when opened, shared by all source bounds checks.
@@ -62,8 +60,9 @@ public final class ResourceIndex implements Closeable {
             if (!Arrays.equals(magic, new byte[]{'J', 'N', 'X', 'R', 'E', 'S', '0', '1'})) {
                 throw new IOException("Invalid resource index");
             }
-            maxBytes = nonnegative(input.readInt());
-            maxElements = nonnegative(input.readInt());
+            int maxBytes = nonnegative(input.readInt());
+            int maxElements = nonnegative(input.readInt());
+            limits = new ReadLimits(maxBytes, maxElements, ReadLimits.DEFAULT.maxDepth());
             cacheLimit = Math.min(maxBytes, 64L * 1024 * 1024);
             opened = new RandomAccessFile(text(input), "r");
             snapshot = opened;
@@ -73,9 +72,8 @@ public final class ResourceIndex implements Closeable {
                 sources[i] = new Source(input, i);
             }
             pools = new DataPool[count(input)];
-            ReadLimits poolLimits = new ReadLimits(maxBytes, maxElements, ReadLimits.DEFAULT.maxDepth());
             for (int i = 0; i < pools.length; i++) {
-                pools[i] = DataPool.readIndex(input, poolLimits);
+                pools[i] = DataPool.readIndex(input, limits);
             }
             Map<String, String> required = new LinkedHashMap<String, String>();
             int requiredCount = count(input);
@@ -119,9 +117,8 @@ public final class ResourceIndex implements Closeable {
     /// @param plan validated resources over an unchanged, caller-owned snapshot file
     /// @throws IOException if the snapshot cannot be opened
     public ResourceIndex(ResourcePlan plan) throws IOException {
-        maxBytes = plan.limits().maxBytes();
-        maxElements = plan.limits().maxElements();
-        cacheLimit = Math.min(maxBytes, 64L * 1024 * 1024);
+        limits = plan.limits();
+        cacheLimit = Math.min(limits.maxBytes(), 64L * 1024 * 1024);
         snapshot = new RandomAccessFile(plan.snapshot().toFile(), "r");
         try {
             snapshotLength = snapshot.length();
@@ -154,7 +151,7 @@ public final class ResourceIndex implements Closeable {
     /// Reads a bounded collection count.
     private int count(DataInputStream input) throws IOException {
         int count = nonnegative(input.readInt());
-        if (count > maxElements) {
+        if (count > limits.maxElements()) {
             throw new IOException("Resource index element limit exceeded");
         }
         return count;
@@ -167,7 +164,7 @@ public final class ResourceIndex implements Closeable {
 
     /// Checks a decoded byte length before allocation.
     private int size(long size) throws IOException {
-        if (size < 0 || size > maxBytes) {
+        if (size < 0 || size > limits.maxBytes()) {
             throw new IOException("Resource byte limit exceeded");
         }
         return (int) size;
@@ -196,8 +193,8 @@ public final class ResourceIndex implements Closeable {
         final int stored;
         /// Required output sizes of successive reversed Zstd filters.
         final int[] filters;
-        /// Extent triples: earlier source ID, decoded offset, decoded length.
-        final int[][] extents;
+        /// Decoded ranges from earlier sources, or null for other source kinds.
+        final List<ResourcePlan.Extent> extents;
         /// Final decoded byte length.
         final int length;
 
@@ -210,7 +207,7 @@ public final class ResourceIndex implements Closeable {
             filters = source.filters();
             extents = inline == null && jar == null && offset < 0 ? source.extents() : null;
             long total = 0;
-            if (extents != null) for (int[] extent : extents) total += extent[2];
+            if (extents != null) for (ResourcePlan.Extent extent : extents) total += extent.length();
             length = inline != null ? inline.length : jar != null ? size(jar.length()) : extents != null ? size(total)
                     : filters.length == 0 ? stored : filters[filters.length - 1];
         }
@@ -245,18 +242,21 @@ public final class ResourceIndex implements Closeable {
                 offset = -1;
                 stored = 0;
                 filters = new int[0];
-                extents = new int[count(input)][3];
+                int extentCount = count(input);
+                List<ResourcePlan.Extent> ranges = new ArrayList<>(extentCount);
                 long total = 0;
-                for (int[] extent : extents) {
-                    extent[0] = nonnegative(input.readInt());
-                    extent[1] = size(input);
-                    extent[2] = size(input);
-                    if (extent[0] >= index || sources[extent[0]].extents != null || extent[2] == 0
-                            || extent[1] > sources[extent[0]].length - extent[2]) {
+                for (int i = 0; i < extentCount; i++) {
+                    int sourceIndex = nonnegative(input.readInt());
+                    int offset = size(input);
+                    int length = size(input);
+                    if (sourceIndex >= index || sources[sourceIndex].extents != null || length == 0
+                            || offset > sources[sourceIndex].length - length) {
                         throw new IOException("Invalid resource extent");
                     }
-                    total += extent[2];
+                    ranges.add(new ResourcePlan.Extent(sourceIndex, offset, length));
+                    total += length;
                 }
+                extents = Collections.unmodifiableList(ranges);
                 length = size(total);
             } else {
                 throw new IOException("Unknown resource source");
@@ -287,9 +287,9 @@ public final class ResourceIndex implements Closeable {
         } else if (source.extents != null) {
             bytes = new byte[source.length];
             int offset = 0;
-            for (int[] extent : source.extents) {
-                System.arraycopy(source(extent[0]), extent[1], bytes, offset, extent[2]);
-                offset += extent[2];
+            for (ResourcePlan.Extent extent : source.extents) {
+                System.arraycopy(source(extent.sourceIndex()), extent.offset(), bytes, offset, extent.length());
+                offset += extent.length();
             }
         } else {
             bytes = new byte[source.stored];
@@ -297,7 +297,7 @@ public final class ResourceIndex implements Closeable {
             snapshot.readFully(bytes);
             try {
                 for (int length : source.filters) {
-                    ZstandardFrames.validate(bytes, new ReadLimits(maxBytes, maxElements, ReadLimits.DEFAULT.maxDepth()));
+                    ZstandardFrames.validate(bytes, limits);
                     byte[] output = new byte[length];
                     int written = Zstandard.decompress(bytes, 0, bytes.length, output, 0, output.length);
                     if (written != length) {
@@ -495,8 +495,7 @@ public final class ResourceIndex implements Closeable {
             }
             byte[] bytes = id == -1 ? new byte[0] : source(id);
             for (ResourcePlan.ClassFileTransform transform : transforms) {
-                bytes = ClassFiles.restore(bytes, pools[transform.dataPoolIndex()], transform.decodedLength(),
-                        new ReadLimits(maxBytes, maxElements, ReadLimits.DEFAULT.maxDepth()));
+                bytes = ClassFiles.restore(bytes, pools[transform.dataPoolIndex()], transform.decodedLength(), limits);
             }
             return bytes;
         }

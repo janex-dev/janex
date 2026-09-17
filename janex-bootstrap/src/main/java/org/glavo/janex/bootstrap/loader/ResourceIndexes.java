@@ -49,12 +49,12 @@ public final class ResourceIndexes {
                 }
             } else {
                 output.writeByte(2);
-                int[][] extents = source.extents();
-                output.writeInt(extents.length);
-                for (int[] extent : extents) {
-                    for (int value : extent) {
-                        output.writeInt(value);
-                    }
+                List<ResourcePlan.Extent> extents = source.extents();
+                output.writeInt(extents.size());
+                for (ResourcePlan.Extent extent : extents) {
+                    output.writeInt(extent.sourceIndex());
+                    output.writeInt(extent.offset());
+                    output.writeInt(extent.length());
                 }
             }
         }

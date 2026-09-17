@@ -257,8 +257,8 @@ public final class ReaderTest {
     /// Checks that selected-resource descriptions do not expose mutable preparation state.
     private static void resourcePlan() throws IOException {
         byte[] bytes = {42};
-        int[][] extents = {{0, 0, 1}};
-        ResourcePlan.Source inline = new ResourcePlan.Source(bytes, -1, 0, new int[0], new int[0][3], null);
+        ResourcePlan.Extent[] extents = {new ResourcePlan.Extent(0, 0, 1)};
+        ResourcePlan.Source inline = new ResourcePlan.Source(bytes, -1, 0, new int[0], new ResourcePlan.Extent[0], null);
         ResourcePlan.Source extent = new ResourcePlan.Source(null, -1, 0, new int[0], extents, null);
         ResourcePlan.ClassFileTransform[] transforms = {new ResourcePlan.ClassFileTransform(10, 0)};
         ResourcePlan.File file = new ResourcePlan.File(1, transforms, Instant.MAX, null, null, 0);
@@ -270,18 +270,23 @@ public final class ReaderTest {
         ResourcePlan plan = new ResourcePlan(java.nio.file.Paths.get("snapshot.janex"), ReadLimits.DEFAULT,
                 Arrays.asList(inline, extent), pools, java.util.Collections.emptyMap(), Arrays.asList(root));
         bytes[0] = 0;
-        extents[0][2] = 0;
+        extents[0] = new ResourcePlan.Extent(1, 1, 1);
         transforms[0] = new ResourcePlan.ClassFileTransform(0, 1);
         pools[0] = null;
         files.clear();
         check(plan.sources().get(0).inline()[0] == 42);
-        check(plan.sources().get(1).extents()[0][2] == 1);
+        check(plan.sources().get(1).extents().get(0).length() == 1);
         check(plan.roots().get(0).files().get("value").transforms().get(0).decodedLength() == 10);
         check(file.creationTime().equals(Instant.MAX) && file.permissions() == 0);
         check(file.lastModifiedTime() == null && file.lastAccessTime() == null);
         check(plan.pools()[0] == immutable && plan.pools()[0].view(1).get() == 42);
         inline.inline()[0] = 0;
-        extent.extents()[0][2] = 0;
+        try {
+            extent.extents().set(0, new ResourcePlan.Extent(1, 1, 1));
+            throw new AssertionError("Mutable resource extents");
+        } catch (UnsupportedOperationException expected) {
+            check(extent.extents().get(0).sourceIndex() == 0 && extent.extents().get(0).offset() == 0);
+        }
         try {
             file.transforms().set(0, new ResourcePlan.ClassFileTransform(0, 1));
             throw new AssertionError("Mutable resource transforms");
@@ -289,7 +294,7 @@ public final class ReaderTest {
             check(file.transforms().get(0).dataPoolIndex() == 0);
         }
         plan.pools()[0] = null;
-        check(inline.inline()[0] == 42 && extent.extents()[0][2] == 1);
+        check(inline.inline()[0] == 42 && extent.extents().get(0).length() == 1);
         check(file.transforms().get(0).decodedLength() == 10 && file.creationTime() != null);
         check(plan.pools()[0] == immutable && plan.pools()[0].view(1).get() == 42);
         try {
