@@ -5,10 +5,12 @@
 
 use crate::{Limits, launch::EntryPoint};
 use crate::{Result, error::invalid};
+use base64::Engine;
+use sha2::{Digest, Sha256};
 use std::{
     ffi::OsString,
-    fs::File,
-    io::{Cursor, Read, Write},
+    fs,
+    io::{Cursor, Write},
     path::{Path, PathBuf},
 };
 use zip::{ZipWriter, write::SimpleFileOptions};
@@ -16,20 +18,20 @@ use zip::{ZipWriter, write::SimpleFileOptions};
 /// Binary name of the Java 8-compatible bootstrap class.
 pub(crate) const MAIN_CLASS: &str = "org.glavo.janex.bootstrap.Bootstrap";
 
-/// Writes a private bootstrap JAR containing the entry point and original program arguments.
+/// Encodes launch data separately from a content-addressed, reusable bootstrap JAR.
 ///
 /// Strings use counted UTF-16 code units so Windows arguments never pass through an ANSI
 /// encoding. Non-Unicode Unix arguments require direct launching. The caller owns the
 /// parent directory and must retain it until the application exits.
 pub(crate) fn write(
-    directory: &Path,
+    _directory: &Path,
     entry: &EntryPoint,
     arguments: &[OsString],
     instance_main: bool,
     limits: Limits,
     resources: Option<&[u8]>,
     jvm_options: &[String],
-) -> Result<PathBuf> {
+) -> Result<(PathBuf, String)> {
     if entry.main_class.as_deref() == Some(MAIN_CLASS) {
         return Err(invalid(
             "the bootstrap class cannot be an application entry point",
@@ -64,36 +66,9 @@ pub(crate) fn write(
         }
     }
     limits.bytes(data.len() as u64)?;
-    let path = directory.join("bootstrap.jar");
-    let mut jar = ZipWriter::new(File::create(&path)?);
-    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    let mut embedded = zip::ZipArchive::new(Cursor::new(include_bytes!(
-        "../../janex-bootstrap/build/libs/janex-bootstrap.jar"
-    )))
-    .map_err(std::io::Error::other)?;
-    for index in 0..embedded.len() {
-        let mut entry = embedded.by_index(index).map_err(std::io::Error::other)?;
-        if entry.is_dir() {
-            continue;
-        }
-        if resources.is_none()
-            && entry.name() != "org/glavo/janex/bootstrap/Bootstrap.class"
-            && entry.name() != "META-INF/MANIFEST.MF"
-            && !entry.name().starts_with("META-INF/LICENSE")
-        {
-            continue;
-        }
-        jar.start_file(entry.name(), options)
-            .map_err(std::io::Error::other)?;
-        let mut bytes = Vec::new();
-        entry.read_to_end(&mut bytes)?;
-        jar.write_all(&bytes)?;
-    }
-    jar.start_file("org/glavo/janex/bootstrap/launch.bin", options)
-        .map_err(std::io::Error::other)?;
-    jar.write_all(&data)?;
+    let mut option_data = Vec::new();
+    let path = cached_jar(resources.is_some())?;
     if let Some(resources) = resources {
-        let mut option_data = Vec::new();
         string(
             &mut option_data,
             entry.main_module.as_deref().unwrap_or("").encode_utf16(),
@@ -109,18 +84,66 @@ pub(crate) fn write(
             string(&mut option_data, option.encode_utf16(), limits)?;
         }
         limits.bytes(option_data.len() as u64)?;
-        jar.start_file(
-            "org/glavo/janex/bootstrap/options.bin",
-            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
-        )
-        .map_err(std::io::Error::other)?;
-        jar.write_all(&option_data)?;
         limits.bytes(resources.len() as u64)?;
-        jar.start_file("org/glavo/janex/bootstrap/resources.bin", options)
-            .map_err(std::io::Error::other)?;
-        jar.write_all(resources)?;
     }
-    jar.finish().map_err(std::io::Error::other)?;
+    let mut payload = b"JNX1".to_vec();
+    for section in [&data[..], &option_data[..], resources.unwrap_or(&[])] {
+        payload.extend(count(section.len())?.to_be_bytes());
+        payload.extend(section);
+    }
+    limits.bytes(payload.len() as u64)?;
+    Ok((
+        path,
+        format!(
+            "-Djanex.launch={}",
+            base64::engine::general_purpose::STANDARD.encode(payload)
+        ),
+    ))
+}
+
+/// Publishes fixed launcher bytes atomically and repairs missing or modified cache entries.
+fn cached_jar(resources: bool) -> Result<PathBuf> {
+    const EMBEDDED: &[u8] = include_bytes!("../../janex-bootstrap/build/libs/janex-bootstrap.jar");
+    let digest: String = Sha256::digest(EMBEDDED)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let directory = janex_platform::janex_home()?
+        .join("cache/bootstrap")
+        .join(digest);
+    fs::create_dir_all(&directory)?;
+    let path = directory.join(if resources {
+        "bootstrap.jar"
+    } else {
+        "entry.jar"
+    });
+    let bytes = if resources {
+        EMBEDDED.to_vec()
+    } else {
+        let mut source =
+            zip::ZipArchive::new(Cursor::new(EMBEDDED)).map_err(std::io::Error::other)?;
+        let mut output = ZipWriter::new(Cursor::new(Vec::new()));
+        for name in [
+            "org/glavo/janex/bootstrap/Bootstrap.class",
+            "org/glavo/janex/bootstrap/LaunchData.class",
+        ] {
+            let mut entry = source.by_name(name).map_err(std::io::Error::other)?;
+            output
+                .start_file(name, SimpleFileOptions::default())
+                .map_err(std::io::Error::other)?;
+            std::io::copy(&mut entry, &mut output)?;
+        }
+        output.finish().map_err(std::io::Error::other)?.into_inner()
+    };
+    if fs::read(&path).ok().as_deref() != Some(bytes.as_slice()) {
+        let mut temporary = tempfile::NamedTempFile::new_in(&directory)?;
+        temporary.write_all(&bytes)?;
+        if let Err(error) = temporary.persist(&path)
+            && fs::read(&path).ok().as_deref() != Some(bytes.as_slice())
+        {
+            return Err(error.error.into());
+        }
+    }
     Ok(path)
 }
 

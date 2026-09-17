@@ -19,11 +19,12 @@ import static org.glavo.janex.reader.internal.Input.*;
 
 /// Reads a Janex 0.1 snapshot independently of the native Host.
 ///
-/// This reader verifies every recorded container checksum before interpreting resources. Signed
+/// Constructors verify every recorded container checksum before interpreting resources. Signed
 /// packages require a caller-supplied authentication policy and complete secure content coverage.
 /// Use [ContainerReader] to inspect a container without preparing it for execution. Ordinary resource payloads
 /// remain in the snapshot; dictionary-backed sources are decoded during launch preparation.
 /// The caller must keep the snapshot unchanged until the launched application exits.
+/// The static prepareResources entry point instead consumes snapshots already verified by its caller.
 /// Instances are not thread-safe. Launch selection is single-use; closure is idempotent.
 public final class JanexReader implements Closeable {
     /// Owned container over the caller's immutable snapshot.
@@ -32,7 +33,7 @@ public final class JanexReader implements Closeable {
     private final ReadLimits limits;
     /// Snapshot path encoded into the private resource index.
     private final Path path;
-    /// Result of the one complete container-integrity scan performed during construction.
+    /// Complete integrity scan result; null only for internally prepared snapshots.
     private final ContainerReader.IntegrityReport integrity;
     /// Caller-supplied Zstandard decoder, shared with the runtime resource reader.
     private final BlobDecoder decoder;
@@ -52,6 +53,12 @@ public final class JanexReader implements Closeable {
     private final Map<List<Long>, Integer> dataPoolIds = new HashMap<List<Long>, Integer>();
     /// Aggregate logical resource size selected for this launch.
     private long logicalBytes;
+    /// Optional Host-selected condition context, independent of overridable JVM properties.
+    private String[] context;
+    /// Aggregate expanded resource allowance; ordinary readers use their byte limit.
+    private long logicalLimit;
+    /// Whether prepared resources retain their root directory for filesystem lookup.
+    private boolean includeRoot;
     /// Whether launch selection has started, including a failed attempt.
     private boolean selected;
     /// Whether the snapshot handle has been closed.
@@ -140,6 +147,7 @@ public final class JanexReader implements Closeable {
     public JanexReader(Path path, BlobDecoder decoder, DependencyResolver resolver,
                        AuthenticationPolicy policy, ReadLimits limits) throws IOException {
         this.limits = Objects.requireNonNull(limits);
+        this.logicalLimit = limits.maxBytes();
         this.path = path;
         this.decoder = Objects.requireNonNull(decoder);
         this.resolver = resolver;
@@ -163,6 +171,78 @@ public final class JanexReader implements Closeable {
                 failure.addSuppressed(close);
             }
             throw failure;
+        }
+    }
+
+    /// Opens only pool directories from a snapshot already verified by the launch preparer.
+    private JanexReader(Path path, ReadLimits limits, String[] context, long logicalLimit) throws IOException {
+        this.path = Objects.requireNonNull(path);
+        this.limits = Objects.requireNonNull(limits);
+        this.context = context == null ? null : context.clone();
+        this.logicalLimit = logicalLimit;
+        this.decoder = JanexReader::decode;
+        this.resolver = null;
+        this.integrity = null;
+        this.includeRoot = true;
+        container = new ContainerReader(path, -1, limits);
+        try {
+            for (ContainerReader.Section section : container.sections()) {
+                if (section.type() == 0x4c4f4f50424f4c42L) {
+                    poolSections.put(section.id(), section);
+                }
+            }
+        } catch (Throwable failure) {
+            try {
+                container.close();
+            } catch (IOException close) {
+                failure.addSuppressed(close);
+            }
+            throw failure;
+        }
+    }
+
+    /// Prepares selected resources from caller-verified, unchanged snapshots.
+    ///
+    /// This method does not authenticate publishers or repeat the container-integrity scan.
+    /// The caller must verify the package and each external JAR under its launch policy before
+    /// calling, and retain the same snapshots unchanged while their resources are used.
+    /// Format parsing and decoding limits still apply. No application code is executed.
+    ///
+    /// @param path verified container snapshot
+    /// @param requests selected roots in lookup order
+    /// @param requirements module names and optional exact versions (empty means unconstrained)
+    /// @param context OS, architecture, invocation, Java version, and vendor; null uses this JVM
+    /// @param limits bounds for individual values and collections
+    /// @param logicalLimit nonnegative aggregate expanded resource byte allowance
+    /// @return immutable resource descriptions independent of the closed preparation reader
+    /// @throws IOException if a snapshot, resource description, or resource limit is invalid
+    public static ResourcePlan prepareResources(Path path, List<ResourceRequest> requests,
+            Map<String, String> requirements, String[] context, ReadLimits limits, long logicalLimit) throws IOException {
+        require(context == null || context.length == 5, "Invalid runtime context");
+        require(logicalLimit >= 0, "Invalid logical resource limit");
+        limits.elements(requests.size());
+        try (JanexReader reader = new JanexReader(path, limits, context, logicalLimit)) {
+            List<Root> roots = new ArrayList<Root>();
+            for (ResourceRequest request : requests) {
+                if (request.path == null) {
+                    roots.add(reader.root(reader.reference(request.pool, request.index), request.module, false));
+                } else {
+                    byte[] bytes;
+                    try (InputStream input = java.nio.file.Files.newInputStream(request.path);
+                         ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+                        byte[] buffer = new byte[8192];
+                        int count;
+                        while ((count = input.read(buffer)) != -1) {
+                            limits.bytes((long) output.size() + count);
+                            output.write(buffer, 0, count);
+                        }
+                        bytes = output.toByteArray();
+                    }
+                    roots.add(reader.jarRoot(new Dependency(request.jarName, bytes), request.module, false));
+                }
+            }
+            reader.prepareDictionaries();
+            return reader.resources(roots, requirements);
         }
     }
 
@@ -696,7 +776,12 @@ public final class JanexReader implements Closeable {
 
     /// Reads and merges all layers, validating unmatched layers as well.
     private Root root(Object reference, boolean module, boolean agent) throws IOException {
-        Input input = input(bytes(reference(reference)));
+        return root(reference(reference), module, agent);
+    }
+
+    /// Reads a root whose source identity has already been resolved.
+    private Root root(int source, boolean module, boolean agent) throws IOException {
+        Input input = input(bytes(source));
         int pool = dataPool(input.uint(), input.uint());
         Map<Object, Object> metadata = input.map();
         for (Object key : metadata.keySet()) {
@@ -709,7 +794,7 @@ public final class JanexReader implements Closeable {
         tree.put("", new Node());
         int layers = limits.elements(input.uint());
         for (int layer = 0; layer < layers; layer++) {
-            boolean matches = Conditions.matches(input.map());
+            boolean matches = Conditions.matches(input.map(), context);
             Map<String, Node> records = new LinkedHashMap<String, Node>();
             Set<String> tombstones = new LinkedHashSet<String>();
             Set<String> directories = new HashSet<String>();
@@ -968,13 +1053,13 @@ public final class JanexReader implements Closeable {
                 node = manifest;
             }
         }
-        if (!alias.isEmpty()) {
+        if (!alias.isEmpty() || includeRoot) {
             require(output.put(alias, node) == null, "Duplicate expanded resource");
             limits.elements(output.size());
         }
         if (node.source >= 0) {
             logicalBytes += node.transforms.length == 0 ? sources.get(node.source).length : node.transforms[node.transforms.length - 1][0];
-            limits.bytes(logicalBytes);
+            require(logicalBytes <= logicalLimit, "Logical resource byte limit exceeded");
             return;
         }
         limits.depth(active.size());
@@ -1019,6 +1104,10 @@ public final class JanexReader implements Closeable {
         public final Map<String, String> moduleRequirements = new LinkedHashMap<String, String>();
         /// Selected resources referencing the snapshot, independent of launcher serialization.
         public ResourcePlan resources;
+        /// Selected roots for preparation in a child JVM; populated only by prepareHandoff.
+        public final List<ResourceRequest> requests = new ArrayList<ResourceRequest>();
+        /// Remaining logical byte allowance after parent-side agent preparation.
+        public long resourceAllowance;
         /// Selected agent roots in option order, or null when absent.
         public ResourcePlan agentResources;
         /// One unsplit option for each root in agentResources; an empty string omits the option.
@@ -1048,6 +1137,23 @@ public final class JanexReader implements Closeable {
     /// @return owned launch data for the current Java runtime
     /// @throws IOException if closed, already selected, or selection, parsing, or a launch requirement fails
     public Launch launch(String application) throws IOException {
+        return launch(application, null);
+    }
+
+    /// Selects startup configuration and prepares agents and module inventory for a child JVM.
+    /// Classpath roots remain unexpanded. External JARs are acquired under this reader's policy
+    /// and copied into the supplied private directory; the caller owns their cleanup, including
+    /// files left by failure. This consumes the same single-use selection as launch.
+    /// @param application explicit application ID, or null to require exactly one application
+    /// @param directory existing private directory retained unchanged until the child exits
+    /// @return selected startup data, module resources, and compact child resource requests
+    /// @throws IOException if selection, acquisition, preparation, or writing a snapshot fails
+    public Launch prepareHandoff(String application, Path directory) throws IOException {
+        return launch(application, Objects.requireNonNull(directory));
+    }
+
+    /// Selects one application, optionally leaving classpath resource expansion to a child.
+    private Launch launch(String application, Path directory) throws IOException {
         require(!closed && !selected, "Janex reader is closed or already selected");
         selected = true;
         Application selected = null;
@@ -1068,14 +1174,22 @@ public final class JanexReader implements Closeable {
                 "Modules require Java 9 or later");
         List<Root> roots = new ArrayList<Root>();
         for (Object entry : launch.classPath) {
-            roots.add(pathEntry(entry, false));
+            if (directory == null) roots.add(pathEntry(entry, false));
+            else launch.requests.add(request(entry, false, directory, launch.requests.size()));
         }
         for (Object entry : launch.modulePath) {
             Map<Object, Object> reference = map(entry);
             ModuleRequirement requirement = number(get(reference, 0)) == 1
                     ? ModuleRequirement.parse(text(get(reference, 1)), true) : null;
             if (requirement == null) {
-                roots.add(pathEntry(entry, true));
+                if (directory == null) {
+                    roots.add(pathEntry(entry, true));
+                } else {
+                    ResourceRequest request = request(entry, true, directory, launch.requests.size());
+                    launch.requests.add(request);
+                    roots.add(request.path == null ? root(reference(request.pool, request.index), true, false)
+                            : jarRoot(new Dependency(request.jarName, java.nio.file.Files.readAllBytes(request.path)), true, false));
+                }
             } else {
                 String previous = launch.moduleRequirements.get(requirement.name());
                 require(previous == null || previous.isEmpty() || requirement.version().isEmpty()
@@ -1085,6 +1199,7 @@ public final class JanexReader implements Closeable {
                 }
             }
         }
+        long beforeAgents = logicalBytes;
         List<Root> agents = new ArrayList<Root>();
         for (Object value : launch.agents) {
             Map<Object, Object> agent = integers(map(value));
@@ -1102,6 +1217,34 @@ public final class JanexReader implements Closeable {
             require(option.indexOf(0) < 0, "Java agent option contains a NUL character");
             launch.agentOptions.add(option);
         }
+        launch.resourceAllowance = logicalLimit - (logicalBytes - beforeAgents);
+        prepareDictionaries();
+        launch.resources = resources(roots, launch.moduleRequirements);
+        if (!agents.isEmpty()) {
+            launch.agentResources = resources(agents, Collections.emptyMap());
+        }
+        return launch;
+    }
+
+    /// Resolves a selected reference while retaining verified external bytes in a private snapshot.
+    private ResourceRequest request(Object value, boolean module, Path directory, int index) throws IOException {
+        Map<Object, Object> entry = map(value);
+        if (number(get(entry, 0)) == 0) {
+            List<Object> reference = list(get(entry, 1));
+            return new ResourceRequest(module, number(reference.get(0)), number(reference.get(1)));
+        }
+        require(resolver != null, "External dependency requires a resolver");
+        String uri = text(get(entry, 1));
+        byte[] checksum = has(entry, 2) ? binary(get(entry, 2)) : null;
+        Dependency dependency = Objects.requireNonNull(resolver.resolve(uri, checksum));
+        limits.bytes(dependency.bytes.length);
+        Path file = directory.resolve("dependency-" + index + ".jar");
+        java.nio.file.Files.write(file, dependency.bytes);
+        return new ResourceRequest(module, file, dependency.jarName);
+    }
+
+    /// Resolves dictionary-backed sources before publishing their identities.
+    private void prepareDictionaries() throws IOException {
         // Resolve dictionary-backed data before publishing selected resource descriptions.
         // Resolving dictionaries can register additional sources, so finish before writing the count.
         long inlineLength = 0;
@@ -1115,11 +1258,6 @@ public final class JanexReader implements Closeable {
                 source.inline = bytes(i);
             }
         }
-        launch.resources = resources(roots, launch.moduleRequirements);
-        if (!agents.isEmpty()) {
-            launch.agentResources = resources(agents, Collections.emptyMap());
-        }
-        return launch;
     }
 
     /// Describes selected roots with compact source and data-pool references.
@@ -1179,7 +1317,7 @@ public final class JanexReader implements Closeable {
                     times[i] = has(node.metadata, i + 2) ? (Instant) get(node.metadata, i + 2) : null;
                 }
                 Integer permissions = has(node.metadata, 5) ? (int) number(get(node.metadata, 5)) : null;
-                files.put(node.source == -1 ? entry.getKey() + "/" : entry.getKey(),
+                files.put(node.source == -1 && !entry.getKey().isEmpty() ? entry.getKey() + "/" : entry.getKey(),
                         new ResourcePlan.File(node.source < 0 ? node.source : sourceIds.get(node.source), transforms, times, permissions));
             }
             selectedRoots.add(new ResourcePlan.Root(root.name, root.module, files));
@@ -1274,7 +1412,7 @@ public final class JanexReader implements Closeable {
         validation.put("", new Node());
         for (Map.Entry<Integer, Map<String, Node>> layer : layers.entrySet()) {
             mergeJarLayer(validation, layer.getValue());
-            if (layer.getKey() <= feature()) {
+            if (layer.getKey() <= (context == null ? feature() : Conditions.feature(context[3]))) {
                 mergeJarLayer(tree, layer.getValue());
             }
         }

@@ -394,6 +394,9 @@ agent options use the native launcher in both modes. A custom `java.system.class
 Conditions, overlays, and resource layers use the selected runtime and invocation `run`.
 Bootstrap entry points load classpath and module resources on demand from the verified snapshot,
 using a Janex system class loader. Resource URLs support `Paths.get(uri)` and read-only NIO access.
+The application JVM prepares the resource index from selected root references before agents or main
+run. The fixed bootstrap JAR is reused from `JANEX_HOME/cache/bootstrap`; launch data is passed through
+a private JVM property, with environment chunks for larger payloads. Native process limits still apply.
 On Java 9+, application modules occupy a child of the native boot layer; module access options are
 applied to that layer through the JDK module-access bridge. Agents and direct launches use
 temporary JARs. Original filenames are retained for automatic-module naming. Module requirements use

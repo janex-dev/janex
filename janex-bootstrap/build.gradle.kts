@@ -29,7 +29,7 @@ tasks.withType<JavaCompile>().configureEach {
 }
 
 val java9 = sourceSets.create("java9") {
-    compileClasspath += sourceSets.main.get().output
+    compileClasspath += sourceSets.main.get().output + sourceSets.main.get().compileClasspath
 }
 tasks.named<JavaCompile>(java9.compileJavaTaskName) { options.release = 9 }
 

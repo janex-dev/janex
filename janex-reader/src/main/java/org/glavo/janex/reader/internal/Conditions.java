@@ -18,16 +18,22 @@ public final class Conditions {
 
     /// Validates a condition and returns whether it matches this runtime.
     public static boolean matches(Map<Object, Object> condition) throws IOException {
-        return evaluate(condition, true);
+        return matches(condition, null);
+    }
+
+    /// Evaluates a condition using OS, architecture, invocation, Java version, and vendor overrides.
+    /// A null context uses the current JVM and the run invocation channel.
+    public static boolean matches(Map<Object, Object> condition, String[] context) throws IOException {
+        return evaluate(condition, true, context);
     }
 
     /// Validates all known condition fields without consulting the current process.
     public static void validate(Map<Object, Object> condition) throws IOException {
-        evaluate(condition, false);
+        evaluate(condition, false, null);
     }
 
     /// Validates a condition and optionally compares it with current process properties.
-    private static boolean evaluate(Map<Object, Object> condition, boolean current) throws IOException {
+    private static boolean evaluate(Map<Object, Object> condition, boolean current, String[] context) throws IOException {
         integers(condition);
         require(!has(condition, 0) && !has(condition, 3), "Reserved condition key");
         String os = current ? System.getProperty("os.name") : "";
@@ -36,6 +42,14 @@ public final class Conditions {
         String arch = current ? System.getProperty("os.arch") : "";
         arch = arch.equals("amd64") || arch.equals("x86_64") ? "x86-64"
                 : arch.matches("i[3-6]86") ? "x86" : arch.equals("arm64") ? "aarch64" : arch;
+        String version = current ? System.getProperty("java.version") : "8";
+        String vendor = current ? System.getProperty("java.vendor") : "";
+        if (context != null) {
+            os = context[0];
+            arch = context[1];
+            version = context[3];
+            vendor = context[4];
+        }
         boolean result = true;
         if (has(condition, 1)) {
             result &= selector(get(condition, 1), os);
@@ -44,7 +58,7 @@ public final class Conditions {
             result &= selector(get(condition, 2), arch);
         }
         if (has(condition, 4)) {
-            result &= selector(get(condition, 4), "run");
+            result &= selector(get(condition, 4), context == null ? "run" : context[2]);
         }
         if (has(condition, 5)) {
             Map<Object, Object> runtime = integers(map(get(condition, 5)));
@@ -52,10 +66,10 @@ public final class Conditions {
             Map<Object, Object> requirements = integers(map(get(runtime, 1)));
             if (type.equals("janex.java")) {
                 if (has(requirements, 0)) {
-                    result &= range(nonempty(get(requirements, 0)), current ? System.getProperty("java.version") : "8");
+                    result &= range(nonempty(get(requirements, 0)), version);
                 }
                 if (has(requirements, 1)) {
-                    result &= nonempty(get(requirements, 1)).equals(current ? System.getProperty("java.vendor") : "");
+                    result &= nonempty(get(requirements, 1)).equals(vendor);
                 }
             } else {
                 result = false;
@@ -87,7 +101,12 @@ public final class Conditions {
 
     /// Returns the current runtime's feature version.
     public static int feature() throws IOException {
-        return new Version(System.getProperty("java.version"), false).numbers[0];
+        return feature(System.getProperty("java.version"));
+    }
+
+    /// Returns the feature version of a caller-selected Java runtime version.
+    public static int feature(String version) throws IOException {
+        return new Version(version, false).numbers[0];
     }
 
     /// Validates a canonical VERS timeline and tests one Java version.
@@ -288,4 +307,3 @@ public final class Conditions {
         }
     }
 }
-

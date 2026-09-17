@@ -54,7 +54,7 @@ pub struct LaunchRequest {
 }
 
 impl LaunchRequest {
-    /// Builds native arguments and writes required private resources into an existing directory.
+    /// Builds native arguments and locates the reusable bootstrap cache when needed.
     ///
     /// The caller must supply a private directory and retain it until the child exits.
     /// Failure may leave partial resources there. This does not start Java or authenticate input.
@@ -68,11 +68,11 @@ impl LaunchRequest {
         self.prepare_with_resources(runtime, directory, limits, None)
     }
 
-    /// Prepares a launch with an optional private classpath and module resource index.
+    /// Prepares a launch with optional private classpath and module root requests.
     ///
-    /// `resources` must be Host-generated launch data matching the embedded Java bootstrap.
-    /// It requires bootstrap mode. The caller must retain the referenced private snapshot until
-    /// Java exits. The application JVM initializes the indexed module graph before invoking Java
+    /// `resources` must contain Host-selected root requests matching the embedded Java bootstrap.
+    /// It requires bootstrap mode. The caller must retain the referenced verified snapshots until
+    /// Java exits. The application JVM prepares resources and its module graph before invoking Java
     /// agent premain methods or main. Include system-module roots required by indexed descriptors in
     /// `jvm_options`; [`crate::modules::system_roots`] computes them from a selected inventory.
     /// Preparation does not start Java. Other behavior matches [`Self::prepare`].
@@ -153,7 +153,7 @@ impl LaunchRequest {
         if (self.entry_point.main_module.is_none() || resources.is_some())
             && let Some(bridge) = &bridge
         {
-            class_path.insert(0, bridge.clone());
+            class_path.insert(0, bridge.0.clone());
         }
         if class_path.is_empty() {
             let empty = directory.join("empty-classpath");
@@ -167,13 +167,16 @@ impl LaunchRequest {
             arguments.push(crate::runtime::join_path(module_path)?);
         }
         arguments.extend(agents);
+        if let Some((_, description)) = &bridge {
+            arguments.push(description.into());
+        }
         if let Some(module) = &self.entry_point.main_module
             && resources.is_none()
         {
             let entry = if let Some(bridge) = &bridge {
                 arguments.push("--patch-module".into());
                 let mut patch = OsString::from(format!("{module}="));
-                patch.push(bridge);
+                patch.push(&bridge.0);
                 arguments.push(patch);
                 format!("{module}/{}", bootstrap::MAIN_CLASS)
             } else {

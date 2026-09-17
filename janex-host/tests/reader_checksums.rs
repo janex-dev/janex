@@ -187,7 +187,9 @@ fn java_and_rust_accept_recorded_algorithms_and_reject_bad_page_checksums() {
         );
         if algorithm.is_some() {
             fs::write(&target, recode(&source, algorithm, true)).unwrap();
-            assert!(prepare(&run).is_err());
+            if let Ok(plan) = prepare(&run) {
+                assert!(!plan.command().output().unwrap().status.success());
+            }
             let result = Command::new("java")
                 .arg("-jar")
                 .arg(&target)

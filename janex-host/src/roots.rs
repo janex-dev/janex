@@ -45,10 +45,14 @@ impl RootKey {
 pub(crate) struct Roots {
     /// Roots indexed by complete reference identity.
     pub(crate) entries: BTreeMap<RootKey, ValidatedRoot>,
+    /// Acquired, verified external archives, imported only when native preparation needs a tree.
+    pub(crate) archives: BTreeMap<RootKey, dependency::Dependency>,
     /// Aggregate imported bytes, including all multi-release layers, retained in memory.
     imported_bytes: u64,
     /// Aggregate raw JAR bytes fetched or read from cache for this launch.
     acquired_bytes: u64,
+    /// Aggregate external import allowance shared across candidate runtimes.
+    acquired_limit: u64,
 }
 
 impl Roots {
@@ -57,16 +61,17 @@ impl Roots {
         &mut self,
         entries: impl Iterator<Item = &'a PathEntry>,
         options: &dependency::DependencyOptions,
-        mut import: ImportOptions,
+        import: ImportOptions,
         require_secure: bool,
     ) -> Result<()> {
         let maximum = import.max_total_bytes;
+        self.acquired_limit = maximum;
         for entry in entries {
             let PathEntry::External { uri, checksum } = entry else {
                 continue;
             };
             if entry.module_requirement().is_some()
-                || self.entries.contains_key(&RootKey::of(entry))
+                || self.archives.contains_key(&RootKey::of(entry))
             {
                 continue;
             }
@@ -77,24 +82,7 @@ impl Roots {
             let resolved =
                 dependency::resolve(uri, checksum.as_ref(), &acquisition, require_secure)?;
             self.acquired_bytes += resolved.bytes.len() as u64;
-            import.max_total_bytes = maximum.saturating_sub(self.imported_bytes);
-            let root = import_jar(&resolved.bytes, &resolved.jar_name, import)?;
-            for layer in &root.layers {
-                for directory in &layer.directories {
-                    for entry in &directory.entries {
-                        if let DirectoryEntry::File { content, .. } = entry
-                            && let Source::Inline(bytes) = &content.source
-                        {
-                            self.imported_bytes += bytes.len() as u64;
-                        }
-                    }
-                }
-            }
-            // Imported files are inline and untransformed; this in-memory root never dereferences
-            // or serializes its placeholder data-pool reference.
-            let root = root.into_resource_root(BlobRef { pool: 0, index: 0 })?;
-            self.entries
-                .insert(RootKey::of(entry), ValidatedRoot::new(root, import.limits)?);
+            self.archives.insert(RootKey::of(entry), resolved);
         }
         Ok(())
     }
@@ -107,12 +95,39 @@ impl Roots {
     ) -> Result<&ValidatedRoot> {
         let key = RootKey::of(entry);
         if !self.entries.contains_key(&key) {
-            let PathEntry::Local(reference) = entry else {
-                return Err(invalid("external dependency has not been acquired"));
+            let root = match entry {
+                PathEntry::Local(reference) => {
+                    let bytes = blobs.resolve(*reference)?;
+                    ValidatedRoot::decode(&bytes, blobs)?
+                }
+                PathEntry::External { .. } => {
+                    let archive = self
+                        .archives
+                        .get(&key)
+                        .ok_or_else(|| invalid("external dependency has not been acquired"))?;
+                    let import = ImportOptions {
+                        limits: blobs.reader().limits(),
+                        max_total_bytes: self.acquired_limit.saturating_sub(self.imported_bytes),
+                    };
+                    let root = import_jar(&archive.bytes, &archive.jar_name, import)?;
+                    for layer in &root.layers {
+                        for directory in &layer.directories {
+                            for entry in &directory.entries {
+                                if let DirectoryEntry::File { content, .. } = entry
+                                    && let Source::Inline(bytes) = &content.source
+                                {
+                                    self.imported_bytes += bytes.len() as u64;
+                                }
+                            }
+                        }
+                    }
+                    ValidatedRoot::new(
+                        root.into_resource_root(BlobRef { pool: 0, index: 0 })?,
+                        import.limits,
+                    )?
+                }
             };
-            let bytes = blobs.resolve(*reference)?;
-            self.entries
-                .insert(key.clone(), ValidatedRoot::decode(&bytes, blobs)?);
+            self.entries.insert(key.clone(), root);
         }
         Ok(&self.entries[&key])
     }

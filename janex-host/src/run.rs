@@ -93,7 +93,7 @@ impl RunOptions {
     }
 }
 
-/// A selected Java invocation owning its private snapshot, index JAR, and materialized paths.
+/// A selected Java invocation owning its private snapshots, launch data, and materialized paths.
 ///
 /// Preparation verifies one owned input snapshot. Later changes to the source file do not
 /// affect this plan. It is not a persistent verification cache or a publisher trust claim.
@@ -105,6 +105,8 @@ pub struct ExecutionPlan {
     launch_mode: LaunchMode,
     /// Complete ordered process arguments, without shell encoding.
     arguments: Vec<OsString>,
+    /// Private environment chunks used only when launch data exceeds the compact argument budget.
+    environment: Vec<(OsString, OsString)>,
     /// Full-snapshot checksum result retained for inspection.
     integrity: IntegrityReport,
     /// Publisher authentication outcome for the immutable snapshot.
@@ -130,7 +132,7 @@ impl ExecutionPlan {
 
     /// Returns the actual Java process arguments in order.
     ///
-    /// Bootstrap launches carry program arguments in the temporary JAR instead of this vector.
+    /// Bootstrap launches carry encoded program arguments in a private property or environment chunks.
     pub fn arguments(&self) -> &[OsString] {
         &self.arguments
     }
@@ -158,6 +160,7 @@ impl ExecutionPlan {
         let mut command = Command::new(&self.runtime.executable);
         command
             .args(&self.arguments)
+            .envs(self.environment.iter().map(|(key, value)| (key, value)))
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit());
@@ -187,8 +190,8 @@ impl ExecutionPlan {
 /// Explicit runtime selection disables fallback. None and Checksum inputs require
 /// `allow_unsigned`; signed inputs require signature support and never fall back to that policy.
 /// No application main method or descriptor-supplied agent runs during preparation.
-/// Module identities and requirements are checked here; graph resolution and module access
-/// validation occur in the launched JVM, whose initialization failures become child exit statuses.
+/// Module identities and requirements are checked here; bootstrap resource expansion, graph resolution, and module access
+/// validation occur in the launched JVM before application agents or main; failures become child exit statuses.
 /// Dependency acquisition follows `options.dependencies` after authentication and condition evaluation.
 pub fn prepare(options: &RunOptions) -> Result<ExecutionPlan> {
     prepare_snapshot(
@@ -342,39 +345,23 @@ fn prepare_runtime(
         &requirements,
         launch.entry_point.main_module.as_deref(),
     )?;
-    let resources = if options.launch_mode == LaunchMode::Bootstrap {
-        Some(crate::bootstrap::prepare(
-            &launch.class_path,
-            &launch.module_path,
-            &context,
-            blobs,
-            roots,
-            directory.path(),
-            options.max_materialized_bytes,
-        )?)
-    } else {
-        None
-    };
     let mut materializer = Paths {
         directory: directory.path(),
         context: &context,
         roots,
         blobs,
         paths: BTreeMap::new(),
-        remaining_bytes: options.max_materialized_bytes
-            - resources
-                .as_ref()
-                .map_or(0, |resources| resources.logical_bytes),
+        remaining_bytes: options.max_materialized_bytes,
     };
     let class_path = launch
         .class_path
         .iter()
-        .filter(|_| resources.is_none())
+        .filter(|_| options.launch_mode == LaunchMode::Direct)
         .map(|entry| materializer.local(entry))
         .collect::<Result<Vec<_>>>()?;
     let mut module_path = Vec::new();
     for entry in &launch.module_path {
-        if entry.module_requirement().is_none() && resources.is_none() {
+        if entry.module_requirement().is_none() && options.launch_mode == LaunchMode::Direct {
             module_path.push(materializer.local(entry)?);
         }
     }
@@ -397,6 +384,21 @@ fn prepare_runtime(
         }
         agents.push(argument);
     }
+    let remaining_bytes = materializer.remaining_bytes;
+    drop(materializer);
+    let resources = if options.launch_mode == LaunchMode::Bootstrap {
+        Some(crate::bootstrap::prepare(
+            &launch.class_path,
+            &launch.module_path,
+            &context,
+            blobs,
+            roots,
+            directory.path(),
+            remaining_bytes,
+        )?)
+    } else {
+        None
+    };
     options
         .limits
         .elements(launch.arguments.len() as u64 + options.arguments.len() as u64)?;
@@ -413,7 +415,7 @@ fn prepare_runtime(
             system_roots.into_iter().collect::<Vec<_>>().join(",")
         ));
     }
-    let arguments = LaunchRequest {
+    let mut arguments = LaunchRequest {
         entry_point: EntryPoint {
             main_class: launch.entry_point.main_class.clone(),
             main_module: launch.entry_point.main_module.clone(),
@@ -433,7 +435,31 @@ fn prepare_runtime(
             .as_ref()
             .map(|resources| resources.data.as_slice()),
     )?;
+    let mut environment = Vec::new();
+    if options.launch_mode == LaunchMode::Bootstrap
+        && let Some(argument) = arguments.iter_mut().rev().find(|argument| {
+            argument
+                .to_str()
+                .is_some_and(|value| value.starts_with("-Djanex.launch="))
+        })
+    {
+        let value = argument
+            .to_str()
+            .expect("private launch property is ASCII")
+            .strip_prefix("-Djanex.launch=")
+            .expect("matched launch property");
+        if value.len() > 8_000 {
+            for (index, chunk) in value.as_bytes().chunks(8_000).enumerate() {
+                environment.push((
+                    format!("JANEX_LAUNCH_{index}").into(),
+                    std::str::from_utf8(chunk).expect("Base64 is ASCII").into(),
+                ));
+            }
+            *argument = format!("-Djanex.launch=env:{}", environment.len()).into();
+        }
+    }
     Ok(ExecutionPlan {
+        environment,
         runtime,
         launch_mode: options.launch_mode,
         arguments,

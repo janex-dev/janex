@@ -9,6 +9,7 @@ import java.time.Instant;
 import java.util.*;
 
 import org.glavo.janex.reader.ReadLimits;
+import org.glavo.janex.reader.ResourcePlan;
 import org.glavo.janex.reader.DataPool;
 import org.glavo.janex.reader.internal.codec.ClassFiles;
 import org.glavo.janex.reader.internal.codec.ZstandardFrames;
@@ -106,6 +107,31 @@ public final class ResourceIndex implements Closeable {
         }
     }
 
+    /// Opens an immutable resource plan directly, without serializing an intermediate index.
+    /// The snapshot is owned by this index; plan arrays are copied and pools remain shared.
+    /// Construction failure closes the opened snapshot.
+    /// @param plan validated resources over an unchanged, caller-owned snapshot file
+    /// @throws IOException if the snapshot cannot be opened
+    public ResourceIndex(ResourcePlan plan) throws IOException {
+        maxBytes = plan.limits().maxBytes();
+        maxElements = plan.limits().maxElements();
+        cacheLimit = Math.min(maxBytes, 64L * 1024 * 1024);
+        snapshot = new RandomAccessFile(plan.snapshot().toFile(), "r");
+        try {
+            snapshotLength = snapshot.length();
+            sources = new Source[plan.sources().size()];
+            for (int i = 0; i < sources.length; i++) sources[i] = new Source(plan.sources().get(i));
+            pools = plan.pools();
+            requirements = plan.requirements();
+            List<Root> result = new ArrayList<Root>();
+            for (ResourcePlan.Root root : plan.roots()) result.add(new Root(root));
+            roots = Collections.unmodifiableList(result);
+        } catch (Throwable failure) {
+            try { snapshot.close(); } catch (IOException close) { failure.addSuppressed(close); }
+            throw failure;
+        }
+    }
+
     /// Returns the immutable root list in launch order; entries share this index's lifetime.
     public List<Root> roots() {
         return roots;
@@ -166,6 +192,19 @@ public final class ResourceIndex implements Closeable {
         final int[][] extents;
         /// Final decoded byte length.
         final int length;
+
+        /// Copies a validated source description without an intermediate wire representation.
+        Source(ResourcePlan.Source source) throws IOException {
+            inline = source.inline();
+            offset = source.offset();
+            stored = source.storedLength();
+            filters = source.filters();
+            extents = inline == null && offset < 0 ? source.extents() : null;
+            long total = 0;
+            if (extents != null) for (int[] extent : extents) total += extent[2];
+            length = inline != null ? inline.length : extents != null ? size(total)
+                    : filters.length == 0 ? stored : filters[filters.length - 1];
+        }
 
         /// Parses a source, checking snapshot bounds and strictly earlier extent references.
         Source(DataInputStream input, int index) throws IOException {
@@ -274,6 +313,17 @@ public final class ResourceIndex implements Closeable {
         /// Resources in Host traversal order, including explicit directories.
         final Map<String, Resource> files;
 
+        /// Builds lookup descriptors from a validated resource plan.
+        Root(ResourcePlan.Root root) {
+            name = root.name();
+            module = root.module();
+            Map<String, Resource> entries = new LinkedHashMap<String, Resource>();
+            for (Map.Entry<String, ResourcePlan.File> file : root.files().entrySet()) {
+                entries.put(file.getKey(), new Resource(file.getValue()));
+            }
+            files = Collections.unmodifiableMap(entries);
+        }
+
         /// Reads one root and rejects duplicate names.
         Root(DataInputStream input) throws IOException {
             name = text(input);
@@ -350,6 +400,16 @@ public final class ResourceIndex implements Closeable {
         /// Reading fails with IOException if this index is closed or decoding fails.
         public byte[] readBytes() throws IOException {
             return read().clone();
+        }
+
+        /// Copies an immutable file descriptor and derives its logical length.
+        Resource(ResourcePlan.File file) {
+            id = file.source();
+            transforms = file.transforms();
+            length = id == -1 ? 0 : transforms.length == 0 ? sources[id].length : transforms[transforms.length - 1][0];
+            Instant[] values = file.times();
+            if (values != null) System.arraycopy(values, 0, times, 0, 3);
+            permissions = file.permissions() == null ? -1 : file.permissions();
         }
 
         /// Reads and validates a file descriptor.

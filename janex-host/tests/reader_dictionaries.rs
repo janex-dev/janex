@@ -404,15 +404,11 @@ public class Main {
             let mut options = RunOptions::new(&target);
             options.allow_unsigned = true;
             let prepared = prepare(&options);
-            assert_eq!(
-                prepared.is_ok(),
-                mode == 0,
-                "{name}/{mode}: {:?}",
-                prepared.as_ref().err()
-            );
-            if let Ok(prepared) = prepared {
-                assert!(prepared.execute().unwrap().success());
-            }
+            let success = match prepared {
+                Ok(prepared) => prepared.command().output().unwrap().status.success(),
+                Err(_) => false,
+            };
+            assert_eq!(success, mode == 0, "{name}/{mode}");
             for java in runtimes() {
                 let result = Command::new(java)
                     .arg("-jar")

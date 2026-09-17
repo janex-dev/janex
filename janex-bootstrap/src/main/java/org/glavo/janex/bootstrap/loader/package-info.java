@@ -1,6 +1,5 @@
 // Copyright (c) 2026 Glavo
 // SPDX-License-Identifier: MPL-2.0
 
-/// Loads selected resources and modules and encodes the private Host/bootstrap resource index.
+/// Prepares selected resource roots and loads application classes, resources, and modules.
 package org.glavo.janex.bootstrap.loader;
-

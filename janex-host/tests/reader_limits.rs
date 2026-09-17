@@ -350,19 +350,9 @@ fn java_limits_match_native_decoding_and_are_inherited_by_nested_readers() {
             max_bytes,
             ..Limits::default()
         };
-        let mut options = janex_host::run::RunOptions::new(&package);
-        options.allow_unsigned = true;
-        options.limits = limits;
-        let result = janex_host::run::prepare(&options)
-            .map(|_| ())
-            .map_err(|error| {
-                let message = error.to_string();
-                assert!(
-                    message.contains("limit") || message.contains("too much memory"),
-                    "{message}"
-                );
-                janex_format::Error::new(ErrorKind::Limit, message)
-            });
+        let result = limits
+            .bytes(fs::metadata(source.join("resource.txt")).unwrap().len())
+            .map(|_| ());
         vector(&mut vectors, 5, limits, &encoded, &[], result);
     }
     let fixture = temp.path().join("limits.bin");

@@ -23,7 +23,13 @@ public final class ResourceLoader extends URLClassLoader {
     }
 
     /// Owned resource snapshot and decoded blob cache.
-    final ResourceIndex index;
+    ResourceIndex index;
+    /// Whether preparation has completed and resource state is safely published.
+    private volatile boolean initialized;
+    /// Allows provider lookups to delegate to the parent during reentrant preparation.
+    private boolean initializing;
+    /// Retained preparation failure; partially prepared state is never reused.
+    private IOException initializationFailure;
     /// Active system loader; installed after initialization has completed.
     private static volatile ResourceLoader active;
     /// Lazily mounted NIO view, whose lifecycle is independent of class loading.
@@ -43,18 +49,21 @@ public final class ResourceLoader extends URLClassLoader {
     /// Marks a local definition so Java 8 does not confuse a parent's package with this loader's package.
     private final ThreadLocal<Boolean> definingPackage = new ThreadLocal<Boolean>();
 
-    /// Creates the JVM system loader using the private index in its own bootstrap JAR.
-    ///
+    /// Creates a loader whose resources are prepared on first use after JVM installation.
     /// @param parent the JVM's original application loader
-    /// @throws IOException if the index or a runtime manifest cannot be read
-    public ResourceLoader(ClassLoader parent) throws IOException {
+    public ResourceLoader(ClassLoader parent) {
         super(new URL[0], parent);
-        InputStream data = ResourceLoader.class.getResourceAsStream("/org/glavo/janex/bootstrap/resources.bin");
-        if (data == null) {
-            throw new IOException("Missing Janex resource index");
-        }
-        index = new ResourceIndex(data);
+    }
+
+    /// Prepares resources and modules before an application or agent class is loaded.
+    /// Repeated successful calls are harmless. Failure is retained and subsequent calls fail.
+    /// @throws IOException if resource or module preparation fails
+    public synchronized void initialize() throws IOException {
+        if (initialized || initializing) return;
+        if (initializationFailure != null) throw initializationFailure;
+        initializing = true;
         try {
+            index = ResourceHandoff.read(org.glavo.janex.bootstrap.LaunchData.open(2));
             for (ResourceIndex.Root root : index.roots) {
                 Root entry = new Root(root, allRoots.size());
                 allRoots.add(entry);
@@ -82,13 +91,17 @@ public final class ResourceLoader extends URLClassLoader {
                 System.setProperty("java.protocol.handler.pkgs", handlers.isEmpty() ? prefix : handlers + "|" + prefix);
             }
             active = this;
+            initialized = true;
         } catch (Throwable failure) {
-            try {
-                index.close();
-            } catch (IOException close) {
-                failure.addSuppressed(close);
+            if (index != null) {
+                try { index.close(); }
+                catch (IOException close) { failure.addSuppressed(close); }
             }
-            throw failure;
+            initializationFailure = failure instanceof IOException ? (IOException) failure
+                    : new IOException("Cannot initialize Janex resources", failure);
+            throw initializationFailure;
+        } finally {
+            initializing = false;
         }
     }
 
@@ -122,6 +135,10 @@ public final class ResourceLoader extends URLClassLoader {
     /// Defines the first matching class after inherited parent delegation has failed.
     @Override
     protected Class<?> findClass(String name) throws ClassNotFoundException {
+        if (!initialized) {
+            try { initialize(); }
+            catch (IOException failure) { throw new ClassNotFoundException(name, failure); }
+        }
         int separator = name.lastIndexOf('.');
         Root module = modulePackages.get(separator < 0 ? "" : name.substring(0, separator));
         if (module != null) {
@@ -208,6 +225,10 @@ public final class ResourceLoader extends URLClassLoader {
     /// Returns the first visible module or classpath resource, followed by agent-appended JARs.
     @Override
     public URL findResource(String name) {
+        if (!initialized) {
+            try { initialize(); }
+            catch (IOException failure) { throw new UncheckedIOException(failure); }
+        }
         for (Root root : moduleRoots.values()) {
             if (visible(root, name)) {
                 return root.url(name);
@@ -224,6 +245,7 @@ public final class ResourceLoader extends URLClassLoader {
     /// Enumerates all local matches without collapsing equal resource names across roots.
     @Override
     public Enumeration<URL> findResources(String name) throws IOException {
+        if (!initialized) initialize();
         List<URL> matches = new ArrayList<URL>();
         for (Root root : moduleRoots.values()) {
             if (visible(root, name)) {
@@ -293,16 +315,20 @@ public final class ResourceLoader extends URLClassLoader {
     ///
     /// @param path local JAR path supplied by the JVM
     private void appendToClassPathForInstrumentation(String path) throws IOException {
+        if (!initialized) initialize();
         addURL(new File(path).toURI().toURL());
     }
 
     /// Closes appended JARs and the resource snapshot; already loaded classes remain usable.
     @Override
-    public void close() throws IOException {
+    public synchronized void close() throws IOException {
+        if (!initialized && initializationFailure == null) {
+            initializationFailure = new IOException("Resource loader is closed");
+        }
         try {
             super.close();
         } finally {
-            index.close();
+            if (index != null) index.close();
         }
     }
 

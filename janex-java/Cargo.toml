@@ -10,6 +10,7 @@ description = "Java runtime discovery, manifests, and launch preparation"
 
 [dependencies]
 janex-platform.workspace = true
+base64 = "0.22"
 flate2 = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

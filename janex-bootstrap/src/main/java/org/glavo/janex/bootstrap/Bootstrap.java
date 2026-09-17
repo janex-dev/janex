@@ -16,7 +16,7 @@ import java.lang.reflect.Modifier;
 import java.util.Collections;
 import java.util.Optional;
 
-/// Loads a launch description from its own resource and invokes the application entry point.
+/// Reads a compact launch description and invokes the application entry point.
 ///
 /// The class targets Java 8. Module APIs are accessed only when the selected launch is modular.
 public final class Bootstrap {
@@ -26,14 +26,22 @@ public final class Bootstrap {
 
     /// Restores UTF-16 arguments and invokes the main method on the current thread.
     ///
-    /// @param ignored no process arguments are needed; launch data comes from `launch.bin`
+    /// @param ignored no process arguments are needed; launch data comes from the private launch description
     /// @throws Throwable if launch data is invalid or the application throws
     public static void main(String[] ignored) throws Throwable {
+        ClassLoader loader = ClassLoader.getSystemClassLoader();
+        if (loader.getClass().getName().equals("org.glavo.janex.bootstrap.loader.ResourceLoader")) {
+            try {
+                loader.getClass().getMethod("initialize").invoke(loader);
+            } catch (InvocationTargetException failure) {
+                throw failure.getCause();
+            }
+        }
         String moduleName;
         String className;
         boolean instanceMain;
         String[] arguments;
-        InputStream resource = Bootstrap.class.getResourceAsStream("launch.bin");
+        InputStream resource = LaunchData.open(0);
         if (resource == null) {
             throw new IOException("Missing Janex launch data");
         }

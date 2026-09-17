@@ -34,7 +34,7 @@ public final class ModuleSupport {
         List<String> options = new ArrayList<String>();
         String mainModule;
         String mainClass;
-        try (DataInputStream input = new DataInputStream(ModuleSupport.class.getResourceAsStream("/org/glavo/janex/bootstrap/options.bin"))) {
+        try (DataInputStream input = new DataInputStream(org.glavo.janex.bootstrap.LaunchData.open(1))) {
             mainModule = text(input);
             mainClass = text(input);
             int count = input.readInt();
@@ -210,13 +210,13 @@ public final class ModuleSupport {
 
     /// Computes native system-module roots from descriptor metadata without resolving a module graph.
     ///
-    /// @param data private resource index, or null when there are no module entries or requirements
+    /// @param data selected module resources, or null when there are no module entries or requirements
     /// @param mainModule main module name, or an empty string for classpath launching
     /// @param options ordered application JVM options
     /// @return system-module names and native root tokens to enable in the application JVM
     /// @throws IOException if indexed metadata cannot be read
     /// @throws FindException if a required module or exact version is unavailable
-    public static String[] launchModules(byte[] data, String mainModule, List<String> options) throws IOException {
+    public static String[] launchModules(org.glavo.janex.reader.ResourcePlan data, String mainModule, List<String> options) throws IOException {
         ModuleFinder system = ModuleFinder.ofSystem();
         Map<String, ModuleDescriptor> available = new HashMap<String, ModuleDescriptor>();
         Set<String> roots = new TreeSet<String>();
@@ -225,7 +225,7 @@ public final class ModuleSupport {
         }
         List<ModuleDescriptor> selected = new ArrayList<ModuleDescriptor>();
         if (data != null) {
-            try (ResourceIndex index = new ResourceIndex(new ByteArrayInputStream(data))) {
+            try (ResourceIndex index = new ResourceIndex(data)) {
                 for (ResourceIndex.Root root : index.roots) {
                     if (!root.module) {
                         continue;

@@ -295,11 +295,21 @@ fn options(path: &Path) -> RunOptions {
 
 /// Captures one prepared invocation while retaining its resource lifetime.
 fn capture(plan: &ExecutionPlan) -> Output {
-    plan.command()
+    let output = plan
+        .command()
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
-        .unwrap()
+        .unwrap();
+    if !output.status.success() {
+        eprintln!(
+            "Java exited with {}\nstdout: {}\nstderr: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    output
 }
 
 /// Replaces an integer-keyed descriptor field without discarding other fields.
@@ -542,6 +552,7 @@ class Units {
         PackOptions::new(temp.path().join("classes"), temp.path().join("units.janex"));
     packing.main_class = Some("Units".into());
     packing.arguments = vec!["".into(), "\0".into(), "\u{1f680}".repeat(20_000)];
+    packing.jvm_options.push("-Djanex.launch=overridden".into());
     pack(&packing).unwrap();
     let mut options = options(&packing.output);
     options.arguments = vec!["\u{4e2d}\u{1f680}".into()];
@@ -849,7 +860,7 @@ fn module_launch_uses_filename_derived_names_and_reports_missing_dependencies() 
     let mut unicode_options = options(&packing.output);
     unicode_options.arguments = vec!["\u{4e2d}\u{1f680}".into()];
     let plan = prepare(&unicode_options).unwrap();
-    assert_eq!(fs::read_dir(plan.directory()).unwrap().count(), 2);
+    assert_eq!(fs::read_dir(plan.directory()).unwrap().count(), 1);
     let output = capture(&plan);
     assert!(
         output.status.success(),
@@ -1179,7 +1190,7 @@ public class Main {
                 .map(|entry| entry.unwrap().file_name())
                 .collect::<Vec<_>>();
             files.sort();
-            assert_eq!(files, ["bootstrap.jar", "snapshot.janex"]);
+            assert_eq!(files, ["snapshot.janex"]);
             assert_eq!(
                 fs::read(plan.directory().join("snapshot.janex")).unwrap(),
                 fs::read(&packing.output).unwrap()
@@ -1214,12 +1225,10 @@ public class Main {
     }
     let mut running = options(&packing.output);
     running.max_materialized_bytes = 100;
-    assert!(
-        prepare(&running)
-            .unwrap_err()
-            .to_string()
-            .contains("resource byte limit")
-    );
+    let output = capture(&prepare(&running).unwrap());
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("resource byte limit"));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("resources-ok"));
 }
 
 #[test]
@@ -1419,7 +1428,7 @@ public class Agent {
     });
     let plan = prepare(&options(&packing.output)).unwrap();
     assert!(!marker.exists(), "preparation must not execute agents");
-    assert_eq!(fs::read_dir(plan.directory()).unwrap().count(), 4);
+    assert_eq!(fs::read_dir(plan.directory()).unwrap().count(), 3);
     let output = capture(&plan);
     assert!(
         output.status.success(),

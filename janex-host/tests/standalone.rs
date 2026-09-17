@@ -29,6 +29,76 @@ fn javac(directory: &Path, args: &[&str]) {
 }
 
 #[test]
+fn standalone_preserves_large_arguments_and_reuses_the_fixed_launcher() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::write(temp.path().join("Main.java"), r#"
+public class Main {
+    public static void main(String[] args) {
+        if (args.length != 2 || args[0].length() != 40000 || !args[1].isEmpty()) throw new AssertionError();
+        for (int i = 0; i < args[0].length(); i += 2) {
+            if (args[0].charAt(i) != '\ud83d' || args[0].charAt(i + 1) != '\ude80') throw new AssertionError();
+        }
+        if (System.getProperty("janex.launch") != null) throw new AssertionError();
+        System.out.println("large-arguments-ok");
+    }
+}
+"#).unwrap();
+    javac(
+        temp.path(),
+        &["--release", "8", "-d", "classes", "Main.java"],
+    );
+    let mut options =
+        PackOptions::new(temp.path().join("classes"), temp.path().join("large.janex"));
+    options.main_class = Some("Main".into());
+    options.arguments = vec!["\u{1f680}".repeat(20_000), String::new()];
+    options.with_launcher = true;
+    pack(&options).unwrap();
+    let home = temp.path().join("home");
+    let mut runtimes = vec![std::path::PathBuf::from("java")];
+    if let Some(java_home) = std::env::var_os("JANEX_TEST_JAVA8_HOME") {
+        runtimes.push(Path::new(&java_home).join("bin").join(if cfg!(windows) {
+            "java.exe"
+        } else {
+            "java"
+        }));
+    }
+    let mut cached = None;
+    for runtime in runtimes.iter().cycle().take(runtimes.len() * 2) {
+        let result = Command::new(runtime)
+            .env("JANEX_HOME", &home)
+            .arg("-jar")
+            .arg(&options.output)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&result.stdout).trim(),
+            "large-arguments-ok"
+        );
+        let cache = home.join("cache/bootstrap");
+        let entries = fs::read_dir(&cache).unwrap().collect::<Vec<_>>();
+        assert_eq!(entries.len(), 1);
+        let jar = entries[0].as_ref().unwrap().path().join("bootstrap.jar");
+        let metadata = fs::metadata(&jar).unwrap();
+        let current = (metadata.len(), metadata.modified().unwrap());
+        if let Some(previous) = cached {
+            assert_eq!(previous, current);
+        }
+        cached = Some(current);
+        let mut zip = zip::ZipArchive::new(fs::File::open(jar).unwrap()).unwrap();
+        assert!(
+            zip.by_name("org/glavo/janex/bootstrap/resources.bin")
+                .is_err()
+        );
+        assert!(zip.by_name("org/glavo/janex/bootstrap/launch.bin").is_err());
+    }
+}
+
+#[test]
 fn jar_tail_launches_resources_arguments_and_both_native_modes() {
     let temp = tempfile::tempdir().unwrap();
     fs::write(temp.path().join("Main.java"), r#"

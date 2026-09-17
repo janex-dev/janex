@@ -15,6 +15,8 @@ import java.util.jar.*;
 import org.glavo.janex.bootstrap.dependency.Dependencies;
 import org.glavo.janex.bootstrap.loader.ResourceIndex;
 import org.glavo.janex.bootstrap.loader.ResourceIndexes;
+import org.glavo.janex.bootstrap.loader.ResourceHandoff;
+import org.glavo.janex.reader.ResourcePlan;
 import org.glavo.janex.reader.Checksum;
 import org.glavo.janex.reader.JanexReader;
 
@@ -59,12 +61,18 @@ public final class Standalone {
             JanexReader.Launch launch;
             long tailOffset;
             try (JanexReader reader = new JanexReader(snapshot, new Dependencies())) {
-                launch = reader.launch(System.getProperty("janex.application"));
+                launch = reader.prepareHandoff(System.getProperty("janex.application"), session.directory);
                 tailOffset = reader.externalTailOffset();
             }
-            byte[] resourceIndex = ResourceIndexes.encode(launch.resources);
-            byte[] agentIndex = launch.agentResources == null ? null : ResourceIndexes.encode(launch.agentResources);
-            launch.resources.limits().bytes((long) resourceIndex.length + (agentIndex == null ? 0 : agentIndex.length));
+            String os = System.getProperty("os.name");
+            os = os.startsWith("Windows") ? "windows" : os.equals("Mac OS X") ? "macos"
+                    : os.equals("Linux") ? "linux" : os.equals("FreeBSD") ? "freebsd" : os;
+            String arch = System.getProperty("os.arch");
+            arch = arch.equals("amd64") || arch.equals("x86_64") ? "x86-64"
+                    : arch.matches("i[3-6]86") ? "x86" : arch.equals("arm64") ? "aarch64" : arch;
+            byte[] resources = ResourceHandoff.encode(snapshot,
+                    new String[]{os, arch, "run", System.getProperty("java.version"), System.getProperty("java.vendor")},
+                    launch.requests, launch.moduleRequirements, launch.resources.limits(), launch.resourceAllowance);
             launch.arguments.addAll(Arrays.asList(arguments));
             int feature = JanexReader.feature();
             if (feature < 9 && !launch.mainModule.isEmpty()) {
@@ -72,17 +80,8 @@ public final class Standalone {
             }
             List<String> options = new ArrayList<String>(ManagementFactory.getRuntimeMXBean().getInputArguments());
             options.addAll(launch.options);
-            Path launcher = session.directory.resolve("launcher.jar");
-            try (FileChannel input = FileChannel.open(snapshot);
-                 OutputStream output = Files.newOutputStream(launcher)) {
-                if (tailOffset == input.size()) {
-                    throw new IOException("Standalone launching requires an executable JAR tail");
-                }
-                input.position(tailOffset);
-                transfer(Channels.newInputStream(input), output, 512L * 1024 * 1024);
-            }
-            Path bridge = session.directory.resolve("bootstrap.jar");
-            writeBridge(launcher, bridge, launch, resourceIndex, options, feature);
+            Path launcher = cacheLauncher(snapshot, tailOffset);
+            String description = launchArgument(launch, resources, options, feature);
             List<String> nativeOptions = nativeOptions(options, feature);
             String java = Paths.get(System.getProperty("java.home"), "bin", isWindows() ? "java.exe" : "java").toString();
             if (feature >= 9) {
@@ -93,8 +92,8 @@ public final class Standalone {
                 String[] systemModules;
                 try {
                     systemModules = (String[]) Class.forName("org.glavo.janex.bootstrap.loader.ModuleSupport")
-                            .getMethod("launchModules", byte[].class, String.class, List.class)
-                            .invoke(null, modules ? resourceIndex : null, launch.mainModule, options);
+                            .getMethod("launchModules", ResourcePlan.class, String.class, List.class)
+                            .invoke(null, modules ? launch.resources : null, launch.mainModule, options);
                 } catch (java.lang.reflect.InvocationTargetException failure) {
                     throw new IOException("Cannot prepare Java modules", failure.getCause());
                 }
@@ -102,14 +101,15 @@ public final class Standalone {
                     nativeOptions.add("--add-modules=" + String.join(",", systemModules));
                 }
             }
-            List<String> agents = prepareAgents(session.directory, launch, agentIndex);
+            List<String> agents = prepareAgents(session.directory, launch);
             List<String> command = new ArrayList<String>();
             command.add(java);
             command.addAll(nativeOptions);
             command.addAll(agents);
             command.add("-Djava.system.class.loader=org.glavo.janex.bootstrap.loader.ResourceLoader");
+            command.add(description);
             command.add("-cp");
-            command.add(bridge.toString());
+            command.add(launcher.toString());
             command.add("org.glavo.janex.bootstrap.Bootstrap");
             session.process = process(command).inheritIO().start();
             exit = session.process.waitFor();
@@ -120,6 +120,19 @@ public final class Standalone {
     /// Creates a child builder without re-expanding options already consumed by the initial JVM.
     private static ProcessBuilder process(List<String> command) {
         ProcessBuilder builder = new ProcessBuilder(command);
+        for (int i = command.size() - 1; i >= 0; i--) {
+            String argument = command.get(i);
+            if (!argument.startsWith("-Djanex.launch=")) continue;
+            if (argument.length() > 8015) {
+                String value = argument.substring(15);
+                int count = 0;
+                for (int offset = 0; offset < value.length(); offset += 8000) {
+                    builder.environment().put("JANEX_LAUNCH_" + count++, value.substring(offset, Math.min(offset + 8000, value.length())));
+                }
+                command.set(i, "-Djanex.launch=env:" + count);
+            }
+            break;
+        }
         builder.environment().remove("JDK_JAVA_OPTIONS");
         builder.environment().remove("JAVA_TOOL_OPTIONS");
         builder.environment().remove("_JAVA_OPTIONS");
@@ -132,12 +145,12 @@ public final class Standalone {
     }
 
     /// Materializes selected agent roots before any descriptor-supplied agent runs.
-    private static List<String> prepareAgents(Path directory, JanexReader.Launch launch, byte[] agentIndex) throws IOException {
+    private static List<String> prepareAgents(Path directory, JanexReader.Launch launch) throws IOException {
         List<String> result = new ArrayList<String>();
         if (launch.agentResources == null) {
             return result;
         }
-        try (ResourceIndex index = new ResourceIndex(new ByteArrayInputStream(agentIndex))) {
+        try (ResourceIndex index = new ResourceIndex(launch.agentResources)) {
             if (index.roots().size() != launch.agentOptions.size() || index.roots().size() != launch.agentChecksums.size()) {
                 throw new IOException("Java agent roots and options disagree");
             }
@@ -152,7 +165,7 @@ public final class Standalone {
                             continue;
                         }
                         ResourceIndex.Resource resource = entry.getValue();
-                        JarEntry member = new JarEntry(entry.getKey() + (resource.isDirectory() ? "/" : ""));
+                        JarEntry member = new JarEntry(entry.getKey() + (resource.isDirectory() && !entry.getKey().endsWith("/") ? "/" : ""));
                         member.setTime(0);
                         output.putNextEntry(member);
                         if (!resource.isDirectory()) {
@@ -236,50 +249,70 @@ public final class Standalone {
         return result;
     }
 
-    /// Copies the extracted launcher JAR and embeds the selected resource index and launch data.
-    private static void writeBridge(Path launcher, Path output, JanexReader.Launch launch,
-                                    byte[] resourceIndex, List<String> options, int feature) throws IOException {
-        try (JarFile source = new JarFile(launcher.toFile());
-             JarOutputStream jar = new JarOutputStream(Files.newOutputStream(output))) {
-            Enumeration<JarEntry> entries = source.entries();
-            while (entries.hasMoreElements()) {
-                JarEntry entry = entries.nextElement();
-                if (entry.isDirectory()) {
-                    continue;
-                }
-                String name = entry.getName();
-                if (name.equals("org/glavo/janex/bootstrap/resources.bin") || name.equals("org/glavo/janex/bootstrap/launch.bin")
-                        || name.equals("org/glavo/janex/bootstrap/options.bin")) {
-                    throw new IOException("Executable tail must not contain precomputed launch data");
-                }
-                jar.putNextEntry(new JarEntry(name));
-                try (InputStream input = source.getInputStream(entry)) {
-                    transfer(input, jar, 32L * 1024 * 1024);
-                }
-                jar.closeEntry();
-            }
-            jar.putNextEntry(new JarEntry("org/glavo/janex/bootstrap/resources.bin"));
-            jar.write(resourceIndex);
-            jar.closeEntry();
-            DataOutputStream data = new DataOutputStream(jar);
-            jar.putNextEntry(new JarEntry("org/glavo/janex/bootstrap/launch.bin"));
-            ResourceIndexes.string(data, launch.mainModule);
-            ResourceIndexes.string(data, launch.mainClass);
-            data.writeBoolean(feature >= 25 || (feature >= 21 && options.contains("--enable-preview")));
-            data.writeInt(launch.arguments.size());
-            for (String argument : launch.arguments) {
-                ResourceIndexes.string(data, argument);
-            }
-            jar.closeEntry();
-            jar.putNextEntry(new JarEntry("org/glavo/janex/bootstrap/options.bin"));
-            ResourceIndexes.string(data, launch.mainModule);
-            ResourceIndexes.string(data, launch.mainClass);
-            data.writeInt(options.size());
-            for (String option : options) {
-                ResourceIndexes.string(data, option);
-            }
-            jar.closeEntry();
+    /// Encodes entry data and options without rebuilding the fixed launcher JAR.
+    private static String launchArgument(JanexReader.Launch launch, byte[] resources,
+                                         List<String> options, int feature) throws IOException {
+        ByteArrayOutputStream entry = new ByteArrayOutputStream();
+        DataOutputStream data = new DataOutputStream(entry);
+        ResourceIndexes.string(data, launch.mainModule);
+        ResourceIndexes.string(data, launch.mainClass);
+        data.writeBoolean(feature >= 25 || (feature >= 21 && options.contains("--enable-preview")));
+        data.writeInt(launch.arguments.size());
+        for (String argument : launch.arguments) ResourceIndexes.string(data, argument);
+        ByteArrayOutputStream optionBytes = new ByteArrayOutputStream();
+        data = new DataOutputStream(optionBytes);
+        ResourceIndexes.string(data, launch.mainModule);
+        ResourceIndexes.string(data, launch.mainClass);
+        data.writeInt(options.size());
+        for (String option : options) ResourceIndexes.string(data, option);
+        return LaunchData.encode(entry.toByteArray(), optionBytes.toByteArray(), resources);
+    }
+
+    /// Publishes the unchanged executable tail under its content digest, repairing cache damage.
+    private static Path cacheLauncher(Path snapshot, long offset) throws IOException {
+        byte[] bytes;
+        try (FileChannel input = FileChannel.open(snapshot);
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            if (offset == input.size()) throw new IOException("Standalone launching requires an executable JAR tail");
+            input.position(offset);
+            transfer(Channels.newInputStream(input), output, 512L * 1024 * 1024);
+            bytes = output.toByteArray();
         }
+        String digest;
+        try {
+            byte[] hash = java.security.MessageDigest.getInstance("SHA-256").digest(bytes);
+            StringBuilder text = new StringBuilder();
+            for (byte value : hash) text.append(String.format(java.util.Locale.ROOT, "%02x", value & 255));
+            digest = text.toString();
+        } catch (java.security.NoSuchAlgorithmException unavailable) {
+            throw new IOException("SHA-256 is unavailable", unavailable);
+        }
+        String home = System.getenv("JANEX_HOME");
+        boolean overridden = home != null;
+        if (!overridden) home = System.getenv(isWindows() ? "USERPROFILE" : "HOME");
+        if (home == null) throw new IOException("Cannot locate user home; set JANEX_HOME");
+        Path base = Paths.get(home);
+        if (home.isEmpty() || !base.isAbsolute()) throw new IOException("JANEX_HOME must be a nonempty absolute path");
+        if (!overridden) base = base.resolve(".janex");
+        Path directory = base.resolve("cache/bootstrap").resolve(digest);
+        Files.createDirectories(directory);
+        Path jar = directory.resolve("bootstrap.jar");
+        if (!Files.exists(jar) || !Arrays.equals(Files.readAllBytes(jar), bytes)) {
+            Path temporary = Files.createTempFile(directory, "bootstrap-", ".tmp");
+            try {
+                Files.write(temporary, bytes);
+                try {
+                    Files.move(temporary, jar, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                } catch (AtomicMoveNotSupportedException unsupported) {
+                    Files.move(temporary, jar, StandardCopyOption.REPLACE_EXISTING);
+                } catch (FileSystemException concurrent) {
+                    if (!Files.exists(jar) || !Arrays.equals(Files.readAllBytes(jar), bytes)) throw concurrent;
+                }
+            } finally {
+                Files.deleteIfExists(temporary);
+            }
+        }
+        return jar;
     }
 
     /// Owns launch files and ensures a child does not outlive parent shutdown.
