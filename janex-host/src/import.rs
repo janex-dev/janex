@@ -177,9 +177,34 @@ fn read_directory(
 
 /// Reads validated JAR members and checks CRCs through complete entry reads.
 fn read_jar(bytes: &[u8], options: ImportOptions) -> Result<BTreeMap<String, Item>> {
+    jar_items(
+        janex_java::jar::read(bytes, java_limits(options.limits), options.max_total_bytes)?,
+        options,
+    )
+}
+
+/// Imports only module metadata; links request the ordinary resource-tree fallback.
+pub(crate) fn import_module_metadata(
+    bytes: &[u8],
+    jar_name: &str,
+    options: ImportOptions,
+) -> Result<Option<ImportedRoot>> {
+    janex_java::jar::read_module_metadata(
+        bytes,
+        java_limits(options.limits),
+        options.max_total_bytes,
+    )?
+    .map(|entries| build_layers(jar_name.into(), jar_items(entries, options)?, options))
+    .transpose()
+}
+
+/// Converts decoded ZIP entries into validated resource nodes.
+fn jar_items(
+    entries: Vec<janex_java::jar::Entry>,
+    options: ImportOptions,
+) -> Result<BTreeMap<String, Item>> {
     let mut items = BTreeMap::new();
-    for entry in janex_java::jar::read(bytes, java_limits(options.limits), options.max_total_bytes)?
-    {
+    for entry in entries {
         let raw_name = &entry.name;
         let directory = raw_name.ends_with('/');
         let name = raw_name.strip_suffix('/').unwrap_or(raw_name).to_owned();

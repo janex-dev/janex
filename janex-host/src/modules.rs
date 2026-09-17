@@ -20,7 +20,7 @@ pub(crate) fn inventory(
         .iter()
         .filter(|entry| entry.module_requirement().is_none())
     {
-        let root = roots.get(entry, blobs)?;
+        let root = roots.module(entry, blobs)?;
         let limits = blobs.reader().limits();
         let tree = root.merge(context, limits)?;
         let module = if tree.get("module-info.class").is_some() {

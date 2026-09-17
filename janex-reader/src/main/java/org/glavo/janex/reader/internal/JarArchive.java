@@ -4,10 +4,9 @@
 package org.glavo.janex.reader.internal;
 
 import java.io.IOException;
+import java.io.RandomAccessFile;
+import java.nio.file.Path;
 import java.util.*;
-import java.util.zip.CRC32;
-import java.util.zip.DataFormatException;
-import java.util.zip.Inflater;
 
 import org.glavo.janex.reader.ReadLimits;
 
@@ -19,12 +18,14 @@ public final class JarArchive {
     private JarArchive() {
     }
 
-    /// One completely decoded entry with its original UTF-8 name and optional Unix mode.
+    /// One decoded or snapshot-backed entry with its original UTF-8 name and optional Unix mode.
     public static final class Entry {
         /// Original name, including a directory's trailing slash.
         private final String name;
-        /// Decoded bytes verified against the entry size and CRC.
+        /// Decoded bytes verified against the entry size and CRC, or null for a deferred entry.
         private final byte[] bytes;
+        /// Deferred snapshot payload, or null for a completely decoded entry.
+        private final JarSource source;
         /// Unix mode including file type, or -1 when not recorded.
         private final int mode;
         /// Unix file type, or zero when unspecified.
@@ -35,9 +36,15 @@ public final class JarArchive {
             return name;
         }
 
-        /// Returns an owned copy of the decoded entry bytes.
-        public byte[] bytes() {
-            return bytes.clone();
+        /// Returns independently owned decoded bytes, reading and verifying a deferred payload.
+        /// @throws IOException if the snapshot cannot be read or payload validation fails
+        public byte[] bytes() throws IOException {
+            return source == null ? bytes.clone() : source.read();
+        }
+
+        /// Returns the deferred payload descriptor, or null for a completely decoded entry.
+        public JarSource source() {
+            return source;
         }
 
         /// Returns Unix mode, or -1 when absent.
@@ -50,10 +57,11 @@ public final class JarArchive {
             return kind;
         }
 
-        /// Retains a validated entry's owned data.
-        Entry(String name, byte[] bytes, int mode) {
+        /// Retains owned decoded bytes or an immutable deferred payload descriptor.
+        Entry(String name, byte[] bytes, JarSource source, int mode) {
             this.name = name;
             this.bytes = bytes;
+            this.source = source;
             this.mode = mode;
             this.kind = mode < 0 ? 0 : mode & 0170000;
         }
@@ -71,7 +79,76 @@ public final class JarArchive {
             require(offset >= 0 && length >= 0 && offset <= bytes.length - length, "ZIP range exceeds input");
             return Arrays.copyOfRange(bytes, (int) offset, (int) (offset + length));
         };
-        List<ZipDirectory> directories = ZipDirectory.find(bytes.length, reader, limits);
+        return read(bytes.length, reader, limits, null);
+    }
+
+    /// Indexes an unchanged snapshot without decoding ordinary entry payloads.
+    /// Encoded size, aggregate decoded size, entry count, names, ranges, and node types are checked
+    /// during indexing. Payload framing and CRCs are checked when [Entry#bytes()] is called.
+    /// The caller retains ownership of the file and must keep it unchanged while using the entries.
+    /// @param path caller-owned JAR snapshot
+    /// @param limits per-archive, aggregate decoded, and entry-count bounds
+    /// @return entry descriptors independent of the closed indexing handle
+    /// @throws IOException if archive metadata is invalid or exceeds a limit
+    public static List<Entry> index(Path path, ReadLimits limits) throws IOException {
+        try (RandomAccessFile file = new RandomAccessFile(path.toFile(), "r")) {
+            long length = file.length();
+            limits.bytes(length);
+            return read(length, new SnapshotReader(file, length), limits, path);
+        }
+    }
+
+    /// Buffers two directory/header windows to coalesce alternating central and local record reads.
+    private static final class SnapshotReader implements ZipDirectory.Reader {
+        /// Caller-owned archive handle, used only during single-threaded indexing.
+        private final RandomAccessFile file;
+        /// Immutable archive length already checked against the byte policy.
+        private final long length;
+        /// Reusable 64 KiB windows, bounded by archive length for smaller inputs.
+        private final byte[][] windows;
+        /// Physical start of each window; -1 denotes an unfilled buffer.
+        private final long[] starts = {-1, -1};
+        /// Number of valid bytes in each window.
+        private final int[] counts = new int[2];
+        /// Least recently used window, replaced on a miss.
+        private int next;
+
+        /// Retains a bounded archive handle without taking ownership of it.
+        SnapshotReader(RandomAccessFile file, long length) {
+            this.file = file;
+            this.length = length;
+            windows = new byte[2][(int) Math.min(length, 65536)];
+        }
+
+        /// Returns an owned range, preserving cached central records across local-header reads.
+        @Override
+        public byte[] read(long offset, long count) throws IOException {
+            require(offset >= 0 && count >= 0 && offset <= length - count, "ZIP range exceeds input");
+            for (int i = 0; i < 2; i++) {
+                if (starts[i] >= 0 && offset >= starts[i] && offset + count <= starts[i] + counts[i]) {
+                    next = 1 - i;
+                    return Arrays.copyOfRange(windows[i], (int) (offset - starts[i]), (int) (offset - starts[i] + count));
+                }
+            }
+            if (count > windows[0].length) {
+                byte[] bytes = new byte[(int) count];
+                file.seek(offset);
+                file.readFully(bytes);
+                return bytes;
+            }
+            int index = next;
+            next = 1 - index;
+            starts[index] = offset;
+            counts[index] = (int) Math.min(windows[index].length, length - offset);
+            file.seek(offset);
+            file.readFully(windows[index], 0, counts[index]);
+            return Arrays.copyOf(windows[index], (int) count);
+        }
+    }
+
+    /// Parses shared archive metadata, decoding payloads only when no snapshot path is supplied.
+    private static List<Entry> read(long length, ZipDirectory.Reader reader, ReadLimits limits, Path path) throws IOException {
+        List<ZipDirectory> directories = ZipDirectory.find(length, reader, limits);
         require(directories.size() == 1, "Missing or ambiguous ZIP directory");
         ZipDirectory directory = directories.get(0);
         long[] total = {0};
@@ -92,16 +169,16 @@ public final class JarArchive {
             String name = utf8(record.name);
             require(names.add(name), "Duplicate JAR entry name");
             require(ranges.put(record.local, record.end) == null, "Shared ZIP local header");
-            byte[] content = decode(bytes, (int) record.data, stored, decoded, method);
-            CRC32 checksum = new CRC32();
-            checksum.update(content);
-            require(checksum.getValue() == crc, "JAR entry CRC mismatch");
+            require(method != 0 || stored == decoded, "Stored JAR entry size mismatch");
+            byte[] content = path == null
+                    ? JarSource.decode(reader.read(record.data, stored), 0, stored, decoded, method, crc) : null;
+            JarSource source = path == null ? null : new JarSource(path, record.data, stored, decoded, method, crc);
             int mode = mode(creator >> 8, ZipDirectory.integer(header, 38, 4));
-            Entry entry = new Entry(name, content, mode);
+            Entry entry = new Entry(name, content, source, mode);
             require(entry.kind == 0 || entry.kind == 0100000 || entry.kind == 0040000 || entry.kind == 0120000,
                     "Unsupported JAR filesystem node");
             if (name.endsWith("/")) {
-                require(content.length == 0 && (entry.kind == 0 || entry.kind == 0040000), "Invalid JAR directory");
+                require(decoded == 0 && (entry.kind == 0 || entry.kind == 0040000), "Invalid JAR directory");
             } else {
                 require(entry.kind != 0040000, "JAR directory name disagrees with file mode");
             }
@@ -133,32 +210,6 @@ public final class JarArchive {
             return (attributes & 1) != 0 ? mode & ~0222 : mode;
         }
         return -1;
-    }
-
-    /// Decodes one exact payload without consuming adjacent ZIP structures.
-    private static byte[] decode(byte[] bytes, int start, int stored, int decoded, int method) throws IOException {
-        if (method == 0) {
-            require(stored == decoded, "Stored JAR entry size mismatch");
-            return Arrays.copyOfRange(bytes, start, start + stored);
-        }
-        Inflater inflater = new Inflater(true);
-        try {
-            inflater.setInput(bytes, start, stored);
-            byte[] result = new byte[decoded];
-            int position = 0;
-            while (position < decoded && !inflater.finished()) {
-                int produced = inflater.inflate(result, position, decoded - position);
-                require(produced > 0 || inflater.finished(), "Incomplete JAR deflate stream");
-                position += produced;
-            }
-            require(inflater.inflate(new byte[1]) == 0 && inflater.finished() && position == decoded && inflater.getRemaining() == 0,
-                    "JAR deflate size or framing mismatch");
-            return result;
-        } catch (DataFormatException failure) {
-            throw new IOException("Invalid JAR deflate stream", failure);
-        } finally {
-            inflater.end();
-        }
     }
 
 }

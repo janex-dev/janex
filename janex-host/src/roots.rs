@@ -47,6 +47,8 @@ pub(crate) struct Roots {
     pub(crate) entries: BTreeMap<RootKey, ValidatedRoot>,
     /// Acquired, verified external archives, imported only when native preparation needs a tree.
     pub(crate) archives: BTreeMap<RootKey, dependency::Dependency>,
+    /// External roots containing only manifests and module descriptors for candidate selection.
+    module_entries: BTreeMap<RootKey, ValidatedRoot>,
     /// Aggregate imported bytes, including all multi-release layers, retained in memory.
     imported_bytes: u64,
     /// Aggregate raw JAR bytes fetched or read from cache for this launch.
@@ -56,6 +58,44 @@ pub(crate) struct Roots {
 }
 
 impl Roots {
+    /// Reads external module metadata without importing ordinary payloads; links use the full tree.
+    pub(crate) fn module(
+        &mut self,
+        entry: &PathEntry,
+        blobs: &mut BlobStore<Cursor<Vec<u8>>>,
+    ) -> Result<&ValidatedRoot> {
+        let key = RootKey::of(entry);
+        if matches!(entry, PathEntry::External { .. }) && !self.entries.contains_key(&key) {
+            if !self.module_entries.contains_key(&key) {
+                let archive = self
+                    .archives
+                    .get(&key)
+                    .ok_or_else(|| invalid("external dependency has not been acquired"))?;
+                let options = ImportOptions {
+                    limits: blobs.reader().limits(),
+                    max_total_bytes: self.acquired_limit,
+                };
+                if let Some(root) = crate::import::import_module_metadata(
+                    &archive.bytes,
+                    &archive.jar_name,
+                    options,
+                )? {
+                    self.module_entries.insert(
+                        key.clone(),
+                        ValidatedRoot::new(
+                            root.into_resource_root(BlobRef { pool: 0, index: 0 })?,
+                            options.limits,
+                        )?,
+                    );
+                } else {
+                    return self.get(entry, blobs);
+                }
+            }
+            return Ok(&self.module_entries[&key]);
+        }
+        self.get(entry, blobs)
+    }
+
     /// Resolves explicit external entries once after runtime conditions and authentication succeed.
     pub(crate) fn acquire<'a>(
         &mut self,

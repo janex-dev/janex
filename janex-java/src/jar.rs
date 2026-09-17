@@ -27,6 +27,29 @@ pub struct Entry {
 /// No entries are extracted, and names, node types, and link targets are not interpreted.
 /// A failure returns no partial entry collection. CRCs do not establish publisher trust.
 pub fn read(bytes: &[u8], limits: Limits, max_total_bytes: u64) -> Result<Vec<Entry>> {
+    Ok(read_entries(bytes, limits, max_total_bytes, false)?.expect("complete archive read"))
+}
+
+/// Reads manifests and base or versioned module descriptors without inflating ordinary files.
+///
+/// Encoded input, central names, entry counts, and declared decoded lengths retain the same bounds
+/// as [`read`]. Only returned payloads have their CRC checked. Returns `None` when any symbolic link
+/// requires full resource-tree interpretation; callers must then use the complete reader.
+pub fn read_module_metadata(
+    bytes: &[u8],
+    limits: Limits,
+    max_total_bytes: u64,
+) -> Result<Option<Vec<Entry>>> {
+    read_entries(bytes, limits, max_total_bytes, true)
+}
+
+/// Reads selected payloads from one bounded ZIP directory, retaining archive-wide size checks.
+fn read_entries(
+    bytes: &[u8],
+    limits: Limits,
+    max_total_bytes: u64,
+    metadata_only: bool,
+) -> Result<Option<Vec<Entry>>> {
     if bytes.len() as u64 > max_total_bytes {
         return Err(invalid("import byte limit exceeded"));
     }
@@ -63,6 +86,17 @@ pub fn read(bytes: &[u8], limits: Limits, max_total_bytes: u64) -> Result<Vec<En
             .checked_add(expected)
             .filter(|total| *total <= max_total_bytes)
             .ok_or_else(|| invalid("aggregate import byte limit exceeded"))?;
+        if metadata_only {
+            if unix_mode.is_some_and(|mode| mode & 0o170000 == 0o120000) {
+                return Ok(None);
+            }
+            if !name.eq_ignore_ascii_case("META-INF/MANIFEST.MF")
+                && name != "module-info.class"
+                && !(name.starts_with("META-INF/versions/") && name.ends_with("/module-info.class"))
+            {
+                continue;
+            }
+        }
         let content = read_bounded(&mut file, expected)?;
         if content.len() as u64 != expected {
             return Err(invalid("JAR entry size mismatch"));
@@ -73,7 +107,7 @@ pub fn read(bytes: &[u8], limits: Limits, max_total_bytes: u64) -> Result<Vec<En
             unix_mode,
         });
     }
-    Ok(entries)
+    Ok(Some(entries))
 }
 
 /// Locates the archive and bounds its declared entry count before allocating a ZIP directory index.

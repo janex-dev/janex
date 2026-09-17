@@ -6,11 +6,13 @@ package org.glavo.janex.reader;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.*;
+import org.glavo.janex.reader.internal.JarSource;
 
 /// Immutable selected resources referencing an unchanged snapshot, independent of a launch transport.
 ///
 /// Descriptors remain usable after the reader closes. The snapshot must remain unchanged and present
-/// until consumers finish reading its stored ranges. Arrays returned by accessors are independent copies.
+/// until consumers finish reading its stored ranges. External JAR snapshots have the same lifetime
+/// requirement. Arrays returned by accessors are independent copies.
 public final class ResourcePlan {
     /// Snapshot path retained for stored byte ranges.
     private final Path snapshot;
@@ -65,10 +67,12 @@ public final class ResourcePlan {
         return roots;
     }
 
-    /// An inline, stored, or extent-assembled byte source.
+    /// An inline, stored, external JAR, or extent-assembled byte source.
     public static final class Source {
-        /// Inline content, or null for stored and extent sources.
+        /// Inline content, or null for other source kinds.
         private final byte[] inline;
+        /// Deferred external JAR payload, or null for other sources.
+        private final JarSource jar;
         /// Physical offset for a stored source; unused for inline content and -1 for extents.
         private final long offset;
         /// Encoded snapshot length; zero for inline and extent sources.
@@ -78,26 +82,32 @@ public final class ResourcePlan {
         /// Source index, decoded offset, and length triples; empty for other source kinds.
         private final int[][] extents;
 
-        /// Retains validated preparation data without exposing mutable input arrays or collections.
-        Source(byte[] inline, long offset, int storedLength, int[] filters, int[][] extents) {
+        /// Retains validated source data and an optional immutable external JAR descriptor.
+        Source(byte[] inline, long offset, int storedLength, int[] filters, int[][] extents, JarSource jar) {
             this.inline = inline == null ? null : inline.clone();
+            this.jar = jar;
             this.offset = offset;
             this.storedLength = storedLength;
             this.filters = filters == null ? null : filters.clone();
             this.extents = copy(extents);
         }
 
-        /// Returns inline content, or null for stored and extent sources.
+        /// Returns inline content, or null for other source kinds.
         public byte[] inline() {
             return inline == null ? null : inline.clone();
         }
 
-        /// Returns the stored source's physical offset; unused for inline content and -1 for extents.
+        /// Returns a deferred external JAR payload, or null for other sources.
+        public JarSource jar() {
+            return jar;
+        }
+
+        /// Returns the container source's physical offset, or -1 for other source kinds.
         public long offset() {
             return offset;
         }
 
-        /// Returns encoded snapshot length; zero for inline and extent sources.
+        /// Returns encoded container snapshot length, or zero for other source kinds.
         public int storedLength() {
             return storedLength;
         }

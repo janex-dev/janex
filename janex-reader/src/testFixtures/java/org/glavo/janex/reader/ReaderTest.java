@@ -228,8 +228,8 @@ public final class ReaderTest {
     private static void resourcePlan() throws IOException {
         byte[] bytes = {42};
         int[][] extents = {{0, 0, 1}};
-        ResourcePlan.Source inline = new ResourcePlan.Source(bytes, -1, 0, new int[0], new int[0][3]);
-        ResourcePlan.Source extent = new ResourcePlan.Source(null, -1, 0, new int[0], extents);
+        ResourcePlan.Source inline = new ResourcePlan.Source(bytes, -1, 0, new int[0], new int[0][3], null);
+        ResourcePlan.Source extent = new ResourcePlan.Source(null, -1, 0, new int[0], extents, null);
         int[][] transforms = {{10, 0}};
         Instant[] times = {Instant.MAX, null, null};
         ResourcePlan.File file = new ResourcePlan.File(1, transforms, times, 0);

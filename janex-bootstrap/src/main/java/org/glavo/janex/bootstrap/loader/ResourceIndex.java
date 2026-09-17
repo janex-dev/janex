@@ -4,6 +4,7 @@
 package org.glavo.janex.bootstrap.loader;
 
 import java.io.*;
+import java.nio.file.Path;
 import java.time.DateTimeException;
 import java.time.Instant;
 import java.util.*;
@@ -11,6 +12,7 @@ import java.util.*;
 import org.glavo.janex.reader.ReadLimits;
 import org.glavo.janex.reader.ResourcePlan;
 import org.glavo.janex.reader.DataPool;
+import org.glavo.janex.reader.internal.JarSource;
 import org.glavo.janex.reader.internal.codec.ClassFiles;
 import org.glavo.janex.reader.internal.codec.ZstandardFrames;
 import org.glavo.janex.reader.internal.codec.zstd.Zstandard;
@@ -18,7 +20,8 @@ import org.glavo.janex.reader.internal.codec.zstd.Zstandard;
 /// Reads Host-selected resources from a private snapshot without rebuilding classpath JARs.
 ///
 /// The launch preparer verifies the snapshot before publishing this index and applies its own
-/// trust policy. This reader does not establish publisher trust or repeat per-entry checksums.
+/// trust policy. This reader does not establish publisher trust or repeat container entry checksums.
+/// External JAR payload framing and CRCs are checked when their decoded bytes enter the cache.
 public final class ResourceIndex implements Closeable {
     /// Maximum size of an individual decoded value.
     private final int maxBytes;
@@ -42,6 +45,8 @@ public final class ResourceIndex implements Closeable {
     private long cachedBytes;
     /// Maximum decoded cache retention across all sources.
     private final long cacheLimit;
+    /// External JAR handles opened on first payload access and owned by this index.
+    private final Map<Path, RandomAccessFile> jars = new HashMap<Path, RandomAccessFile>();
     /// Whether the owned snapshot has been closed.
     private boolean closed;
 
@@ -108,7 +113,8 @@ public final class ResourceIndex implements Closeable {
     }
 
     /// Opens an immutable resource plan directly, without serializing an intermediate index.
-    /// The snapshot is owned by this index; plan arrays are copied and pools remain shared.
+    /// Open snapshot handles are owned by this index; plan arrays are copied and pools remain shared.
+    /// External JAR handles are opened on first payload access and closed with this index.
     /// Construction failure closes the opened snapshot.
     /// @param plan validated resources over an unchanged, caller-owned snapshot file
     /// @throws IOException if the snapshot cannot be opened
@@ -178,10 +184,12 @@ public final class ResourceIndex implements Closeable {
         return new String(chars);
     }
 
-    /// One inline, stored, or extent-assembled source.
+    /// One inline, stored, external JAR, or extent-assembled source.
     private final class Source {
         /// Inline bytes, or null for a snapshot range or extents.
         final byte[] inline;
+        /// Deferred external JAR entry, or null for other sources.
+        final JarSource jar;
         /// Physical snapshot offset; negative for extents.
         final long offset;
         /// Encoded size for a snapshot range.
@@ -196,18 +204,20 @@ public final class ResourceIndex implements Closeable {
         /// Copies a validated source description without an intermediate wire representation.
         Source(ResourcePlan.Source source) throws IOException {
             inline = source.inline();
+            jar = source.jar();
             offset = source.offset();
             stored = source.storedLength();
             filters = source.filters();
-            extents = inline == null && offset < 0 ? source.extents() : null;
+            extents = inline == null && jar == null && offset < 0 ? source.extents() : null;
             long total = 0;
             if (extents != null) for (int[] extent : extents) total += extent[2];
-            length = inline != null ? inline.length : extents != null ? size(total)
+            length = inline != null ? inline.length : jar != null ? size(jar.length()) : extents != null ? size(total)
                     : filters.length == 0 ? stored : filters[filters.length - 1];
         }
 
         /// Parses a source, checking snapshot bounds and strictly earlier extent references.
         Source(DataInputStream input, int index) throws IOException {
+            jar = null;
             int kind = input.readUnsignedByte();
             if (kind == 0) {
                 inline = new byte[size(input)];
@@ -267,7 +277,14 @@ public final class ResourceIndex implements Closeable {
         if (source.inline != null) {
             return source.inline;
         }
-        if (source.extents != null) {
+        if (source.jar != null) {
+            RandomAccessFile file = jars.get(source.jar.path());
+            if (file == null) {
+                file = new RandomAccessFile(source.jar.path().toFile(), "r");
+                jars.put(source.jar.path(), file);
+            }
+            bytes = source.jar.read(file);
+        } else if (source.extents != null) {
             bytes = new byte[source.length];
             int offset = 0;
             for (int[] extent : source.extents) {
@@ -465,14 +482,30 @@ public final class ResourceIndex implements Closeable {
         }
     }
 
-    /// Closes the snapshot and releases cached decoded bytes; repeated calls are harmless.
+    /// Closes container and external JAR handles and releases cached bytes; repeated calls are harmless.
+    /// All handles are attempted even if one close fails; the index remains closed after failure.
     @Override
     public synchronized void close() throws IOException {
         if (!closed) {
             closed = true;
             cache.clear();
             cachedBytes = 0;
-            snapshot.close();
+            IOException failure = null;
+            try {
+                snapshot.close();
+            } catch (IOException close) {
+                failure = close;
+            }
+            for (RandomAccessFile file : jars.values()) {
+                try {
+                    file.close();
+                } catch (IOException close) {
+                    if (failure == null) failure = close;
+                    else failure.addSuppressed(close);
+                }
+            }
+            jars.clear();
+            if (failure != null) throw failure;
         }
     }
 

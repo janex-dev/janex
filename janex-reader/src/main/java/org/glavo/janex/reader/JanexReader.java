@@ -12,6 +12,7 @@ import java.util.*;
 import org.glavo.janex.reader.internal.Conditions;
 import org.glavo.janex.reader.internal.Input;
 import org.glavo.janex.reader.internal.JarArchive;
+import org.glavo.janex.reader.internal.JarSource;
 import org.glavo.janex.reader.internal.ModuleRequirement;
 import org.glavo.janex.reader.internal.codec.ZstandardFrames;
 
@@ -206,6 +207,8 @@ public final class JanexReader implements Closeable {
     /// This method does not authenticate publishers or repeat the container-integrity scan.
     /// The caller must verify the package and each external JAR under its launch policy before
     /// calling, and retain the same snapshots unchanged while their resources are used.
+    /// External JAR payloads remain deferred except for manifests and symbolic-link targets;
+    /// payload framing and CRC failures can therefore occur when consumers read a resource.
     /// Format parsing and decoding limits still apply. No application code is executed.
     ///
     /// @param path verified container snapshot
@@ -227,18 +230,7 @@ public final class JanexReader implements Closeable {
                 if (request.path == null) {
                     roots.add(reader.root(reader.reference(request.pool, request.index), request.module, false));
                 } else {
-                    byte[] bytes;
-                    try (InputStream input = java.nio.file.Files.newInputStream(request.path);
-                         ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-                        byte[] buffer = new byte[8192];
-                        int count;
-                        while ((count = input.read(buffer)) != -1) {
-                            limits.bytes((long) output.size() + count);
-                            output.write(buffer, 0, count);
-                        }
-                        bytes = output.toByteArray();
-                    }
-                    roots.add(reader.jarRoot(new Dependency(request.jarName, bytes), request.module, false));
+                    roots.add(reader.jarRoot(request.jarName, JarArchive.index(request.path, limits), request.module, false));
                 }
             }
             reader.prepareDictionaries();
@@ -527,6 +519,8 @@ public final class JanexReader implements Closeable {
     private static final class Source {
         /// Inline bytes, or null for a stored or extents source.
         byte[] inline;
+        /// Deferred external JAR payload, or null for container and inline sources.
+        JarSource jar;
         /// Physical stored offset.
         long offset;
         /// Stored encoding, or null for inline and extents sources.
@@ -591,6 +585,9 @@ public final class JanexReader implements Closeable {
                 "Dictionary decoding must not reference another dictionary");
         if (source.inline != null) {
             return source.inline;
+        }
+        if (source.jar != null) {
+            return source.jar.read();
         }
         if (source.encoding != null) {
             return source.encoding.decode(read(source.offset, source.encoding.stored));
@@ -1188,7 +1185,7 @@ public final class JanexReader implements Closeable {
                     ResourceRequest request = request(entry, true, directory, launch.requests.size());
                     launch.requests.add(request);
                     roots.add(request.path == null ? root(reference(request.pool, request.index), true, false)
-                            : jarRoot(new Dependency(request.jarName, java.nio.file.Files.readAllBytes(request.path)), true, false));
+                            : jarRoot(request.jarName, JarArchive.index(request.path, limits), true, false));
                 }
             } else {
                 String previous = launch.moduleRequirements.get(requirement.name());
@@ -1296,7 +1293,8 @@ public final class JanexReader implements Closeable {
                 extents[i][2] = source.extents[i][2];
             }
             selectedSources.add(new ResourcePlan.Source(source.inline, source.encoding == null ? -1 : source.offset,
-                    source.inline == null && source.encoding != null ? limits.bytes(source.encoding.stored) : 0, filters, extents));
+                    source.inline == null && source.encoding != null ? limits.bytes(source.encoding.stored) : 0,
+                    filters, extents, source.jar));
         }
         DataPool[] selectedPools = new DataPool[usedPools.size()];
         for (int id : usedPools) {
@@ -1359,7 +1357,11 @@ public final class JanexReader implements Closeable {
 
     /// Imports bounded JAR entries and applies increasing multi-release layers for this runtime.
     private Root jarRoot(Dependency dependency, boolean module, boolean agent) throws IOException {
-        List<JarArchive.Entry> entries = JarArchive.read(dependency.bytes, limits);
+        return jarRoot(dependency.jarName, JarArchive.read(dependency.bytes, limits), module, agent);
+    }
+
+    /// Applies JAR resource semantics while retaining deferred payloads for snapshot-backed entries.
+    private Root jarRoot(String jarName, List<JarArchive.Entry> entries, boolean module, boolean agent) throws IOException {
         boolean multiRelease = false;
         for (JarArchive.Entry entry : entries) {
             if (entry.name().equals("META-INF/MANIFEST.MF")) {
@@ -1397,7 +1399,14 @@ public final class JanexReader implements Closeable {
                 require(!node.target.isEmpty(), "Empty JAR symbolic-link target");
                 path(node.target, false, true);
             } else if (!directory) {
-                node.source = inline(entry.bytes());
+                if (entry.source() == null) {
+                    node.source = inline(entry.bytes());
+                } else {
+                    Source source = new Source();
+                    source.jar = entry.source();
+                    source.length = source.jar.length();
+                    node.source = add(source);
+                }
             }
             if (entry.mode() >= 0 && node.source >= -1) {
                 node.metadata = new LinkedHashMap<Object, Object>();
@@ -1416,7 +1425,7 @@ public final class JanexReader implements Closeable {
                 mergeJarLayer(tree, layer.getValue());
             }
         }
-        return finishRoot(dependency.jarName, module, tree, agent);
+        return finishRoot(jarName, module, tree, agent);
     }
 
     /// Merges one JAR layer without permitting implicit file/directory replacement.

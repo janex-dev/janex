@@ -17,11 +17,12 @@ public final class ResourceIndexes {
     private ResourceIndexes() {
     }
 
-    /// Encodes one resource plan without opening its snapshot or changing the plan.
+    /// Encodes one resource plan, inlining external JAR entries without changing the plan.
+    /// External snapshots are opened and their payloads validated when such sources are present.
     ///
     /// @param plan selected resources with inherited byte limits
     /// @return owned private-index bytes
-    /// @throws IOException if the encoded index or a string exceeds the plan's byte limit
+    /// @throws IOException if the encoded index exceeds a limit or an external payload cannot be read or validated
     public static byte[] encode(ResourcePlan plan) throws IOException {
         ReadLimits limits = plan.limits();
         IndexBuffer buffer = new IndexBuffer(limits);
@@ -32,7 +33,7 @@ public final class ResourceIndexes {
         string(output, plan.snapshot().toString(), limits);
         output.writeInt(plan.sources().size());
         for (ResourcePlan.Source source : plan.sources()) {
-            byte[] inline = source.inline();
+            byte[] inline = source.jar() == null ? source.inline() : source.jar().read();
             if (inline != null) {
                 output.writeByte(0);
                 output.writeInt(inline.length);
