@@ -73,8 +73,8 @@ public final class ResourcesTest {
                             if (!resource.buffer().isReadOnly()) {
                                 throw new AssertionError("Writable shared resource buffer");
                             }
-                            actualMetadata.put(entry.getKey(), Arrays.<Object>asList(resource.times[0], resource.times[1],
-                                    resource.times[2], resource.permissions));
+                            actualMetadata.put(entry.getKey(), Arrays.<Object>asList(resource.creationTime(), resource.lastModifiedTime(),
+                                    resource.lastAccessTime(), resource.permissions));
                         }
                     }
                     if (!valid) {
@@ -111,7 +111,7 @@ public final class ResourcesTest {
                 byte[] encoded = timestampIndex(snapshot, expected.getEpochSecond(), expected.getNano());
                 try (ResourceIndex index = new ResourceIndex(new ByteArrayInputStream(encoded))) {
                     ResourceIndex.Resource resource = index.roots.get(0).files.get("dir/");
-                    if (!expected.equals(resource.time(0)) || resource.time(1) != null || resource.time(2) != null) {
+                    if (!expected.equals(resource.creationTime()) || resource.lastModifiedTime() != null || resource.lastAccessTime() != null) {
                         throw new AssertionError("Private timestamp differs");
                     }
                 }

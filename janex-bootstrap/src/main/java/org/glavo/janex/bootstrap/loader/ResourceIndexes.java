@@ -83,26 +83,28 @@ public final class ResourceIndexes {
                         output.writeInt(transform.dataPoolIndex());
                     }
                 }
-                Instant[] times = file.times();
-                int flags = file.permissions() == null ? 0 : 8;
-                for (int i = 0; i < times.length; i++) {
-                    if (times[i] != null) {
-                        flags |= 1 << i;
-                    }
-                }
+                int flags = (file.creationTime() == null ? 0 : 1)
+                        | (file.lastModifiedTime() == null ? 0 : 2)
+                        | (file.lastAccessTime() == null ? 0 : 4)
+                        | (file.permissions() == null ? 0 : 8);
                 output.writeByte(flags);
-                for (Instant time : times) {
-                    if (time != null) {
-                        output.writeLong(time.getEpochSecond());
-                        output.writeInt(time.getNano());
-                    }
-                }
+                writeTime(output, file.creationTime());
+                writeTime(output, file.lastModifiedTime());
+                writeTime(output, file.lastAccessTime());
                 if (file.permissions() != null) {
                     output.writeInt(file.permissions());
                 }
             }
         }
         return buffer.bytes.toByteArray();
+    }
+
+    /// Writes seconds and nanoseconds when the timestamp is present.
+    private static void writeTime(DataOutputStream output, Instant time) throws IOException {
+        if (time != null) {
+            output.writeLong(time.getEpochSecond());
+            output.writeInt(time.getNano());
+        }
     }
 
     /// Writes exact UTF-16 units under the default per-value byte limit without closing the stream.

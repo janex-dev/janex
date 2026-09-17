@@ -468,27 +468,26 @@ public final class JanexFileSystemProvider extends FileSystemProvider {
         }
 
         /// Converts a stored instant to FileTime, using the epoch when absent.
-        private FileTime time(int index) {
-            Instant value = resource == null ? null : resource.time(index);
+        private static FileTime time(Instant value) {
             return FileTime.from(value == null ? Instant.EPOCH : value);
         }
 
         /// Returns the stored modification time or the epoch.
         @Override
         public FileTime lastModifiedTime() {
-            return time(1);
+            return time(resource == null ? null : resource.lastModifiedTime());
         }
 
         /// Returns the stored access time or the epoch.
         @Override
         public FileTime lastAccessTime() {
-            return time(2);
+            return time(resource == null ? null : resource.lastAccessTime());
         }
 
         /// Returns the stored creation time or the epoch.
         @Override
         public FileTime creationTime() {
-            return time(0);
+            return time(resource == null ? null : resource.creationTime());
         }
 
         /// Tests whether this entry has file content.

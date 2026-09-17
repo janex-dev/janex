@@ -188,17 +188,24 @@ public final class ResourcePlan {
         private final int source;
         /// Immutable CLASSFILE steps in decoding order.
         private final List<ClassFileTransform> transforms;
-        /// Creation, modification, and access instants; absent values are null.
-        private final Instant[] times;
+        /// Creation instant, or null when absent.
+        private final Instant creationTime;
+        /// Last modification instant, or null when absent.
+        private final Instant lastModifiedTime;
+        /// Last access instant, or null when absent.
+        private final Instant lastAccessTime;
         /// POSIX permission bits, or null when unspecified.
         private final Integer permissions;
 
         /// Retains validated preparation data without exposing mutable input arrays or collections.
-        File(int source, ClassFileTransform[] transforms, Instant[] times, Integer permissions) {
+        File(int source, ClassFileTransform[] transforms, Instant creationTime,
+                Instant lastModifiedTime, Instant lastAccessTime, Integer permissions) {
             this.source = source;
             this.transforms = transforms.length == 0 ? Collections.emptyList()
                     : Collections.unmodifiableList(Arrays.asList(transforms.clone()));
-            this.times = times == null ? null : times.clone();
+            this.creationTime = creationTime;
+            this.lastModifiedTime = lastModifiedTime;
+            this.lastAccessTime = lastAccessTime;
             this.permissions = permissions;
         }
 
@@ -212,10 +219,19 @@ public final class ResourcePlan {
             return transforms;
         }
 
-        /// Returns an independent copy of creation, modification, and access instants, or null if no array was supplied.
-        /// Null array elements denote absent timestamps.
-        public Instant[] times() {
-            return times == null ? null : times.clone();
+        /// Returns the creation instant, or null when absent.
+        public Instant creationTime() {
+            return creationTime;
+        }
+
+        /// Returns the last modification instant, or null when absent.
+        public Instant lastModifiedTime() {
+            return lastModifiedTime;
+        }
+
+        /// Returns the last access instant, or null when absent.
+        public Instant lastAccessTime() {
+            return lastAccessTime;
         }
 
         /// Returns pOSIX permission bits, or null when unspecified.

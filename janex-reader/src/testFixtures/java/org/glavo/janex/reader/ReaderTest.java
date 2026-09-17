@@ -231,8 +231,7 @@ public final class ReaderTest {
         ResourcePlan.Source inline = new ResourcePlan.Source(bytes, -1, 0, new int[0], new int[0][3], null);
         ResourcePlan.Source extent = new ResourcePlan.Source(null, -1, 0, new int[0], extents, null);
         ResourcePlan.ClassFileTransform[] transforms = {new ResourcePlan.ClassFileTransform(10, 0)};
-        Instant[] times = {Instant.MAX, null, null};
-        ResourcePlan.File file = new ResourcePlan.File(1, transforms, times, 0);
+        ResourcePlan.File file = new ResourcePlan.File(1, transforms, Instant.MAX, null, null, 0);
         Map<String, ResourcePlan.File> files = new java.util.LinkedHashMap<String, ResourcePlan.File>();
         files.put("value", file);
         ResourcePlan.Root root = new ResourcePlan.Root("example.jar", false, files);
@@ -243,13 +242,13 @@ public final class ReaderTest {
         bytes[0] = 0;
         extents[0][2] = 0;
         transforms[0] = new ResourcePlan.ClassFileTransform(0, 1);
-        times[0] = null;
         pools[0] = null;
         files.clear();
         check(plan.sources().get(0).inline()[0] == 42);
         check(plan.sources().get(1).extents()[0][2] == 1);
         check(plan.roots().get(0).files().get("value").transforms().get(0).decodedLength() == 10);
-        check(file.times()[0].equals(Instant.MAX) && file.permissions() == 0);
+        check(file.creationTime().equals(Instant.MAX) && file.permissions() == 0);
+        check(file.lastModifiedTime() == null && file.lastAccessTime() == null);
         check(plan.pools()[0] == immutable && plan.pools()[0].view(1).get() == 42);
         inline.inline()[0] = 0;
         extent.extents()[0][2] = 0;
@@ -259,10 +258,9 @@ public final class ReaderTest {
         } catch (UnsupportedOperationException expected) {
             check(file.transforms().get(0).dataPoolIndex() == 0);
         }
-        file.times()[0] = null;
         plan.pools()[0] = null;
         check(inline.inline()[0] == 42 && extent.extents()[0][2] == 1);
-        check(file.transforms().get(0).decodedLength() == 10 && file.times()[0] != null);
+        check(file.transforms().get(0).decodedLength() == 10 && file.creationTime() != null);
         check(plan.pools()[0] == immutable && plan.pools()[0].view(1).get() == 42);
         try {
             plan.roots().clear();

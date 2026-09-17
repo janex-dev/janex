@@ -1311,13 +1311,11 @@ public final class JanexReader implements Closeable {
                     transforms[i] = poolIndex == transform.dataPoolIndex() ? transform
                             : new ResourcePlan.ClassFileTransform(transform.decodedLength(), poolIndex);
                 }
-                Instant[] times = new Instant[3];
-                for (int i = 0; i < times.length; i++) {
-                    times[i] = has(node.metadata, i + 2) ? (Instant) get(node.metadata, i + 2) : null;
-                }
                 Integer permissions = has(node.metadata, 5) ? (int) number(get(node.metadata, 5)) : null;
                 files.put(node.source == -1 && !entry.getKey().isEmpty() ? entry.getKey() + "/" : entry.getKey(),
-                        new ResourcePlan.File(node.source < 0 ? node.source : sourceIds.get(node.source), transforms, times, permissions));
+                        new ResourcePlan.File(node.source < 0 ? node.source : sourceIds.get(node.source), transforms,
+                                (Instant) get(node.metadata, 2), (Instant) get(node.metadata, 3),
+                                (Instant) get(node.metadata, 4), permissions));
             }
             selectedRoots.add(new ResourcePlan.Root(root.name, root.module, files));
         }

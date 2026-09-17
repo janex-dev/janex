@@ -372,6 +372,20 @@ public final class ResourceIndex implements Closeable {
         }
     }
 
+    /// Reads seconds and nanoseconds, rejecting invalid timestamp components or ranges.
+    private static Instant readTime(DataInputStream input) throws IOException {
+        long seconds = input.readLong();
+        int nanos = input.readInt();
+        if (nanos < 0 || nanos >= 1_000_000_000) {
+            throw new IOException("Invalid resource timestamp nanoseconds");
+        }
+        try {
+            return Instant.ofEpochSecond(seconds, nanos);
+        } catch (DateTimeException invalid) {
+            throw new IOException("Resource timestamp out of range", invalid);
+        }
+    }
+
     /// A directory or a logical file with its selected transform pools.
     public final class Resource {
         /// Source ID, or -1 for a directory.
@@ -380,8 +394,12 @@ public final class ResourceIndex implements Closeable {
         final List<ResourcePlan.ClassFileTransform> transforms;
         /// Logical resource length, zero for directories.
         final int length;
-        /// Nullable creation, modification, and access instants with nanosecond precision.
-        final Instant[] times = new Instant[3];
+        /// Creation instant, or null when absent.
+        private final Instant creationTime;
+        /// Last modification instant, or null when absent.
+        private final Instant lastModifiedTime;
+        /// Last access instant, or null when absent.
+        private final Instant lastAccessTime;
         /// POSIX permission bits, or -1 when unspecified.
         final int permissions;
 
@@ -395,10 +413,19 @@ public final class ResourceIndex implements Closeable {
             return length;
         }
 
-        /// Returns the creation (0), modification (1), or access (2) instant, or null when absent.
-        /// Invalid indices throw IndexOutOfBoundsException.
-        public Instant time(int index) {
-            return times[index];
+        /// Returns the creation instant, or null when absent.
+        public Instant creationTime() {
+            return creationTime;
+        }
+
+        /// Returns the last modification instant, or null when absent.
+        public Instant lastModifiedTime() {
+            return lastModifiedTime;
+        }
+
+        /// Returns the last access instant, or null when absent.
+        public Instant lastAccessTime() {
+            return lastAccessTime;
         }
 
         /// Returns POSIX permission bits, or -1 when unspecified.
@@ -424,8 +451,9 @@ public final class ResourceIndex implements Closeable {
             id = file.source();
             transforms = file.transforms();
             length = id == -1 ? 0 : transforms.isEmpty() ? sources[id].length : transforms.get(transforms.size() - 1).decodedLength();
-            Instant[] values = file.times();
-            if (values != null) System.arraycopy(values, 0, times, 0, 3);
+            creationTime = file.creationTime();
+            lastModifiedTime = file.lastModifiedTime();
+            lastAccessTime = file.lastAccessTime();
             permissions = file.permissions() == null ? -1 : file.permissions();
         }
 
@@ -451,20 +479,9 @@ public final class ResourceIndex implements Closeable {
             if ((flags & ~15) != 0) {
                 throw new IOException("Invalid resource metadata flags");
             }
-            for (int i = 0; i < 3; i++) {
-                if ((flags & (1 << i)) != 0) {
-                    long seconds = input.readLong();
-                    int nanos = input.readInt();
-                    if (nanos < 0 || nanos >= 1_000_000_000) {
-                        throw new IOException("Invalid resource timestamp nanoseconds");
-                    }
-                    try {
-                        times[i] = Instant.ofEpochSecond(seconds, nanos);
-                    } catch (DateTimeException invalid) {
-                        throw new IOException("Resource timestamp out of range", invalid);
-                    }
-                }
-            }
+            creationTime = (flags & 1) == 0 ? null : readTime(input);
+            lastModifiedTime = (flags & 2) == 0 ? null : readTime(input);
+            lastAccessTime = (flags & 4) == 0 ? null : readTime(input);
             permissions = (flags & 8) == 0 ? -1 : input.readInt();
             if (((flags & 8) != 0 && permissions < 0) || permissions > 4095) {
                 throw new IOException("Invalid resource permissions");
