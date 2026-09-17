@@ -4,7 +4,6 @@
 package org.glavo.janex.reader;
 
 import java.io.*;
-import java.math.BigInteger;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.*;
@@ -974,7 +973,7 @@ public final class JanexReader implements Closeable {
         }
         for (int key = 2; key <= 4; key++) {
             if (has(metadata, key)) {
-                metadata.put(BigInteger.valueOf(key), timestamp(get(metadata, key)));
+                metadata.put((long) key, timestamp(get(metadata, key)));
             }
         }
         if (has(metadata, 5)) {
@@ -1409,7 +1408,7 @@ public final class JanexReader implements Closeable {
             }
             if (entry.mode() >= 0 && node.source >= -1) {
                 node.metadata = new LinkedHashMap<Object, Object>();
-                node.metadata.put(BigInteger.valueOf(5), BigInteger.valueOf(entry.mode() & 07777));
+                node.metadata.put(5L, (long) (entry.mode() & 07777));
             }
             Map<String, Node> layer = layers.computeIfAbsent(version, ignored -> new TreeMap<String, Node>(JanexReader::compareText));
             require(layer.put(name, node) == null, "Conflicting JAR resource paths");

@@ -72,13 +72,43 @@ public final class ReaderTest {
         reject(() -> Conditions.matches(reserved));
         // Unknown extension tags remain opaque rather than being interpreted as timestamps.
         Map<Object, Object> extension = new Input(new byte[]{5, (byte) 0xa1, 0x18, 99, (byte) 0xc2, 0x40}).map();
-        check(extension.containsKey(BigInteger.valueOf(99)));
+        check(extension.containsKey(99L));
         archives();
         resourcePlan();
         dataPools();
         repeatedPoolEntries();
         poolIndexFraming();
         timestamps();
+        cborIntegers();
+    }
+
+    /// Checks integer representation boundaries and unsigned bit preservation.
+    private static void cborIntegers() throws Exception {
+        check(new Input(new byte[]{0}).cbor(0).equals(0L));
+        check(new Input(new byte[]{0x18, 24}).cbor(0).equals(24L));
+        check(new Input(new byte[]{0x20}).cbor(0).equals(-1L));
+        for (long bits : new long[]{0x1_0000_0000L, Long.MAX_VALUE, Long.MIN_VALUE, -1L}) {
+            BigInteger magnitude = new BigInteger(Long.toUnsignedString(bits));
+            for (int major = 0; major <= 1; major++) {
+                byte[] encoded = java.nio.ByteBuffer.allocate(9)
+                        .put((byte) ((major << 5) | 27)).putLong(bits).array();
+                Object value = new Input(encoded).cbor(0);
+                BigInteger expected = major == 0 ? magnitude : magnitude.negate().subtract(BigInteger.ONE);
+                if (expected.bitLength() <= 63) {
+                    check(value instanceof Long && value.equals(expected.longValueExact()));
+                } else {
+                    check(value instanceof BigInteger && value.equals(expected));
+                }
+                if (major == 0) {
+                    check(Input.number(value) == bits);
+                } else {
+                    reject(() -> Input.number(value));
+                }
+                BigInteger[] parts = expected.divideAndRemainder(BigInteger.valueOf(1_000_000_000));
+                check(Input.timestamp(value).equals(Instant.ofEpochSecond(parts[0].longValueExact(), parts[1].longValue())));
+            }
+        }
+        reject(() -> Input.number(1));
     }
 
     /// Checks exact negative normalization and both Instant boundaries without saturation.
@@ -87,9 +117,9 @@ public final class ReaderTest {
         BigInteger maximum = new BigInteger("31556889864403199999999999");
         check(Input.timestamp(minimum).equals(Instant.MIN));
         check(Input.timestamp(maximum).equals(Instant.MAX));
-        check(Input.timestamp(BigInteger.ZERO).equals(Instant.EPOCH));
-        check(Input.timestamp(BigInteger.valueOf(-1)).equals(Instant.ofEpochSecond(-1, 999_999_999)));
-        check(Input.timestamp(BigInteger.valueOf(-1_000_000_001)).equals(Instant.ofEpochSecond(-2, 999_999_999)));
+        check(Input.timestamp(0L).equals(Instant.EPOCH));
+        check(Input.timestamp(-1L).equals(Instant.ofEpochSecond(-1, 999_999_999)));
+        check(Input.timestamp(-1_000_000_001L).equals(Instant.ofEpochSecond(-2, 999_999_999)));
         reject(() -> Input.timestamp(minimum.subtract(BigInteger.ONE)));
         reject(() -> Input.timestamp(maximum.add(BigInteger.ONE)));
         reject(() -> Input.timestamp(BigInteger.ONE.shiftLeft(127)));

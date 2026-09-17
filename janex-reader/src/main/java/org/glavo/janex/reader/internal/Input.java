@@ -233,6 +233,11 @@ public final class Input {
 
     /// Requires a CBOR unsigned integer, retaining all unsigned bits.
     public static long number(Object value) throws IOException {
+        if (value instanceof Long) {
+            long number = (Long) value;
+            require(number >= 0, "Invalid unsigned integer");
+            return number;
+        }
         require(value instanceof BigInteger, "Expected CBOR unsigned integer");
         BigInteger number = (BigInteger) value;
         require(number.signum() >= 0 && number.bitLength() <= 64, "Invalid unsigned integer");
@@ -241,12 +246,12 @@ public final class Input {
 
     /// Looks up an unsigned-integer map key.
     public static Object get(Map<Object, Object> map, int key) {
-        return map.get(BigInteger.valueOf(key));
+        return map.get((long) key);
     }
 
     /// Tests whether an unsigned-integer map key is present, including null values.
     public static boolean has(Map<Object, Object> map, int key) {
-        return map.containsKey(BigInteger.valueOf(key));
+        return map.containsKey((long) key);
     }
 
     /// Requires unsigned-integer map keys.
@@ -268,20 +273,32 @@ public final class Input {
         return Integer.compare(left.length, right.length);
     }
 
-    /// Reads a shortest-form CBOR argument.
-    private BigInteger argument(int info) throws IOException {
+    /// Reads a shortest-form CBOR argument, retaining all unsigned 64 bits.
+    private long argument(int info) throws IOException {
         if (info < 24) {
-            return BigInteger.valueOf(info);
+            return info;
         }
         require(info <= 27, "Indefinite or reserved CBOR encoding");
         int length = 1 << (info - 24);
-        BigInteger result = new BigInteger(1, take(length));
-        BigInteger minimum = info == 24 ? BigInteger.valueOf(24) : BigInteger.ONE.shiftLeft(length * 4);
-        require(result.compareTo(minimum) >= 0, "Nonminimal CBOR argument");
+        long result = 0;
+        for (int i = 0; i < length; i++) {
+            result = (result << 8) | u8();
+        }
+        long minimum = info == 24 ? 24 : 1L << (length * 4);
+        require(Long.compareUnsigned(result, minimum) >= 0, "Nonminimal CBOR argument");
         return result;
     }
 
+    /// Boxes an unsigned argument as Long, using BigInteger only above Long.MAX_VALUE.
+    private static Object unsigned(long value) {
+        if (value >= 0) {
+            return value;
+        }
+        return BigInteger.valueOf(value & Long.MAX_VALUE).setBit(63);
+    }
+
     /// Validates and reads one deterministic CBOR item with bounded nesting.
+    /// Integers use Long when representable and BigInteger otherwise; tags retain their encoded payload.
     public Object cbor(int depth) throws IOException {
         limits.depth(depth);
         int begin = position;
@@ -328,21 +345,24 @@ public final class Input {
             require(info < 24, "Invalid CBOR simple value");
             return new Opaque(initial, info);
         }
-        BigInteger argument = argument(info);
+        long argument = argument(info);
         if (major == 0) {
-            return argument;
+            return unsigned(argument);
         }
         if (major == 1) {
-            return argument.negate().subtract(BigInteger.ONE);
+            if (argument >= 0) {
+                return ~argument;
+            }
+            return ((BigInteger) unsigned(argument)).negate().subtract(BigInteger.ONE);
         }
         if (major == 6) {
             Object value = cbor(depth + 1);
-            return new Opaque(argument, value);
+            return new Opaque(unsigned(argument), value);
         }
-        if (argument.bitLength() > 31) {
+        if (argument < 0 || argument > Integer.MAX_VALUE) {
             throw new IOException("CBOR length exceeds limit");
         }
-        int length = argument.intValue();
+        int length = (int) argument;
         if (major == 2 || major == 3) {
             byte[] raw = take(length);
             return major == 2 ? raw : utf8(raw);
@@ -386,18 +406,22 @@ public final class Input {
         }
     }
 
-    /// Decodes integer POSIX nanoseconds within the format's Instant range.
+    /// Decodes integer POSIX nanoseconds within the format's timestamp range.
     /// @param value a CBOR integer or canonical bignum
     /// @return the exact timestamp, retaining nanosecond precision
     /// @throws IOException if the encoding is invalid or the timestamp is out of range
     public static Instant timestamp(Object value) throws IOException {
+        if (value instanceof Long) {
+            long nanos = (Long) value;
+            return Instant.ofEpochSecond(nanos / 1_000_000_000, nanos % 1_000_000_000);
+        }
         if (value instanceof Opaque) {
             Opaque tag = (Opaque) value;
-            require(BigInteger.valueOf(2).equals(tag.type) || BigInteger.valueOf(3).equals(tag.type), "Invalid timestamp tag");
+            require(Long.valueOf(2).equals(tag.type) || Long.valueOf(3).equals(tag.type), "Invalid timestamp tag");
             byte[] magnitude = binary(tag.value);
             require(magnitude.length > 8 && magnitude.length <= 16 && magnitude[0] != 0, "Invalid timestamp bignum");
             BigInteger integer = new BigInteger(1, magnitude);
-            value = BigInteger.valueOf(2).equals(tag.type) ? integer : integer.negate().subtract(BigInteger.ONE);
+            value = Long.valueOf(2).equals(tag.type) ? integer : integer.negate().subtract(BigInteger.ONE);
         }
         require(value instanceof BigInteger && ((BigInteger) value).bitLength() <= 127, "Invalid resource timestamp");
         BigInteger[] parts = ((BigInteger) value).divideAndRemainder(NANOS_PER_SECOND);
