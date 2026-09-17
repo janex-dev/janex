@@ -1,11 +1,16 @@
 // Copyright (c) 2026 Glavo
 // SPDX-License-Identifier: MPL-2.0
 
-//! Compact resource-root handoff over one authenticated, launch-owned snapshot.
+//! Compact resource-root handoff over verified files without launch-time copies.
 
 use crate::{Result, error::invalid};
-use janex_format::{application::PathEntry, blob::BlobStore, condition::Context};
-use std::{collections::BTreeMap, fs, io::Cursor, path::Path};
+use janex_format::{
+    application::PathEntry,
+    blob::BlobStore,
+    checksum::{Algorithm, Checksum},
+    condition::Context,
+};
+use std::{io::Cursor, path::Path};
 
 /// Root references interpreted in the application JVM.
 pub(crate) struct Resources {
@@ -13,25 +18,23 @@ pub(crate) struct Resources {
     pub(crate) data: Vec<u8>,
 }
 
-/// Publishes verified snapshots and encodes selected references without reading local roots.
+/// Encodes original paths and verified content identities without copying files or expanding roots.
 pub(crate) fn prepare(
     entries: &[PathEntry],
     modules: &[PathEntry],
     context: &Context,
     blobs: &mut BlobStore<Cursor<Vec<u8>>>,
     roots: &mut crate::roots::Roots,
-    directory: &Path,
+    source: &Path,
     max_bytes: u64,
 ) -> Result<Resources> {
-    let snapshot = directory.join("snapshot.janex");
-    fs::write(&snapshot, blobs.reader().get_ref().get_ref())?;
     let limits = blobs.reader().limits();
-    let mut output = b"JNXROOT1".to_vec();
+    let mut output = b"JNXROOT2".to_vec();
     number(&mut output, limits.max_bytes.min(i32::MAX as u64))?;
     number(&mut output, limits.max_elements.min(i32::MAX as u64))?;
     number(&mut output, limits.max_depth as u64)?;
     output.extend(max_bytes.to_be_bytes());
-    path(&mut output, &snapshot)?;
+    file(&mut output, source, blobs.reader().get_ref().get_ref())?;
     string(&mut output, &context.os)?;
     string(&mut output, &context.arch)?;
     string(&mut output, context.invocation.as_deref().unwrap_or(""))?;
@@ -64,7 +67,6 @@ pub(crate) fn prepare(
         )
         .collect();
     number(&mut output, selected.len() as u64)?;
-    let mut external = BTreeMap::new();
     for (entry, module) in selected {
         output.push(u8::from(module));
         match entry {
@@ -79,23 +81,22 @@ pub(crate) fn prepare(
                     .archives
                     .get(&key)
                     .ok_or_else(|| invalid("external dependency has not been acquired"))?;
-                let next = external.len();
-                let dependency = match external.entry(key) {
-                    std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
-                    std::collections::btree_map::Entry::Vacant(entry) => {
-                        let file = directory.join(format!("dependency-{next}.jar"));
-                        fs::write(&file, &archive.bytes)?;
-                        entry.insert(file)
-                    }
-                };
                 output.push(1);
                 string(&mut output, &archive.jar_name)?;
-                path(&mut output, dependency)?;
+                file(&mut output, &archive.path, &archive.bytes)?;
             }
         }
         limits.bytes(output.len() as u64)?;
     }
     Ok(Resources { data: output })
+}
+
+/// Binds a borrowed file path to the exact bytes verified during preparation.
+fn file(output: &mut Vec<u8>, value: &Path, bytes: &[u8]) -> Result<()> {
+    path(output, &janex_java::runtime::java_path(value))?;
+    output.extend((bytes.len() as u64).to_be_bytes());
+    output.extend(Checksum::compute(Algorithm::Sha256, bytes)?.digest());
+    Ok(())
 }
 
 /// Encodes a path without losing Windows UTF-16 code units.
@@ -165,7 +166,7 @@ mod tests {
         launch::{EntryPoint, LaunchMode, LaunchRequest},
         runtime::{JavaOptions, JavaRuntime, candidates},
     };
-    use std::{io::Write, process::Command};
+    use std::{fs, io::Write, process::Command};
 
     /// Checks source and pool identities at the Java integer boundary without allocation.
     #[test]
@@ -402,13 +403,15 @@ public class Main {
         };
         let launch = temp.path().join("launch");
         fs::create_dir(&launch).unwrap();
+        let source = temp.path().join("source.janex");
+        fs::write(&source, blobs.reader().get_ref().get_ref()).unwrap();
         let resources = prepare(
             &[PathEntry::Local(reference(7))],
             &[],
             &context,
             &mut blobs,
             &mut roots,
-            &launch,
+            &source,
             1024 * 1024,
         )
         .unwrap();

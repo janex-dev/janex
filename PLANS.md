@@ -274,7 +274,9 @@ janex run [OPTIONS] <TARGET> [ARGS...]
   modules and modules supplied by the runtime. Report missing dependencies without downloading
   arbitrary module providers. Resolve explicit HTTP(S) JARs and exact Maven PURLs after package
   authentication, verify declared checksums, and support an atomic local cache and offline mode.
-- For bootstrap entry points, write a private snapshot and resource index. Read ordinary
+- For bootstrap entry points, pass original package and cached dependency paths with their content
+  identities, checking them before Java resource preparation. Require these files to remain unchanged
+  until application exit; create temporary launch files only for agents and direct-mode resources. Read ordinary
   Stored blobs, Extents, Zstandard frames, and CLASSFILE transforms on demand in Java. Preserve root
   order, resource enumeration, manifest package attributes, sealing, and service discovery.
 - Load named and automatic modules directly through indexed module finders and readers, retaining

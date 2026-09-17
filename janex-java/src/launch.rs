@@ -56,8 +56,9 @@ pub struct LaunchRequest {
 impl LaunchRequest {
     /// Builds native arguments and locates the reusable bootstrap cache when needed.
     ///
-    /// The caller must supply a private directory and retain it until the child exits.
-    /// Failure may leave partial resources there. This does not start Java or authenticate input.
+    /// `directory` is used only if an empty classpath directory must be created. In that case it
+    /// must be private and retained until the child exits; failure may leave resources there.
+    /// This does not start Java or authenticate input.
     /// Module launching requires Java 9 or later. Bootstrap argument encoding is bounded by `limits`.
     pub fn prepare(
         &self,
@@ -71,7 +72,7 @@ impl LaunchRequest {
     /// Prepares a launch with optional private classpath and module root requests.
     ///
     /// `resources` must contain Host-selected root requests matching the embedded Java bootstrap.
-    /// It requires bootstrap mode. The caller must retain the referenced verified snapshots until
+    /// It requires bootstrap mode. The caller must retain the referenced files unchanged until
     /// Java exits. The application JVM prepares resources and its module graph before invoking Java
     /// agent premain methods or main. Include system-module roots required by indexed descriptors in
     /// `jvm_options`; [`crate::modules::system_roots`] computes them from a selected inventory.

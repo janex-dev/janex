@@ -372,9 +372,11 @@ Only supplied revocation information is checked; no network or global keyring is
 
 ### Execution
 
-The launcher reads a bounded, owned snapshot and verifies container and external-region checksums
-once before selecting a runtime. The result is reused for this launch. Later changes to the source file do not
-change the prepared invocation; there is no verification cache shared across launches.
+The launcher reads bounded input bytes and verifies container and external-region checksums before
+selecting a runtime. Bootstrap reads the original package and content-addressed dependency files
+without per-launch copies, checking their lengths and SHA-256 identities before preparing resources.
+These files must remain unchanged until the application exits; this is not filesystem snapshot isolation.
+There is no verification cache shared across launches.
 Signed files additionally require secure checksum coverage of every section and both external regions.
 
 Runtime selection tries an explicit override, `JAVA_HOME`, then Java executables on `PATH`.
@@ -392,14 +394,15 @@ agent options use the native launcher in both modes. A custom `java.system.class
 `--patch-module` requires direct mode.
 
 Conditions, overlays, and resource layers use the selected runtime and invocation `run`.
-Bootstrap entry points load classpath and module resources on demand from the verified snapshot,
+Bootstrap entry points load classpath and module resources on demand from the verified input files,
 using a Janex system class loader. Resource URLs support `Paths.get(uri)` and read-only NIO access.
 The application JVM prepares the resource index from selected root references before agents or main
 run. The fixed bootstrap JAR is reused from `JANEX_HOME/cache/bootstrap`; launch data is passed through
 a private JVM property, with environment chunks for larger payloads. Native process limits still apply.
 On Java 9+, application modules occupy a child of the native boot layer; module access options are
 applied to that layer through the JDK module-access bridge. Agents and direct launches use
-temporary JARs. Original filenames are retained for automatic-module naming. Module requirements use
+temporary JARs; ordinary bootstrap launches create no temporary directory. Original filenames are
+retained for automatic-module naming. Module requirements use
 the selected Java runtime and resolved module-path entries; virtual module requirements do not trigger
 provider discovery or dependency downloads by themselves.
 Symbolic links expand into resource contents; dangling links, cycles, and root escapes fail.

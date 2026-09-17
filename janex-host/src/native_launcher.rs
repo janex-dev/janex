@@ -126,7 +126,8 @@ fn validate_executable(bytes: &[u8]) -> Result<()> {
 
 /// Reads one bounded executable snapshot and prepares its embedded application.
 ///
-/// The path is not reopened: configuration and authenticated content share the same snapshot.
+/// Configuration and authentication use the same bytes. Bootstrap reopens the executable and
+/// checks its content identity; the caller must keep it unchanged until Java exits.
 /// Arguments follow the package's preset arguments unchanged. The invocation channel is `open`.
 /// Missing, malformed, or unsupported configuration is an error.
 pub fn prepare(

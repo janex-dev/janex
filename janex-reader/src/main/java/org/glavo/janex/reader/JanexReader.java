@@ -1134,23 +1134,23 @@ public final class JanexReader implements Closeable {
     /// @return owned launch data for the current Java runtime
     /// @throws IOException if closed, already selected, or selection, parsing, or a launch requirement fails
     public Launch launch(String application) throws IOException {
-        return launch(application, null);
+        return launch(application, false);
     }
 
     /// Selects startup configuration and prepares agents and module inventory for a child JVM.
     /// Classpath roots remain unexpanded. External JARs are acquired under this reader's policy
-    /// and copied into the supplied private directory; the caller owns their cleanup, including
-    /// files left by failure. This consumes the same single-use selection as launch.
+    /// referenced directly from their persistent files. Files must remain unchanged until the child
+    /// exits. This consumes the same single-use selection as launch.
     /// @param application explicit application ID, or null to require exactly one application
-    /// @param directory existing private directory retained unchanged until the child exits
     /// @return selected startup data, module resources, and compact child resource requests
-    /// @throws IOException if selection, acquisition, preparation, or writing a snapshot fails
-    public Launch prepareHandoff(String application, Path directory) throws IOException {
-        return launch(application, Objects.requireNonNull(directory));
+    /// @throws IOException if selection, acquisition, or preparation fails, including a resolver
+    /// returning an external dependency without a persistent file
+    public Launch prepareHandoff(String application) throws IOException {
+        return launch(application, true);
     }
 
     /// Selects one application, optionally leaving classpath resource expansion to a child.
-    private Launch launch(String application, Path directory) throws IOException {
+    private Launch launch(String application, boolean handoff) throws IOException {
         require(!closed && !selected, "Janex reader is closed or already selected");
         selected = true;
         Application selected = null;
@@ -1171,18 +1171,18 @@ public final class JanexReader implements Closeable {
                 "Modules require Java 9 or later");
         List<Root> roots = new ArrayList<Root>();
         for (Object entry : launch.classPath) {
-            if (directory == null) roots.add(pathEntry(entry, false));
-            else launch.requests.add(request(entry, false, directory, launch.requests.size()));
+            if (!handoff) roots.add(pathEntry(entry, false));
+            else launch.requests.add(request(entry, false));
         }
         for (Object entry : launch.modulePath) {
             Map<Object, Object> reference = map(entry);
             ModuleRequirement requirement = number(get(reference, 0)) == 1
                     ? ModuleRequirement.parse(text(get(reference, 1)), true) : null;
             if (requirement == null) {
-                if (directory == null) {
+                if (!handoff) {
                     roots.add(pathEntry(entry, true));
                 } else {
-                    ResourceRequest request = request(entry, true, directory, launch.requests.size());
+                    ResourceRequest request = request(entry, true);
                     launch.requests.add(request);
                     roots.add(request.path == null ? root(reference(request.pool, request.index), true, false)
                             : jarRoot(request.jarName, JarArchive.index(request.path, limits), true, false));
@@ -1223,8 +1223,8 @@ public final class JanexReader implements Closeable {
         return launch;
     }
 
-    /// Resolves a selected reference while retaining verified external bytes in a private snapshot.
-    private ResourceRequest request(Object value, boolean module, Path directory, int index) throws IOException {
+    /// Resolves a selected reference and binds its persistent file to the acquired bytes.
+    private ResourceRequest request(Object value, boolean module) throws IOException {
         Map<Object, Object> entry = map(value);
         if (number(get(entry, 0)) == 0) {
             List<Object> reference = list(get(entry, 1));
@@ -1235,9 +1235,9 @@ public final class JanexReader implements Closeable {
         byte[] checksum = has(entry, 2) ? binary(get(entry, 2)) : null;
         Dependency dependency = Objects.requireNonNull(resolver.resolve(uri, checksum));
         limits.bytes(dependency.bytes.length);
-        Path file = directory.resolve("dependency-" + index + ".jar");
-        java.nio.file.Files.write(file, dependency.bytes);
-        return new ResourceRequest(module, file, dependency.jarName);
+        require(dependency.path != null, "External handoff requires a persistent dependency file");
+        return new ResourceRequest(module, dependency.path, dependency.jarName, dependency.bytes.length,
+                Checksum.compute(Checksum.Algorithm.SHA256, dependency.bytes));
     }
 
     /// Resolves dictionary-backed sources before publishing their identities.
@@ -1605,6 +1605,9 @@ public final class JanexReader implements Closeable {
         public final String jarName;
         /// Complete archive bytes; must remain unchanged while the reader imports them.
         public final byte[] bytes;
+        /// Persistent file containing these bytes, or null for memory-only resolution.
+        /// The resolver must retain it unchanged until consumers finish reading resources.
+        public final Path path;
 
         /// Retains the supplied array without copying it.
         ///
@@ -1612,6 +1615,16 @@ public final class JanexReader implements Closeable {
         /// @param bytes acquired archive bytes, validated during import
         /// @throws NullPointerException if either argument is null
         public Dependency(String jarName, byte[] bytes) {
+            this(jarName, bytes, null);
+        }
+
+        /// Retains archive bytes and their optional persistent source without copying or taking ownership.
+        /// @param jarName nonnull original JAR filename
+        /// @param bytes nonnull acquired bytes, which must remain unchanged during import
+        /// @param path matching persistent file retained by the resolver, or null for memory-only use
+        /// @throws NullPointerException if jarName or bytes is null
+        public Dependency(String jarName, byte[] bytes, Path path) {
+            this.path = path == null ? null : path.toAbsolutePath();
             this.jarName = Objects.requireNonNull(jarName);
             this.bytes = Objects.requireNonNull(bytes);
         }

@@ -97,7 +97,8 @@ public final class Dependencies implements JanexReader.DependencyResolver {
                         byte[] digest = (byte[]) value;
                         require(Arrays.equals(record, metadata(uri, address, checksum, digest)), "Dependency cache metadata mismatch");
                         return new JanexReader.Dependency(address.name,
-                                cached(contentPath(directory, digest, address.name), digest, expected));
+                                cached(contentPath(directory, digest, address.name), digest, expected),
+                                contentPath(directory, digest, address.name));
                     } catch (NoSuchFileException missing) {
                         // A missing entry is acquired online below.
                     } catch (IOException invalid) {
@@ -144,7 +145,7 @@ public final class Dependencies implements JanexReader.DependencyResolver {
                     publish(directory, content, bytes);
                 }
                 publish(directory, path, record);
-                return new JanexReader.Dependency(address.name, bytes);
+                return new JanexReader.Dependency(address.name, bytes, content);
             } catch (NoSuchFileException missing) {
                 throw new IOException("Dependency is unavailable in the offline cache", missing);
             }

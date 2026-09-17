@@ -55,6 +55,8 @@ pub struct Dependency {
     pub jar_name: String,
     /// Complete JAR bytes before manifest rewriting or resource import.
     pub bytes: Vec<u8>,
+    /// Content-addressed cache file containing these bytes; retained by the cache owner.
+    pub path: PathBuf,
 }
 
 /// Resolves one HTTP(S) JAR or exact Maven PURL, verifying its declared checksum when present.
@@ -137,7 +139,7 @@ pub fn resolve(
     if !options.refresh {
         match fs::File::open(&path) {
             Ok(file) => {
-                let cached = (|| -> Result<Vec<u8>> {
+                let cached = (|| -> Result<(Vec<u8>, PathBuf)> {
                     let record = Value::from_bytes(
                         &bounded(file, 1024 * 1024)?,
                         Limits {
@@ -153,15 +155,18 @@ pub fn resolve(
                     {
                         return Err(invalid("dependency cache metadata mismatch"));
                     }
-                    read_content(
-                        &content_path(&directory, digest, &jar_name),
-                        digest,
-                        checksum,
-                        options.max_bytes,
-                    )
+                    let content = content_path(&directory, digest, &jar_name);
+                    let bytes = read_content(&content, digest, checksum, options.max_bytes)?;
+                    Ok((bytes, fs::canonicalize(content)?))
                 })();
                 match cached {
-                    Ok(bytes) => return Ok(Dependency { jar_name, bytes }),
+                    Ok((bytes, path)) => {
+                        return Ok(Dependency {
+                            jar_name,
+                            bytes,
+                            path,
+                        });
+                    }
                     Err(error) if options.offline => return Err(error),
                     Err(_) => {}
                 }
@@ -213,7 +218,11 @@ pub fn resolve(
         publish(&directory, &content, &bytes)?;
     }
     publish(&directory, &path, record.as_bytes())?;
-    Ok(Dependency { jar_name, bytes })
+    Ok(Dependency {
+        jar_name,
+        bytes,
+        path: fs::canonicalize(content)?,
+    })
 }
 
 /// Encodes a request binding and its verified content reference.

@@ -93,10 +93,11 @@ impl RunOptions {
     }
 }
 
-/// A selected Java invocation owning its private snapshots, launch data, and materialized paths.
+/// A selected Java invocation borrowing input files and owning any materialized paths.
 ///
-/// Preparation verifies one owned input snapshot. Later changes to the source file do not
-/// affect this plan. It is not a persistent verification cache or a publisher trust claim.
+/// Preparation verifies owned input bytes. Bootstrap verifies their content identities again
+/// when opening the original files. The caller must keep the package and dependency cache files
+/// unchanged until Java exits; this plan does not provide filesystem snapshot isolation.
 #[derive(Debug)]
 pub struct ExecutionPlan {
     /// Runtime selected after condition and local-module checks.
@@ -109,12 +110,12 @@ pub struct ExecutionPlan {
     environment: Vec<(OsString, OsString)>,
     /// Full-snapshot checksum result retained for inspection.
     integrity: IntegrityReport,
-    /// Publisher authentication outcome for the immutable snapshot.
+    /// Publisher authentication outcome for the bytes checked during preparation.
     authentication: Authentication,
     /// Whether the application requests a windowless Windows process.
     windowed: bool,
     /// Lifetime owner of every generated Java path entry.
-    directory: TempDir,
+    directory: Option<TempDir>,
     /// Prevents uninstall of the selected managed SDK while this plan exists.
     sdk_lease: Option<fs::File>,
 }
@@ -147,9 +148,9 @@ impl ExecutionPlan {
         &self.authentication
     }
 
-    /// Returns the temporary directory removed when this plan is dropped.
-    pub fn directory(&self) -> &Path {
-        self.directory.path()
+    /// Returns the generated-file directory, or None when launching needs no temporary files.
+    pub fn directory(&self) -> Option<&Path> {
+        self.directory.as_ref().map(TempDir::path)
     }
 
     /// Creates a direct Java command inheriting the current environment, directory, and streams.
@@ -201,7 +202,8 @@ pub fn prepare(options: &RunOptions) -> Result<ExecutionPlan> {
 }
 
 /// Prepares a launch from an owned snapshot, retaining the same authentication policy as [`prepare`].
-/// The target path is descriptive; it is not reopened. The snapshot size limit is still enforced.
+/// Bootstrap reopens `options.target` and requires it to match these bytes before loading resources.
+/// The caller must retain that file unchanged until Java exits. The snapshot size limit is enforced.
 pub fn prepare_snapshot(options: &RunOptions, bytes: Vec<u8>) -> Result<ExecutionPlan> {
     if options.openpgp_trust.is_some() && !options.cms_trust.signers.is_empty() {
         return Err(invalid(
@@ -319,7 +321,15 @@ fn prepare_runtime(
     {
         return Err(invalid("module launching requires Java 9 or later"));
     }
-    let directory = tempfile::Builder::new().prefix("janex-run-").tempdir()?;
+    let directory = if options.launch_mode == LaunchMode::Direct || !launch.agents.is_empty() {
+        Some(tempfile::Builder::new().prefix("janex-run-").tempdir()?)
+    } else {
+        None
+    };
+    let work_path = directory
+        .as_ref()
+        .map(TempDir::path)
+        .unwrap_or_else(|| Path::new(""));
     roots.acquire(
         launch
             .class_path
@@ -346,7 +356,7 @@ fn prepare_runtime(
         launch.entry_point.main_module.as_deref(),
     )?;
     let mut materializer = Paths {
-        directory: directory.path(),
+        directory: work_path,
         context: &context,
         roots,
         blobs,
@@ -369,7 +379,7 @@ fn prepare_runtime(
     for (index, agent) in launch.agents.iter().enumerate() {
         let source = materializer.local(&agent.reference)?;
         // The native agent loader rejects Windows verbatim paths before calling the system loader.
-        let path = directory.path().join(format!("agent-{index}.jar"));
+        let path = work_path.join(format!("agent-{index}.jar"));
         if path.as_os_str().as_encoded_bytes().contains(&b'=') {
             return Err(invalid(
                 "Java agent path contains an unrepresentable equals sign",
@@ -393,7 +403,7 @@ fn prepare_runtime(
             &context,
             blobs,
             roots,
-            directory.path(),
+            &fs::canonicalize(target_path(&options.target)?)?,
             remaining_bytes,
         )?)
     } else {
@@ -429,7 +439,7 @@ fn prepare_runtime(
     }
     .prepare_with_resources(
         &runtime,
-        directory.path(),
+        work_path,
         java_limits(options.limits),
         resources
             .as_ref()

@@ -21,8 +21,7 @@ pub(crate) const MAIN_CLASS: &str = "org.glavo.janex.bootstrap.Bootstrap";
 /// Encodes launch data separately from a content-addressed, reusable bootstrap JAR.
 ///
 /// Strings use counted UTF-16 code units so Windows arguments never pass through an ANSI
-/// encoding. Non-Unicode Unix arguments require direct launching. The caller owns the
-/// parent directory and must retain it until the application exits.
+/// encoding. Non-Unicode Unix arguments require direct launching. No per-launch file is written.
 pub(crate) fn write(
     _directory: &Path,
     entry: &EntryPoint,

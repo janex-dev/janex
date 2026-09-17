@@ -50,6 +50,8 @@ fn success(output: Output) {
 /// Builds a standalone command using an explicit cache and loopback Maven repository.
 fn standalone(java: &Path, package: &Path, options: &DependencyOptions) -> Command {
     let mut command = Command::new(java);
+    // Cached dependencies must be used without creating per-launch copies.
+    command.arg(format!("-Djava.io.tmpdir={}", package.display()));
     command
         .arg(format!(
             "-Djanex.dependencyCache={}",

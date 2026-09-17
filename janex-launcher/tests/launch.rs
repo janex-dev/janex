@@ -232,7 +232,7 @@ fn executable_preserves_arguments_resources_exit_status_and_native_java() {
         LaunchOverrides::default(),
     )
     .unwrap();
-    let launch_directory = plan.directory().to_owned();
+    assert!(plan.directory().is_none());
     let output = plan
         .command()
         .stdout(std::process::Stdio::piped())
@@ -241,7 +241,6 @@ fn executable_preserves_arguments_resources_exit_status_and_native_java() {
         .unwrap();
     report(&output);
     drop(plan);
-    assert!(!launch_directory.exists());
 }
 
 #[test]

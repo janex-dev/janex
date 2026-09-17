@@ -42,8 +42,8 @@ public final class Standalone {
     /// Launches a Janex file with an executable JAR tail and waits for its child JVM.
     ///
     /// The current Java installation, working directory, and standard streams are inherited.
-    /// The input is copied to a private snapshot before validation. Temporary files are removed
-    /// when the child exits or preparation fails. Recorded integrity is verified without
+    /// The package and dependency cache files are read directly and must remain unchanged until
+    /// the child exits. Temporary agent files are removed on exit or failure. Integrity is verified without
     /// establishing publisher trust. This method does not terminate the calling JVM.
     ///
     /// @param executable Janex file with an ordinary or ZIP64 executable JAR tail
@@ -53,15 +53,12 @@ public final class Standalone {
     public static int launch(Path executable, String[] arguments) throws Exception {
         int exit;
         try (Session session = new Session()) {
-            Path snapshot = session.directory.resolve("snapshot.janex");
-            try (InputStream input = Files.newInputStream(executable);
-                 OutputStream output = Files.newOutputStream(snapshot)) {
-                transfer(input, output, 512L * 1024 * 1024);
-            }
+            Path source = executable.toRealPath();
+            ResourceHandoff.FileIdentity identity = ResourceHandoff.FileIdentity.capture(source, 512L * 1024 * 1024);
             JanexReader.Launch launch;
             long tailOffset;
-            try (JanexReader reader = new JanexReader(snapshot, new Dependencies())) {
-                launch = reader.prepareHandoff(System.getProperty("janex.application"), session.directory);
+            try (JanexReader reader = new JanexReader(source, new Dependencies())) {
+                launch = reader.prepareHandoff(System.getProperty("janex.application"));
                 tailOffset = reader.externalTailOffset();
             }
             String os = System.getProperty("os.name");
@@ -70,7 +67,7 @@ public final class Standalone {
             String arch = System.getProperty("os.arch");
             arch = arch.equals("amd64") || arch.equals("x86_64") ? "x86-64"
                     : arch.matches("i[3-6]86") ? "x86" : arch.equals("arm64") ? "aarch64" : arch;
-            byte[] resources = ResourceHandoff.encode(snapshot,
+            byte[] resources = ResourceHandoff.encode(identity,
                     new String[]{os, arch, "run", System.getProperty("java.version"), System.getProperty("java.vendor")},
                     launch.requests, launch.moduleRequirements, launch.resources.limits(), launch.resourceAllowance);
             launch.arguments.addAll(Arrays.asList(arguments));
@@ -80,7 +77,7 @@ public final class Standalone {
             }
             List<String> options = new ArrayList<String>(ManagementFactory.getRuntimeMXBean().getInputArguments());
             options.addAll(launch.options);
-            Path launcher = cacheLauncher(snapshot, tailOffset);
+            Path launcher = cacheLauncher(source, tailOffset);
             String description = launchArgument(launch, resources, options, feature);
             List<String> nativeOptions = nativeOptions(options, feature);
             String java = Paths.get(System.getProperty("java.home"), "bin", isWindows() ? "java.exe" : "java").toString();
@@ -101,7 +98,8 @@ public final class Standalone {
                     nativeOptions.add("--add-modules=" + String.join(",", systemModules));
                 }
             }
-            List<String> agents = prepareAgents(session.directory, launch);
+            List<String> agents = launch.agentResources == null ? Collections.emptyList()
+                    : prepareAgents(session.directory(), launch);
             List<String> command = new ArrayList<String>();
             command.add(java);
             command.addAll(nativeOptions);
@@ -317,16 +315,15 @@ public final class Standalone {
 
     /// Owns launch files and ensures a child does not outlive parent shutdown.
     private static final class Session implements AutoCloseable {
-        /// Private directory containing only this launch's files.
-        final Path directory;
+        /// Private agent directory, or null when no agent files have been materialized.
+        private Path directory;
         /// Shutdown callback retained until normal closure.
         final Thread hook;
         /// Child JVM, or null until process creation succeeds.
         volatile Process process;
 
-        /// Creates a private temporary directory and registers process cleanup.
+        /// Registers process cleanup without creating launch files.
         Session() throws IOException {
-            directory = Files.createTempDirectory("janex-java-");
             hook = new Thread(() -> {
                 try {
                     cleanup();
@@ -337,6 +334,12 @@ public final class Standalone {
             Runtime.getRuntime().addShutdownHook(hook);
         }
 
+        /// Creates the private directory only when materializing agents.
+        synchronized Path directory() throws IOException {
+            if (directory == null) directory = Files.createTempDirectory("janex-java-");
+            return directory;
+        }
+
         /// Terminates any remaining child before removing its private launch files.
         private synchronized void cleanup() throws IOException, InterruptedException {
             if (process != null && process.isAlive()) {
@@ -345,7 +348,7 @@ public final class Standalone {
                     process.destroyForcibly().waitFor();
                 }
             }
-            if (Files.exists(directory)) {
+            if (directory != null && Files.exists(directory)) {
                 Files.walkFileTree(directory, new SimpleFileVisitor<Path>() {
                     /// Deletes one file without following symbolic links.
                     @Override

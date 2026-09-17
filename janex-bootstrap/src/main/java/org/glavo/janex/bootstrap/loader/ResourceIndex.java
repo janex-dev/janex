@@ -17,7 +17,7 @@ import org.glavo.janex.reader.internal.codec.ClassFiles;
 import org.glavo.janex.reader.internal.codec.ZstandardFrames;
 import org.glavo.janex.reader.internal.codec.zstd.Zstandard;
 
-/// Reads Host-selected resources from a private snapshot without rebuilding classpath JARs.
+/// Reads Host-selected resources from unchanged input files without rebuilding classpath JARs.
 ///
 /// The launch preparer verifies the snapshot before publishing this index and applies its own
 /// trust policy. This reader does not establish publisher trust or repeat container entry checksums.
@@ -29,7 +29,7 @@ public final class ResourceIndex implements Closeable {
     private final int maxElements;
     /// Open snapshot, retained until this reader is closed or the JVM exits.
     private final RandomAccessFile snapshot;
-    /// Length of the private snapshot when opened, shared by all source bounds checks.
+    /// Length of the container when opened, shared by all source bounds checks.
     private final long snapshotLength;
     /// Topologically ordered byte sources.
     private final Source[] sources;

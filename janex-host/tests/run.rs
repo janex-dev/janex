@@ -25,7 +25,7 @@ use std::{
 };
 
 #[test]
-fn remote_jars_support_both_modes_modules_agents_and_offline_snapshots() {
+fn remote_jars_support_both_modes_modules_agents_and_offline_cache() {
     use janex_format::checksum::{Algorithm, Checksum};
     let temp = tempfile::tempdir().unwrap();
     let server = http::Server::new();
@@ -261,9 +261,14 @@ public class Agent {
         .join(&hex[2..])
         .join("library-1.2.jar");
     assert_eq!(fs::read(&cached_library).unwrap(), library);
-    fs::write(cached_library, b"cache changed after preparation").unwrap();
-    assert!(capture(&plan).status.success());
-    fs::remove_file(&marker).unwrap();
+    let mut changed = library.clone();
+    changed[0] ^= 1;
+    fs::write(cached_library, changed).unwrap();
+    assert!(!capture(&plan).status.success());
+    assert!(
+        !marker.exists(),
+        "changed dependencies must fail before agent premain"
+    );
     assert!(prepare(&launch).is_err());
     assert!(!marker.exists());
 }
@@ -351,7 +356,7 @@ fn change_launch(path: &Path, mut change: impl FnMut(Value) -> Value) {
 }
 
 #[test]
-fn directory_launch_preserves_arguments_snapshot_and_exit_status() {
+fn directory_launch_preserves_arguments_and_exit_status_without_copying_input() {
     let temp = tempfile::tempdir().unwrap();
     fs::write(temp.path().join("Main.java"), r#"
 import java.nio.charset.StandardCharsets;
@@ -393,9 +398,7 @@ public class Main {
     .into();
     let plan = prepare(&options).unwrap();
     assert!(plan.integrity().complete_secure_coverage);
-    let directory = plan.directory().to_owned();
-    assert!(directory.is_dir());
-    fs::write(&target, b"source changed after preparation").unwrap();
+    assert!(plan.directory().is_none());
     let output = capture(&plan);
     assert_eq!(
         output.status.code(),
@@ -409,8 +412,13 @@ public class Main {
             .replace("\r\n", "\n"),
         "two words\narg:cHJlc2V0\narg:\narg:LS1qYXZh\narg:QG1pc3NpbmctYXJnZmlsZQ==\narg:5Lit8J+agA==\narg:dHdvIHdvcmRz\narg:InF1b3RlZCI=\narg:QzpcdGFpbFw=\narg:LS1kaXNhYmxlLUBmaWxlcw==\narg:QEBkb3VibGU=\narg:\n"
     );
-    drop(plan);
-    assert!(!directory.exists());
+    let mut changed = fs::read(&target).unwrap();
+    let last = changed.len() - 1;
+    changed[last] ^= 1;
+    fs::write(&target, changed).unwrap();
+    let changed_output = capture(&plan);
+    assert!(!changed_output.status.success());
+    assert!(String::from_utf8_lossy(&changed_output.stderr).contains("Launch file changed"));
 }
 
 #[test]
@@ -457,7 +465,7 @@ fn java_8_launches_classpath_applications() {
     options.arguments.pop();
     let direct = prepare(&options).unwrap();
     assert_eq!(direct.launch_mode(), LaunchMode::Direct);
-    assert!(!direct.directory().join("bootstrap.jar").exists());
+    assert!(!direct.directory().unwrap().join("bootstrap.jar").exists());
     assert_eq!(
         String::from_utf8(capture(&direct).stdout)
             .unwrap()
@@ -860,7 +868,7 @@ fn module_launch_uses_filename_derived_names_and_reports_missing_dependencies() 
     let mut unicode_options = options(&packing.output);
     unicode_options.arguments = vec!["\u{4e2d}\u{1f680}".into()];
     let plan = prepare(&unicode_options).unwrap();
-    assert_eq!(fs::read_dir(plan.directory()).unwrap().count(), 1);
+    assert!(plan.directory().is_none());
     let output = capture(&plan);
     assert!(
         output.status.success(),
@@ -1185,16 +1193,7 @@ public class Main {
         ];
         let plan = prepare(&running).unwrap();
         if mode == LaunchMode::Bootstrap {
-            let mut files = fs::read_dir(plan.directory())
-                .unwrap()
-                .map(|entry| entry.unwrap().file_name())
-                .collect::<Vec<_>>();
-            files.sort();
-            assert_eq!(files, ["snapshot.janex"]);
-            assert_eq!(
-                fs::read(plan.directory().join("snapshot.janex")).unwrap(),
-                fs::read(&packing.output).unwrap()
-            );
+            assert!(plan.directory().is_none());
         }
         let output = capture(&plan);
         assert!(
@@ -1428,7 +1427,7 @@ public class Agent {
     });
     let plan = prepare(&options(&packing.output)).unwrap();
     assert!(!marker.exists(), "preparation must not execute agents");
-    assert_eq!(fs::read_dir(plan.directory()).unwrap().count(), 3);
+    assert_eq!(fs::read_dir(plan.directory().unwrap()).unwrap().count(), 2);
     let output = capture(&plan);
     assert!(
         output.status.success(),

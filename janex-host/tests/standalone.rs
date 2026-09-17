@@ -66,6 +66,8 @@ public class Main {
     for runtime in runtimes.iter().cycle().take(runtimes.len() * 2) {
         let result = Command::new(runtime)
             .env("JANEX_HOME", &home)
+            // A regular file cannot contain temporary launch directories.
+            .arg(format!("-Djava.io.tmpdir={}", options.output.display()))
             .arg("-jar")
             .arg(&options.output)
             .output()
