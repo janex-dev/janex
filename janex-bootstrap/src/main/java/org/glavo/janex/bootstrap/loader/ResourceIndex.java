@@ -443,7 +443,8 @@ public final class ResourceIndex implements Closeable {
         /// Returns an owned copy of restored content, or an empty array for a directory.
         /// Reading fails with IOException if this index is closed or decoding fails.
         public byte[] readBytes() throws IOException {
-            return read().clone();
+            byte[] bytes = read();
+            return id == -1 || !transforms.isEmpty() ? bytes : bytes.clone();
         }
 
         /// Copies an immutable file descriptor and derives its logical length.

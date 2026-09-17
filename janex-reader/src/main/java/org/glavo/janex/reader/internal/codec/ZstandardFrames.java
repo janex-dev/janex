@@ -36,7 +36,7 @@ public final class ZstandardFrames {
         while (input.remaining() != 0) {
             long magic = input.little(4);
             if ((magic & 0xfffffff0L) == 0x184d2a50L) {
-                skip(input, input.little(4));
+                input.skip(input.little(4));
                 continue;
             }
             require(magic == 0xfd2fb528L, "Invalid Zstandard frame magic");
@@ -51,7 +51,7 @@ public final class ZstandardFrames {
                 window = base + (base >>> 3) * (value & 7);
             }
             int dictionary = descriptor & 3;
-            skip(input, dictionary == 3 ? 4 : dictionary);
+            input.skip(dictionary == 3 ? 4 : dictionary);
             int sizeFlag = descriptor >>> 6;
             int sizeWidth = sizeFlag == 0 ? single ? 1 : 0 : 1 << sizeFlag;
             long contentSize = input.little(sizeWidth);
@@ -71,18 +71,13 @@ public final class ZstandardFrames {
                 int kind = (int) ((header >>> 1) & 3);
                 long length = header >>> 3;
                 require(kind != 3 && length <= Math.min(window, 128 * 1024), "Invalid Zstandard block header");
-                skip(input, kind == 1 ? 1 : length);
+                input.skip(kind == 1 ? 1 : length);
             } while (!last);
             if ((descriptor & 4) != 0) {
-                skip(input, 4);
+                input.skip(4);
             }
         }
         require(ordinary, "Missing ordinary Zstandard frame");
     }
 
-    /// Advances across a bounded encoded field without copying it.
-    private static void skip(Input input, long length) throws IOException {
-        require(length >= 0 && length <= input.remaining(), "Truncated Zstandard frame");
-        input.skip(length);
-    }
 }

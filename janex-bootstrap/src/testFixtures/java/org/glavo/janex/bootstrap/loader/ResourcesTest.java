@@ -73,6 +73,13 @@ public final class ResourcesTest {
                             if (!resource.buffer().isReadOnly()) {
                                 throw new AssertionError("Writable shared resource buffer");
                             }
+                            byte[] owned = resource.readBytes();
+                            if (owned.length != 0) {
+                                owned[0] ^= 1;
+                                if (!Arrays.equals(resource.readBytes(), actual.get(entry.getKey()))) {
+                                    throw new AssertionError("Mutable shared resource bytes");
+                                }
+                            }
                             actualMetadata.put(entry.getKey(), Arrays.<Object>asList(resource.creationTime(), resource.lastModifiedTime(),
                                     resource.lastAccessTime(), resource.permissions));
                         }

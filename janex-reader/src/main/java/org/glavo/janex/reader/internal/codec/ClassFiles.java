@@ -137,7 +137,6 @@ public final class ClassFiles {
         while (template.remaining() != 0) {
             int next = template.readUnsignedByte();
             if (next != 0) {
-                checkTemplateLength((long) output.position - start + 1);
                 output.write(next);
                 continue;
             }
@@ -146,19 +145,15 @@ public final class ClassFiles {
             int packageLength = pool.byteLength(packageName);
             int classLength = pool.byteLength(className);
             if (classLength == 0) throw new IOException("Empty external class name");
-            checkTemplateLength((long) output.position - start + packageLength
-                    + classLength + (packageLength == 0 ? 0 : 1));
             if (packageLength != 0) {
                 output.write(pool, packageName);
                 output.write('/');
             }
             output.write(pool, className);
         }
-    }
-
-    /// Rejects a template expansion that cannot fit a CONSTANT_Utf8 byte length.
-    private static void checkTemplateLength(long length) throws IOException {
-        if (length > 65535) throw new IOException("External class string exceeds 65535 bytes");
+        if (output.position - start > 65535) {
+            throw new IOException("External class string exceeds 65535 bytes");
+        }
     }
 
     /// Copies a framed input range without interpreting unchanged class-file bytes.
