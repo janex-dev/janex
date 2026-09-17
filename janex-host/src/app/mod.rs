@@ -171,7 +171,7 @@ impl AppManager {
                 return Ok(installed);
             }
         }
-        let exact = if request.version == "latest" {
+        let exact = if request.version.is_none() {
             let metadata = self.fetch(&request.url(true)?, options, 1024 * 1024)?;
             request.exact(&release(&metadata, request)?)?
         } else {
@@ -183,7 +183,7 @@ impl AppManager {
         let sha256 = digest(&bytes)?;
         let id = format!(
             "app-{}",
-            digest(format!("{}\0{sha256}", exact.target()).as_bytes())?
+            digest(format!("{}\0{}\0{sha256}", exact.purl(), exact.command).as_bytes())?
         );
         let installed = Installation {
             id,
@@ -348,7 +348,7 @@ impl AppManager {
     pub fn uninstall(&self, target: &str) -> Result<Installation> {
         let _lock = self.lock(true)?;
         let mut state = self.read()?;
-        if !target.starts_with("app-") && AppRequest::parse(target)?.version == "latest" {
+        if !target.starts_with("app-") && AppRequest::parse(target)?.version.is_none() {
             return Err(invalid(
                 "application uninstall requires an exact version or installation ID",
             ));
@@ -541,7 +541,8 @@ impl AppManager {
         }
         for installed in &state.installations {
             installed.application.validate()?;
-            if !valid_id(&installed.id)
+            if installed.application.version.is_none()
+                || !valid_id(&installed.id)
                 || installed.sha256.len() != 64
                 || !installed.sha256.bytes().all(|b| b.is_ascii_hexdigit())
             {
@@ -551,7 +552,11 @@ impl AppManager {
         for selection in &state.selections {
             selection.request.validate()?;
             let actual = installation(&state, &selection.installation)?;
-            if selection.request.exact(&actual.application.version)? != actual.application {
+            if selection
+                .request
+                .exact(actual.application.version.as_deref().unwrap())?
+                != actual.application
+            {
                 return Err(invalid("application binding mismatch"));
             }
         }

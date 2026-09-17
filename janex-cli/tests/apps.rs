@@ -132,9 +132,23 @@ public class Main {
 
     /// Builds a request using this local repository.
     fn target(&self, artifact: &str, version: &str) -> String {
+        let version = if version == "latest" {
+            String::new()
+        } else {
+            format!("@{version}")
+        };
         format!(
-            "maven:org.example:{artifact}@{version}[repository={}]",
+            "maven:org.example:{artifact}{version}[repository={}]",
             self.url
+        )
+    }
+
+    /// Builds a full PURL with an independently encoded local repository qualifier.
+    fn purl(&self, artifact: &str, version: Option<&str>) -> String {
+        let version = version.map_or(String::new(), |version| format!("@{version}"));
+        format!(
+            "pkg:maven/org.example/{artifact}{version}?repository_url={}",
+            self.url.replace('%', "%25").replace('/', "%2F")
         )
     }
 }
@@ -167,8 +181,8 @@ fn maven_apps_keep_versions_pins_command_defaults_and_original_jars() {
     repository.jar("demo", "2.0", None);
     repository.jar("other", "1.0", None);
     repository.release("demo", "1.0");
-    let latest = repository.target("demo", "latest");
-    let second = repository.target("demo", "2.0");
+    let latest = repository.purl("demo", None);
+    let second = repository.purl("demo", Some("2.0"));
     let other = repository.target("other", "1.0");
     let installed: serde_json::Value = serde_json::from_str(&success(invoke(
         &home,
@@ -178,6 +192,31 @@ fn maven_apps_keep_versions_pins_command_defaults_and_original_jars() {
     .unwrap();
     assert_eq!(installed.as_array().unwrap().len(), 2);
     let first_id = installed[0]["id"].as_str().unwrap();
+    let canonical = installed[0]["application"]["purl"].as_str().unwrap();
+    assert!(canonical.starts_with("pkg:maven/org.example/demo@1.0?repository_url="));
+    janex_format::purl::parse(canonical).unwrap();
+    let duplicate: serde_json::Value = serde_json::from_str(&success(invoke(
+        &home,
+        temp.path(),
+        &[
+            "install",
+            &repository.target("demo", "latest"),
+            "--offline",
+            "--json",
+        ],
+    )))
+    .unwrap();
+    assert_eq!(duplicate[0]["id"], first_id);
+    let recorded: serde_json::Value =
+        serde_json::from_str(&success(invoke(&home, temp.path(), &["list", "--json"]))).unwrap();
+    let selections = recorded["applications"]["selections"].as_array().unwrap();
+    assert_eq!(selections.len(), 2);
+    assert!(
+        !selections[0]["request"]["purl"]
+            .as_str()
+            .unwrap()
+            .contains('@')
+    );
     let directory = success(invoke(&home, temp.path(), &["home", first_id]));
     assert_eq!(
         fs::read(Path::new(directory.trim()).join("demo-1.0.jar")).unwrap(),
@@ -200,7 +239,7 @@ fn maven_apps_keep_versions_pins_command_defaults_and_original_jars() {
         let output = success(invoke(
             &home,
             temp.path(),
-            &["run", "--launch-mode", mode, first_id, "plain"],
+            &["run", "--launch-mode", mode, canonical, "plain"],
         ));
         assert!(output.starts_with("1.0") && output.contains("cGxhaW4="));
     }
@@ -333,6 +372,57 @@ fn janex_artifacts_and_invalid_batches_are_handled_before_publication() {
             package.to_str().unwrap(),
         ],
     ));
+    let jar_target = format!(
+        "{}&classifier=all",
+        repository.purl("container", Some("1.0"))
+    );
+    let jar_install: serde_json::Value = serde_json::from_str(&success(invoke(
+        &home,
+        temp.path(),
+        &["install", &jar_target, "--json"],
+    )))
+    .unwrap();
+    assert!(
+        jar_install[0]["source"]
+            .as_str()
+            .unwrap()
+            .ends_with("container-1.0-all.jar")
+    );
+    let jar_home = success(invoke(&home, temp.path(), &["home", &jar_target]));
+    assert_eq!(
+        fs::read(Path::new(jar_home.trim()).join("container-1.0-all.jar")).unwrap(),
+        fs::read(&jar).unwrap()
+    );
+    success(invoke(&home, temp.path(), &["uninstall", &jar_target]));
+    fs::remove_file(&jar).unwrap();
+    assert!(package.is_file());
+    assert!(
+        !invoke(&home, temp.path(), &["install", &jar_target])
+            .status
+            .success()
+    );
+    assert!(!entry(&home, "container").exists());
+    let janex_target = format!("{jar_target}&type=janex");
+    let janex_install: serde_json::Value = serde_json::from_str(&success(invoke(
+        &home,
+        temp.path(),
+        &["install", &janex_target, "--json"],
+    )))
+    .unwrap();
+    assert!(
+        janex_install[0]["source"]
+            .as_str()
+            .unwrap()
+            .ends_with("container-1.0-all.janex")
+    );
+    assert!(
+        janex_install[0]["application"]["purl"]
+            .as_str()
+            .unwrap()
+            .ends_with("&type=janex")
+    );
+    assert!(success(native(&home, temp.path(), "container", &["--help"])).contains("LS1oZWxw"));
+    success(invoke(&home, temp.path(), &["uninstall", &janex_target]));
     let target = format!(
         "maven:org.example:container@1.0[type=janex,classifier=all,command=tool,repository={}]",
         repository.url
@@ -369,11 +459,20 @@ fn janex_artifacts_and_invalid_batches_are_handled_before_publication() {
     let mixed: serde_json::Value = serde_json::from_str(&success(invoke(
         &home,
         temp.path(),
-        &["install", "gradle@9", &target, "--offline", "--json"],
+        &[
+            "install",
+            "gradle@9",
+            &target,
+            &janex_target,
+            "--offline",
+            "--json",
+        ],
     )))
     .unwrap();
     assert_eq!(mixed[0]["sdk"]["product"], "gradle/gradle");
     assert_eq!(mixed[1]["application"]["command"], "tool");
+    assert_eq!(mixed[2]["application"]["command"], "container");
+    success(invoke(&home, temp.path(), &["uninstall", &janex_target]));
     let empty_home = temp.path().join("unused");
     let invalid = invoke(
         &empty_home,
@@ -387,6 +486,19 @@ fn janex_artifacts_and_invalid_batches_are_handled_before_publication() {
     );
     assert!(!invalid.status.success());
     assert!(!String::from_utf8_lossy(&invalid.stderr).contains("Installing"));
+    assert!(!empty_home.exists());
+    let invalid_purl = invoke(
+        &empty_home,
+        temp.path(),
+        &[
+            "install",
+            "gradle@9",
+            "pkg:npm/typescript@5.9.2",
+            "--offline",
+        ],
+    );
+    assert!(!invalid_purl.status.success());
+    assert!(String::from_utf8_lossy(&invalid_purl.stderr).contains("PURL type npm"));
     assert!(!empty_home.exists());
     fs::write(
         repository

@@ -50,9 +50,14 @@ for the project's long-term direction and delivery priorities.
 
 ## Maven Application Installation
 
-- Accept `maven:group:artifact@version` targets alongside SDK selectors. Omitted versions track
-  repository `<release>` metadata; explicit versions select exact releases. Support `classifier`,
-  `type=jar|janex`, `command`, and `repository` qualifiers per target.
+- Use canonical Maven PURLs as application identities, accepting full PURLs and
+  `maven:group:artifact@version` shorthands alongside SDK selectors. Omitted versions track
+  repository `<release>` metadata; explicit versions select exact releases in both forms.
+  Support `classifier`, `type`, and `repository_url` PURL qualifiers. Default to `jar`, require
+  explicit `type=janex` for Janex artifacts, and never fall back to another extension.
+- Store the canonical PURL and content digest independently of local command names and update pins.
+  Normalize equivalent inputs before lookup and persistence. Keep per-target shorthand options for
+  command names and repository URLs; reject unsupported PURL types, qualifiers, and subpaths.
 - Keep immutable application releases under `JANEX_HOME/apps`, CBOR installation and selection
   records under `state`, disposable downloads under `cache`, and native command entries under `bin`.
 - Install executable standalone JARs without repackaging and Janex containers without changing their

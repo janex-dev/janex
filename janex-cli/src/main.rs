@@ -391,7 +391,7 @@ fn run(cli: Cli) -> janex_host::Result<i32> {
                 .collect::<janex_host::Result<_>>()?;
             options.arguments = target.collect();
             if options.target.to_str().is_some_and(|s| {
-                s.starts_with("maven:")
+                janex_host::app::AppRequest::recognizes(s)
                     || s.strip_prefix("app-").is_some_and(|id| {
                         id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit())
                     })

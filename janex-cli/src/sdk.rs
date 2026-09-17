@@ -76,7 +76,7 @@ pub(super) struct AvailableArgs {
 /// Installation or external registration request.
 #[derive(Args)]
 pub(super) struct InstallArgs {
-    /// SDK product@version or maven:group:artifact@version, with per-target [key=value] qualifiers.
+    /// SDK selector, Maven PURL, or maven:group:artifact@version shorthand.
     #[arg(required = true)]
     targets: Vec<String>,
     /// Fix the selected build against subsequent update commands.
@@ -667,7 +667,7 @@ enum InstallRequest {
 impl InstallRequest {
     /// Selects the ecosystem from an explicit application prefix or SDK product identity.
     fn parse(target: &str) -> Result<Self> {
-        if target.starts_with("maven:") {
+        if AppRequest::recognizes(target) {
             AppRequest::parse(target).map(Self::App)
         } else {
             SdkRequest::parse(target).map(Self::Sdk)
@@ -677,7 +677,7 @@ impl InstallRequest {
 
 /// Recognizes Maven application selectors and exact application installation IDs.
 fn app_target(target: &str) -> bool {
-    target.starts_with("maven:") || target.starts_with("app-")
+    AppRequest::recognizes(target) || target.starts_with("app-")
 }
 
 /// Displays the original coordinates, command name, and persistent installation directory.

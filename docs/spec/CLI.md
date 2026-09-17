@@ -194,19 +194,22 @@ Use `available --refresh` to refresh the catalog. For slow downloads, `install` 
 
 ## Install applications
 
-Use `maven:group:artifact` to install an application from Maven Central:
+Install an application using a Package URL (PURL), or its Maven shorthand:
 
 ```shell
 janex install maven:org.benf:cfr
 cfr --help
+janex install pkg:maven/org.benf/cfr@0.152
 ```
 
 Load the scripts written by `janex init`, or add `JANEX_HOME/bin` to your `PATH`, to use installed
 commands. Native entries forward arguments without a shell script. They use the same `JANEX_HOME`
 as Janex; keep that variable set when using a custom home.
 
-Without a version, Janex follows the repository's `<release>` metadata. An explicit `@version`
-means that exact Maven release, not a version prefix. Updates are explicit, and old versions remain:
+Both forms use the same canonical PURL in installation records. Maven Central is the default
+repository. Without a version, Janex follows the repository's `<release>` metadata. An explicit
+`@version` means that exact release, including a literal `@latest`; omit the version to track updates.
+Updates are explicit, and old versions remain:
 
 ```shell
 janex install maven:org.benf:cfr@0.152
@@ -227,21 +230,38 @@ removes its entry; it never silently switches to an older version. Running appli
 SDK and application targets can share one command:
 
 ```shell
-janex install bellsoft/liberica-jdk@21 maven:org.benf:cfr
+janex install bellsoft/liberica-jdk@21 maven:org.benf:cfr pkg:maven/org.example/tool@1.0
 ```
 
-Qualifiers belong to each Maven target:
+Maven targets default to `.jar`. Select `.janex` explicitly with `type=janex`:
+
+```shell
+janex install 'pkg:maven/org.example/tool@1.0?type=janex'
+janex install 'pkg:maven/org.example/tool@1.0?classifier=all&type=janex'
+```
+
+The name remains the Maven artifact ID. Janex uses the requested type and never tries a different
+extension when a file is missing. PURL qualifiers belong to each target:
 
 | Qualifier | Meaning |
 | --- | --- |
 | `classifier=all` | Select a classifier, such as a self-contained JAR. |
 | `type=janex` | Download a `.janex` artifact instead of the default `.jar`. |
-| `command=my-tool` | Override the command name, which defaults to the lowercase artifact ID. |
-| `repository=https://example.org/maven/` | Use another HTTPS Maven repository. An absolute `file:` URL selects a local repository. |
+| `repository_url=https:%2F%2Fexample.org%2Fmaven%2F` | Use another HTTPS Maven repository. An absolute `file:` URL selects a local repository. |
 
-For example, `"maven:org.example:tool@1.0[classifier=all,command=my-tool]"`. Command names use lowercase
-ASCII letters, digits, hyphens, and underscores, starting with a letter. Existing unmanaged commands
-and names owned by other products are not overwritten.
+Quote PURLs containing qualifiers to protect `&` and `?` from the shell. Qualifier values use URL
+percent encoding; `+` is never decoded as a space. Output sorts qualifier keys, normalizes encoding,
+and omits the default `type=jar` and Maven Central repository.
+
+Maven shorthands also accept query qualifiers or per-target options, for example
+`"maven:org.example:tool@1.0[classifier=all,command=my-tool]"`. The shorthand's `repository` option
+maps to `repository_url`. A custom `command` is a local installation option stored separately from
+the PURL. It defaults to the lowercase artifact ID. Command names use lowercase ASCII letters,
+digits, hyphens, and underscores, starting with a letter. Existing unmanaged commands and names
+owned by other products are not overwritten.
+
+Application installation currently supports Maven PURLs with `type=jar` or `type=janex`, without
+subpaths. Unsupported types and qualifiers are rejected before installation.
 
 JARs are kept unchanged and must contain `Main-Class` and its class. POM dependency resolution and
 snapshots are not implemented. JAR manifest `Class-Path`, `Launcher-Agent-Class`, `Add-Exports`,
