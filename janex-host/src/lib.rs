@@ -9,6 +9,7 @@ mod bootstrap;
 pub mod dependency;
 mod error;
 pub mod import;
+pub mod integration;
 pub mod materialize;
 mod modules;
 pub mod native_launcher;

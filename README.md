@@ -33,6 +33,13 @@ janex activate
 After moving the executable, run `janex init` again and reload the script.
 See the [CLI specification](docs/spec/CLI.md) for packaging, launching, and SDK commands.
 
+Use `janex integration register` to add Janex to the system's file-opening options, and
+`janex integration unregister` to remove the registration. Registration defaults to the current
+user and preserves the default application. Pass `--allow-unsigned` to allow opening unsigned
+local packages, or configure signer pins as with `janex run`. Linux additionally supports
+`janex integration register --system --binfmt` for direct execution of executable `.janex` files.
+`janex integration export --output <directory>` generates assets for distribution installers.
+
 ## Building from Source
 
 Install JDK 25, Rust, and the platform's native build tools. Use the root Gradle Wrapper

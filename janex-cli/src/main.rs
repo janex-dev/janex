@@ -4,6 +4,7 @@
 //! Janex command-line entry point.
 
 mod inspect;
+mod integration;
 mod sdk;
 mod shell;
 
@@ -52,12 +53,18 @@ enum Command {
     /// Package a directory or JAR as a Janex application.
     Pack(Box<PackArgs>),
     /// Run an application from a local Janex file.
+    #[command(override_usage = "janex run [OPTIONS] <TARGET> [ARGS...]")]
     Run(Box<RunArgs>),
+    /// Open a local Janex file using desktop invocation conditions.
+    #[command(override_usage = "janex open [OPTIONS] <TARGET> [ARGS...]")]
+    Open(Box<RunArgs>),
+    /// Register, inspect, remove, or export operating-system integration.
+    #[command(subcommand)]
+    Integration(integration::IntegrationCommand),
 }
 
 /// Runtime selection and local execution policy, followed by uninterpreted application arguments.
 #[derive(Args)]
-#[command(override_usage = "janex run [OPTIONS] <TARGET> [ARGS...]")]
 struct RunArgs {
     /// Select an application ID; otherwise the package must contain exactly one application.
     #[arg(long, value_name = "ID")]
@@ -83,6 +90,17 @@ struct RunArgs {
     /// Override Maven Central for PURLs without a repository_url qualifier.
     #[arg(long, value_name = "URL")]
     maven_repository: Option<String>,
+    /// Publisher authentication and unsigned execution policy.
+    #[command(flatten)]
+    trust: TrustArgs,
+    /// Local path or file URI, then program arguments forwarded without Janex option parsing.
+    #[arg(value_name = "TARGET", required = true, num_args = 1.., trailing_var_arg = true, allow_hyphen_values = true)]
+    target: Vec<OsString>,
+}
+
+/// Shared execution policy for direct invocation and registered handlers.
+#[derive(Args, Default)]
+struct TrustArgs {
     /// Permit local None or Checksum inputs; signed input still requires authentication.
     #[arg(long)]
     allow_unsigned: bool,
@@ -98,9 +116,6 @@ struct RunArgs {
     /// Supply a complete direct X.509 v2 revocation list.
     #[arg(long, value_name = "FILE", requires = "trust_cms_certificate")]
     cms_crl: Vec<PathBuf>,
-    /// Local path or file URI, then program arguments forwarded without Janex option parsing.
-    #[arg(value_name = "TARGET", required = true, num_args = 1.., trailing_var_arg = true, allow_hyphen_values = true)]
-    target: Vec<OsString>,
 }
 
 /// CLI choices for application entry-point invocation.
@@ -257,7 +272,13 @@ fn main() {
 
 /// Executes a parsed command without interpreting argument contents as shell text.
 fn run(cli: Cli) -> janex_host::Result<i32> {
+    let invocation = if matches!(&cli.command, Command::Open(_)) {
+        "open"
+    } else {
+        "run"
+    };
     match cli.command {
+        Command::Integration(command) => return integration::run(command).map(|()| 0),
         Command::Inspect(args) => return inspect::run(args),
         Command::Sdk(command) => return sdk::run(command),
         Command::Pack(args) => {
@@ -308,12 +329,13 @@ fn run(cli: Cli) -> janex_host::Result<i32> {
                 report.resource_roots
             );
         }
-        Command::Run(args) => {
+        Command::Run(args) | Command::Open(args) => {
             let args = *args;
             let mut target = args.target.into_iter();
             let mut options =
                 RunOptions::new(PathBuf::from(target.next().expect("required target")));
             options.application = args.application;
+            options.invocation = invocation.into();
             options.java = JavaOptions {
                 java: args.java,
                 java_home: args.java_home,
@@ -322,7 +344,7 @@ fn run(cli: Cli) -> janex_host::Result<i32> {
                 LaunchModeArg::Bootstrap => LaunchMode::Bootstrap,
                 LaunchModeArg::Direct => LaunchMode::Direct,
             };
-            options.allow_unsigned = args.allow_unsigned;
+            options.allow_unsigned = args.trust.allow_unsigned;
             options.dependencies.offline = args.offline;
             options.dependencies.refresh = args.refresh_dependencies;
             options.dependencies.cache_directory = args.dependency_cache;
@@ -330,21 +352,25 @@ fn run(cli: Cli) -> janex_host::Result<i32> {
                 options.dependencies.maven_repository = repository;
             }
             options.openpgp_trust = args
+                .trust
                 .trust_openpgp_key
                 .as_deref()
                 .map(|path| authentication::load_openpgp_certificate(path, MATERIAL_LIMITS))
                 .transpose()?;
             options.cms_trust.signers = args
+                .trust
                 .trust_cms_certificate
                 .iter()
                 .map(|path| authentication::load_certificate(path, MATERIAL_LIMITS))
                 .collect::<janex_host::Result<_>>()?;
             options.cms_trust.issuers = args
+                .trust
                 .cms_issuer
                 .iter()
                 .map(|path| authentication::load_certificate(path, MATERIAL_LIMITS))
                 .collect::<janex_host::Result<_>>()?;
             options.cms_trust.revocation_lists = args
+                .trust
                 .cms_crl
                 .iter()
                 .map(|path| authentication::load_revocation_list(path, MATERIAL_LIMITS))
@@ -478,7 +504,7 @@ mod tests {
         let Command::Run(args) = cli.command else {
             panic!("expected run")
         };
-        assert!(args.allow_unsigned);
+        assert!(args.trust.allow_unsigned);
         assert_eq!(args.application.as_deref(), Some("main"));
         assert!(args.java.is_none());
         assert_eq!(

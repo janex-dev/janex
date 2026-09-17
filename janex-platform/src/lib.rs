@@ -5,6 +5,10 @@
 
 use std::io;
 
+/// Windows registry operations used by file-association management.
+#[cfg(windows)]
+pub mod registry;
+
 /// Returns the Janex user directory without creating it.
 ///
 /// `JANEX_HOME` overrides the default `.janex` directory under `USERPROFILE` on Windows

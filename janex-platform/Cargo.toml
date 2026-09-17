@@ -9,7 +9,7 @@ license = "MPL-2.0"
 description = "Native system facts for Janex launchers"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_System_Threading", "Win32_System_SystemInformation", "Win32_System_LibraryLoader"] }
+windows-sys = { version = "0.61", features = ["Win32_System_Threading", "Win32_System_SystemInformation", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_UI_Shell", "Win32_Security"] }
 
 # Native calls are confined to individually audited functions.
 [lints.rust]

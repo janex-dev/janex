@@ -5,6 +5,64 @@
 
 use std::{fs, process::Command};
 
+/// Adds an open-only preset argument to a packed fixture while regenerating its checksums.
+fn add_open_argument(path: &std::path::Path) {
+    use janex_format::{
+        application::Application,
+        binary::Limits,
+        cbor::Value,
+        container::{APPLICATION, Reader, Writer},
+    };
+
+    /// Replaces a fixture metadata field without dropping other fields.
+    fn set(value: &Value, key: u64, replacement: Value) -> Value {
+        let mut fields = value.as_map().unwrap();
+        fields.retain(|(field, _)| field.as_u64().unwrap() != key);
+        fields.push((Value::uint(key), replacement));
+        Value::map(fields).unwrap()
+    }
+
+    let mut reader = Reader::open_auto(
+        std::io::Cursor::new(fs::read(path).unwrap()),
+        Limits::default(),
+    )
+    .unwrap();
+    let sections: Vec<_> = reader.sections().cloned().collect();
+    let mut writer = Writer::new(Vec::new()).unwrap();
+    for section in sections {
+        let type_info = section.type_info().unwrap();
+        let mut bytes = reader.read_section(section.id()).unwrap();
+        if section.kind() == APPLICATION {
+            let app =
+                Application::decode(&bytes, type_info.clone().unwrap(), Limits::default()).unwrap();
+            let descriptor = app.value().required(0).unwrap();
+            let overlay = Value::map([
+                (
+                    Value::uint(0),
+                    Value::map([(Value::uint(4), Value::text("open"))]).unwrap(),
+                ),
+                (Value::uint(7), Value::array([Value::text("desktop")])),
+            ])
+            .unwrap();
+            let launch = set(&descriptor.required(0).unwrap(), 6, Value::array([overlay]));
+            bytes = Application::from_values(
+                app.type_info().clone(),
+                set(app.value(), 0, set(&descriptor, 0, launch)),
+                Limits::default(),
+            )
+            .unwrap()
+            .encode()
+            .unwrap();
+        }
+        writer
+            .write_section(section.id(), section.kind(), &bytes, type_info)
+            .unwrap();
+    }
+    let mut metadata = reader.metadata().as_map().unwrap();
+    metadata.retain(|(key, _)| key.as_u64().unwrap() != 0);
+    fs::write(path, writer.finish(Value::map(metadata).unwrap()).unwrap()).unwrap();
+}
+
 #[test]
 fn cli_runs_a_packed_application_and_propagates_its_exit_code() {
     let temp = tempfile::tempdir().unwrap();
@@ -129,4 +187,26 @@ public class Main {
         .output()
         .unwrap();
     assert_eq!(explicit.status.code(), Some(1));
+
+    // Desktop opening uses the same argument, authentication, and child-status machinery.
+    add_open_argument(&target);
+    let opened = Command::new(env!("CARGO_BIN_EXE_janex"))
+        .current_dir(temp.path())
+        .args(["open", "--allow-unsigned", "--java", "java", "--"])
+        .arg(&target)
+        .args(["", "two words", "--java"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        opened.status.code(),
+        Some(42),
+        "{}",
+        String::from_utf8_lossy(&opened.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(opened.stdout)
+            .unwrap()
+            .replace("\r\n", "\n"),
+        "[preset]\n[desktop]\n[]\n[two words]\n[--java]\n"
+    );
 }

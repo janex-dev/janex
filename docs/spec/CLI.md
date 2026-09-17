@@ -15,6 +15,8 @@ The CLI should separate software acquisition from software execution:
 - `janex inspect`: inspect a local container without launching it or acquiring dependencies.
 - `janex install`: acquire and register software; SDK installation is implemented, while Janex application installation remains planned.
 - `janex run`: start an installed application or a local Janex file without implicitly treating remote content as trusted software.
+- `janex open`: launch a local file using the `open` invocation channel.
+- `janex integration`: register, inspect, remove, or export operating-system integration.
 - `janex available`, `list`, `update`, `uninstall`, `default`, `use`, `exec`, and `env`: manage SDK versions and execution environments.
 
 This split keeps trust decisions at acquisition time and keeps the run path simpler and safer.
@@ -22,6 +24,42 @@ This split keeps trust decisions at acquisition time and keeps the run path simp
 `janex run` may use a managed Java installation installed by `janex install`, but it must not download or install a Java runtime implicitly.
 If no suitable runtime is available, `janex run` should report the missing requirement and point the user to the appropriate
 `janex install` command.
+
+## Operating-System Integration
+
+```text
+janex integration register [--system] [--binfmt] [TRUST_OPTIONS]
+janex integration status [--system] [--json]
+janex integration unregister [--system]
+janex integration export --output <DIRECTORY> [--system] [--binfmt]
+    [--executable <PATH>] [TRUST_OPTIONS]
+janex open [RUN_OPTIONS] <TARGET> [ARGS...]
+```
+
+Registration defaults to the current user. Windows registers an Open With handler, Linux installs
+MIME and desktop entries under the XDG data directory, and macOS installs a document-handler app
+in `~/Applications`. `--system` selects machine-wide locations and requires permission to write
+them. Registration advertises a handler without replacing the user's default application.
+
+`--binfmt` additionally enables Linux direct execution and requires `--system`. It installs a
+magic-based rule for ordinary Janex files and a thin interpreter wrapper. Live registration requires
+an already mounted `binfmt_misc`; the configuration also supports activation at boot by systemd.
+Embedded native executable prefixes continue to use their native execution mechanism.
+
+Registration records the executable's absolute path and the managed entries. Repeated registration
+updates them; removal preserves entries changed outside Janex and reports conflicts. Unregistering
+also removes the recorded binfmt rule. These commands do not edit shell startup files.
+
+`export` writes integration assets for the current platform into a new directory without registering
+them. `--executable` specifies the final absolute executable path for packaging. macOS asset generation
+uses the system AppleScript compiler. Exported assets are installed and removed by the distributor.
+
+`TRUST_OPTIONS` accepts the same unsigned permission, signer pins, issuer certificates, and CRLs as
+`run`. Certificate paths are recorded as absolute paths. Registration does not grant unsigned execution
+implicitly. `open` accepts the same options as `run`, retains its authentication and argument rules,
+and selects conditions with `invocation=open`. Multiple applications still require `--application`.
+Linux and macOS desktop handlers do not open a terminal. Graphical launch-error dialogs are not
+provided; use `janex open` from a terminal for launch diagnostics.
 
 ## `janex inspect`
 
