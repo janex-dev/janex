@@ -22,7 +22,7 @@ import org.glavo.janex.bootstrap.loader.ResourceLoader;
 /// snapshot. Closing a view invalidates its paths and channels for I/O, but does not close the loader.
 /// A closed view can be replaced with [FileSystems#newFileSystem(URI, Map)]. Resource links have
 /// already been resolved by the Host. Basic times default to the epoch when absent; the `janex`
-/// attribute view additionally returns nullable [Instant] timestamps and permission bits.
+/// attribute view additionally returns nullable permission bits.
 public final class JanexFileSystemProvider extends FileSystemProvider {
     /// Creates a provider without requiring an active Janex launch.
     public JanexFileSystemProvider() {
@@ -234,8 +234,7 @@ public final class JanexFileSystemProvider extends FileSystemProvider {
     }
 
     /// Reads selected `basic` or `janex` attributes; unknown names are rejected.
-    /// The `janex` view adds nullable [Instant] attributes `creationTimeInstant`,
-    /// `lastModifiedTimeInstant`, and `lastAccessTimeInstant`, plus nullable integer `permissions`.
+    /// The `janex` view adds nullable integer `permissions`.
     @Override
     public Map<String, Object> readAttributes(Path path, String attributes, LinkOption... options) throws IOException {
         int colon = attributes.indexOf(':');
@@ -256,9 +255,6 @@ public final class JanexFileSystemProvider extends FileSystemProvider {
         all.put("isOther", false);
         all.put("fileKey", value.fileKey());
         if (view.equals("janex")) {
-            all.put("creationTimeInstant", value.instant(0));
-            all.put("lastModifiedTimeInstant", value.instant(1));
-            all.put("lastAccessTimeInstant", value.instant(2));
             all.put("permissions", value.resource == null || value.resource.permissions() < 0 ? null : value.resource.permissions());
         }
         if (names.equals("*")) {
@@ -471,14 +467,9 @@ public final class JanexFileSystemProvider extends FileSystemProvider {
             this.resource = resource;
         }
 
-        /// Returns the stored instant, or null for an absent timestamp or a synthetic directory.
-        Instant instant(int index) {
-            return resource == null ? null : resource.time(index);
-        }
-
         /// Converts a stored instant to FileTime, using the epoch when absent.
         private FileTime time(int index) {
-            Instant value = instant(index);
+            Instant value = resource == null ? null : resource.time(index);
             return FileTime.from(value == null ? Instant.EPOCH : value);
         }
 

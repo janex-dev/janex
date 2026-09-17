@@ -448,10 +448,9 @@ public class Main {
         if (!Files.isDirectory(Paths.get(Main.class.getResource("/replaced/").toURI()))) throw new AssertionError();
         Path path = Paths.get(Main.class.getResource("/alias/value.txt").toURI());
         if (!new String(Files.readAllBytes(path), "UTF-8").equals("abcd")) throw new AssertionError();
-        Object time = Files.getAttribute(path, "janex:creationTimeInstant");
+        java.time.Instant time = ((java.nio.file.attribute.FileTime) Files.getAttribute(path, "basic:creationTime")).toInstant();
         if (!time.equals(java.time.Instant.ofEpochSecond(1208925819614629L, 174706176))) throw new AssertionError(time);
         if (!Files.getLastModifiedTime(path).toInstant().equals(java.time.Instant.ofEpochSecond(-1, 999999999))) throw new AssertionError();
-        if (!Files.getAttribute(path, "janex:lastAccessTimeInstant").equals(java.time.Instant.MAX)) throw new AssertionError();
         if (!((java.nio.file.attribute.FileTime) Files.getAttribute(path, "basic:lastAccessTime")).toInstant().equals(java.time.Instant.MAX)) throw new AssertionError();
         if (!Files.getAttribute(path, "janex:permissions").equals(0)) throw new AssertionError();
         try (java.io.InputStream in = Main.class.getResourceAsStream("/Main.class")) {

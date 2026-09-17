@@ -40,8 +40,8 @@ recognized HotSpot VMs without disabling system-class sharing or overriding expl
 
 `Paths.get(resourceUrl.toURI())` uses the installed `janex` provider. It supports directory traversal,
 glob/regex matching, read-only seekable channels, basic attributes, and copying to native files.
-The `janex` attribute view also exposes nullable exact nanosecond timestamps and POSIX permission
-bits. Missing basic timestamps use the epoch; timestamps beyond `FileTime` range saturate.
+The `janex` attribute view also exposes nullable POSIX permission bits.
+Basic timestamps retain nanosecond precision and use the epoch when absent.
 Closing a filesystem view invalidates its channels but leaves class loading and resource URLs
 usable. `FileSystems.newFileSystem` can remount the active snapshot; it does not open arbitrary packages.
 

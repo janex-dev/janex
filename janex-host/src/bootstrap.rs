@@ -216,8 +216,8 @@ public class Main {
         System.out.println(new String(read("alias/data.txt"), "UTF-8"));
         java.nio.file.Path folder = java.nio.file.Paths.get(Main.class.getClassLoader().getResource("alias/").toURI());
         java.util.Map<String, Object> attributes = java.nio.file.Files.readAttributes(folder, "janex:*");
-        if (!java.time.Instant.MIN.equals(attributes.get("creationTimeInstant"))) throw new AssertionError();
-        if (!java.time.Instant.MAX.equals(attributes.get("lastAccessTimeInstant"))) throw new AssertionError();
+        if (!java.time.Instant.MIN.equals(((java.nio.file.attribute.FileTime) attributes.get("creationTime")).toInstant())) throw new AssertionError();
+        if (!java.time.Instant.MAX.equals(((java.nio.file.attribute.FileTime) attributes.get("lastAccessTime")).toInstant())) throw new AssertionError();
         if (!Integer.valueOf(493).equals(attributes.get("permissions"))) throw new AssertionError();
         if (((java.nio.file.attribute.FileTime) attributes.get("lastModifiedTime")).to(java.util.concurrent.TimeUnit.NANOSECONDS) != 1234567890123L) throw new AssertionError();
         try { read("unused.txt"); throw new AssertionError("invalid Zstd accepted"); }
