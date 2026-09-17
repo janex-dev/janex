@@ -374,8 +374,8 @@ Only supplied revocation information is checked; no network or global keyring is
 
 The launcher reads bounded input bytes and verifies container and external-region checksums before
 selecting a runtime. Bootstrap reads the original package and content-addressed dependency files
-without per-launch copies, checking their lengths and SHA-256 identities before preparing resources.
-These files must remain unchanged until the application exits; this is not filesystem snapshot isolation.
+without per-launch copies or repeated whole-file verification. These files must remain unchanged
+until the application exits.
 There is no verification cache shared across launches.
 Signed files additionally require secure checksum coverage of every section and both external regions.
 

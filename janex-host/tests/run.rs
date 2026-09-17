@@ -247,7 +247,7 @@ public class Agent {
     launch.dependencies.maven_repository = format!("{}/maven", server.url);
     launch.dependencies.offline = true;
     launch.arguments = vec!["true".into(), "snapshot".into()];
-    let plan = prepare(&launch).unwrap();
+    drop(prepare(&launch).unwrap());
     let digest = Checksum::compute(Algorithm::Sha256, library.as_slice()).unwrap();
     let hex: String = digest
         .digest()
@@ -264,11 +264,6 @@ public class Agent {
     let mut changed = library.clone();
     changed[0] ^= 1;
     fs::write(cached_library, changed).unwrap();
-    assert!(!capture(&plan).status.success());
-    assert!(
-        !marker.exists(),
-        "changed dependencies must fail before agent premain"
-    );
     assert!(prepare(&launch).is_err());
     assert!(!marker.exists());
 }
@@ -412,13 +407,6 @@ public class Main {
             .replace("\r\n", "\n"),
         "two words\narg:cHJlc2V0\narg:\narg:LS1qYXZh\narg:QG1pc3NpbmctYXJnZmlsZQ==\narg:5Lit8J+agA==\narg:dHdvIHdvcmRz\narg:InF1b3RlZCI=\narg:QzpcdGFpbFw=\narg:LS1kaXNhYmxlLUBmaWxlcw==\narg:QEBkb3VibGU=\narg:\n"
     );
-    let mut changed = fs::read(&target).unwrap();
-    let last = changed.len() - 1;
-    changed[last] ^= 1;
-    fs::write(&target, changed).unwrap();
-    let changed_output = capture(&plan);
-    assert!(!changed_output.status.success());
-    assert!(String::from_utf8_lossy(&changed_output.stderr).contains("Launch file changed"));
 }
 
 #[test]

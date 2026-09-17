@@ -54,7 +54,9 @@ public final class Standalone {
         int exit;
         try (Session session = new Session()) {
             Path source = executable.toRealPath();
-            ResourceHandoff.FileIdentity identity = ResourceHandoff.FileIdentity.capture(source, 512L * 1024 * 1024);
+            if (Files.size(source) > 512L * 1024 * 1024) {
+                throw new IOException("Standalone launch byte limit exceeded");
+            }
             JanexReader.Launch launch;
             long tailOffset;
             try (JanexReader reader = new JanexReader(source, new Dependencies())) {
@@ -67,7 +69,7 @@ public final class Standalone {
             String arch = System.getProperty("os.arch");
             arch = arch.equals("amd64") || arch.equals("x86_64") ? "x86-64"
                     : arch.matches("i[3-6]86") ? "x86" : arch.equals("arm64") ? "aarch64" : arch;
-            byte[] resources = ResourceHandoff.encode(identity,
+            byte[] resources = ResourceHandoff.encode(source,
                     new String[]{os, arch, "run", System.getProperty("java.version"), System.getProperty("java.vendor")},
                     launch.requests, launch.moduleRequirements, launch.resources.limits(), launch.resourceAllowance);
             launch.arguments.addAll(Arrays.asList(arguments));

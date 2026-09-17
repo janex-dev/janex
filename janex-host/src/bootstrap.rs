@@ -4,13 +4,8 @@
 //! Compact resource-root handoff over verified files without launch-time copies.
 
 use crate::{Result, error::invalid};
-use janex_format::{
-    application::PathEntry,
-    blob::BlobStore,
-    checksum::{Algorithm, Checksum},
-    condition::Context,
-};
-use std::{io::Cursor, path::Path};
+use janex_format::{application::PathEntry, binary::Limits, condition::Context};
+use std::path::Path;
 
 /// Root references interpreted in the application JVM.
 pub(crate) struct Resources {
@@ -18,23 +13,22 @@ pub(crate) struct Resources {
     pub(crate) data: Vec<u8>,
 }
 
-/// Encodes original paths and verified content identities without copying files or expanding roots.
+/// Encodes original paths without reading file contents or expanding resource roots.
 pub(crate) fn prepare(
     entries: &[PathEntry],
     modules: &[PathEntry],
     context: &Context,
-    blobs: &mut BlobStore<Cursor<Vec<u8>>>,
-    roots: &mut crate::roots::Roots,
+    limits: Limits,
+    roots: &crate::roots::Roots,
     source: &Path,
     max_bytes: u64,
 ) -> Result<Resources> {
-    let limits = blobs.reader().limits();
     let mut output = b"JNXROOT2".to_vec();
     number(&mut output, limits.max_bytes.min(i32::MAX as u64))?;
     number(&mut output, limits.max_elements.min(i32::MAX as u64))?;
     number(&mut output, limits.max_depth as u64)?;
     output.extend(max_bytes.to_be_bytes());
-    file(&mut output, source, blobs.reader().get_ref().get_ref())?;
+    path(&mut output, source)?;
     string(&mut output, &context.os)?;
     string(&mut output, &context.arch)?;
     string(&mut output, context.invocation.as_deref().unwrap_or(""))?;
@@ -83,7 +77,7 @@ pub(crate) fn prepare(
                     .ok_or_else(|| invalid("external dependency has not been acquired"))?;
                 output.push(1);
                 string(&mut output, &archive.jar_name)?;
-                file(&mut output, &archive.path, &archive.bytes)?;
+                path(&mut output, &archive.path)?;
             }
         }
         limits.bytes(output.len() as u64)?;
@@ -91,16 +85,9 @@ pub(crate) fn prepare(
     Ok(Resources { data: output })
 }
 
-/// Binds a borrowed file path to the exact bytes verified during preparation.
-fn file(output: &mut Vec<u8>, value: &Path, bytes: &[u8]) -> Result<()> {
-    path(output, &janex_java::runtime::java_path(value))?;
-    output.extend((bytes.len() as u64).to_be_bytes());
-    output.extend(Checksum::compute(Algorithm::Sha256, bytes)?.digest());
-    Ok(())
-}
-
 /// Encodes a path without losing Windows UTF-16 code units.
 fn path(output: &mut Vec<u8>, value: &Path) -> Result<()> {
+    let value = janex_java::runtime::java_path(value);
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
@@ -148,7 +135,7 @@ mod tests {
     use crate::adapters::java_limits;
     use janex_format::{
         binary::{Limits, write_sized, write_vuint},
-        blob::{Encoding, Filter},
+        blob::{BlobStore, Encoding, Filter},
         cbor::Value,
         classfile,
         condition::Condition,
@@ -166,7 +153,11 @@ mod tests {
         launch::{EntryPoint, LaunchMode, LaunchRequest},
         runtime::{JavaOptions, JavaRuntime, candidates},
     };
-    use std::{fs, io::Write, process::Command};
+    use std::{
+        fs,
+        io::{Cursor, Write},
+        process::Command,
+    };
 
     /// Checks source and pool identities at the Java integer boundary without allocation.
     #[test]
@@ -393,8 +384,8 @@ public class Main {
             .unwrap();
         let mut reader = Reader::open_auto(Cursor::new(bytes), Limits::default()).unwrap();
         assert!(reader.verify_checksums().unwrap().complete_secure_coverage);
-        let mut blobs = BlobStore::new(reader);
-        let mut roots = crate::roots::Roots::default();
+        let blobs = BlobStore::new(reader);
+        let roots = crate::roots::Roots::default();
         let context = Context {
             os: "linux".into(),
             arch: "aarch64".into(),
@@ -409,8 +400,8 @@ public class Main {
             &[PathEntry::Local(reference(7))],
             &[],
             &context,
-            &mut blobs,
-            &mut roots,
+            blobs.reader().limits(),
+            &roots,
             &source,
             1024 * 1024,
         )

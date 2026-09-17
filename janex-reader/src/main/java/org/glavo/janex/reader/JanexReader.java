@@ -1223,7 +1223,7 @@ public final class JanexReader implements Closeable {
         return launch;
     }
 
-    /// Resolves a selected reference and binds its persistent file to the acquired bytes.
+    /// Resolves a selected reference to its verified persistent file.
     private ResourceRequest request(Object value, boolean module) throws IOException {
         Map<Object, Object> entry = map(value);
         if (number(get(entry, 0)) == 0) {
@@ -1236,8 +1236,7 @@ public final class JanexReader implements Closeable {
         Dependency dependency = Objects.requireNonNull(resolver.resolve(uri, checksum));
         limits.bytes(dependency.bytes.length);
         require(dependency.path != null, "External handoff requires a persistent dependency file");
-        return new ResourceRequest(module, dependency.path, dependency.jarName, dependency.bytes.length,
-                Checksum.compute(Checksum.Algorithm.SHA256, dependency.bytes));
+        return new ResourceRequest(module, dependency.path, dependency.jarName);
     }
 
     /// Resolves dictionary-backed sources before publishing their identities.

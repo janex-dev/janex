@@ -112,7 +112,6 @@ impl LaunchRequest {
         let program_arguments = &self.arguments;
         let bridge = if self.mode == LaunchMode::Bootstrap {
             Some(bootstrap::write(
-                directory,
                 &self.entry_point,
                 program_arguments,
                 runtime.feature >= 25

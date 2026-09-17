@@ -11,7 +11,7 @@ use std::{
     ffi::OsString,
     fs,
     io::{Cursor, Write},
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 use zip::{ZipWriter, write::SimpleFileOptions};
 
@@ -23,7 +23,6 @@ pub(crate) const MAIN_CLASS: &str = "org.glavo.janex.bootstrap.Bootstrap";
 /// Strings use counted UTF-16 code units so Windows arguments never pass through an ANSI
 /// encoding. Non-Unicode Unix arguments require direct launching. No per-launch file is written.
 pub(crate) fn write(
-    _directory: &Path,
     entry: &EntryPoint,
     arguments: &[OsString],
     instance_main: bool,

@@ -95,9 +95,9 @@ impl RunOptions {
 
 /// A selected Java invocation borrowing input files and owning any materialized paths.
 ///
-/// Preparation verifies owned input bytes. Bootstrap verifies their content identities again
-/// when opening the original files. The caller must keep the package and dependency cache files
-/// unchanged until Java exits; this plan does not provide filesystem snapshot isolation.
+/// Preparation verifies owned input bytes. Bootstrap reads the original files without repeating
+/// whole-file verification. The caller must keep the package and dependency cache files unchanged
+/// until Java exits.
 #[derive(Debug)]
 pub struct ExecutionPlan {
     /// Runtime selected after condition and local-module checks.
@@ -202,8 +202,8 @@ pub fn prepare(options: &RunOptions) -> Result<ExecutionPlan> {
 }
 
 /// Prepares a launch from an owned snapshot, retaining the same authentication policy as [`prepare`].
-/// Bootstrap reopens `options.target` and requires it to match these bytes before loading resources.
-/// The caller must retain that file unchanged until Java exits. The snapshot size limit is enforced.
+/// In bootstrap mode, the caller must ensure `options.target` contains these bytes and retain it
+/// unchanged until Java exits. The snapshot size limit is enforced.
 pub fn prepare_snapshot(options: &RunOptions, bytes: Vec<u8>) -> Result<ExecutionPlan> {
     if options.openpgp_trust.is_some() && !options.cms_trust.signers.is_empty() {
         return Err(invalid(
@@ -401,7 +401,7 @@ fn prepare_runtime(
             &launch.class_path,
             &launch.module_path,
             &context,
-            blobs,
+            blobs.reader().limits(),
             roots,
             &fs::canonicalize(target_path(&options.target)?)?,
             remaining_bytes,
