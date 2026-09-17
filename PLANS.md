@@ -1,5 +1,8 @@
 # Janex Implementation: Packaging, Dependencies, Signing, and Java Launching
 
+This document tracks implementation tasks and acceptance criteria. See [ROADMAP.md](ROADMAP.md)
+for the project's long-term direction and delivery priorities.
+
 ## SDK Management
 
 - Add shared `available`, `install`, `list`, `update`, `uninstall`, `default`, `current`, `home`,

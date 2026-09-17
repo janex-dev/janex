@@ -2,6 +2,10 @@
 
 Janex packages and launches Java applications and manages Java, Gradle, and Maven installations.
 
+The long-term goal is a cross-platform, cross-language SDK manager, package manager, and build tool,
+with `.janex` as a general application container for managed languages. See the [roadmap](ROADMAP.md)
+for planned capabilities and priorities.
+
 ## Getting Started
 
 Place `janex` (`janex.exe` on Windows) in a directory on PATH. The optional `janex-launcher`
