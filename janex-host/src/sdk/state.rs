@@ -23,8 +23,10 @@ use std::{
 pub struct Installation {
     /// Stable content and variant identity; usable as an exact command target.
     pub id: String,
-    /// Complete release and platform variant of this installation.
+    /// Complete product release and platform variant of this installation.
     pub sdk: SdkRequest,
+    /// Bundled Java release, separate from the product version; absent for portable tools.
+    pub java_version: Option<String>,
     /// Home relative to the managed tree, or an absolute external home.
     pub home: PathBuf,
     /// Whether Janex owns and may remove the SDK tree.
@@ -53,11 +55,11 @@ pub struct SdkStatus {
     pub installations: Vec<Installation>,
     /// Persisted version requirements and update policies.
     pub selections: Vec<Selection>,
-    /// Resolved global defaults keyed by SDK family.
+    /// Resolved defaults keyed by family/platform, or family for portable tools.
     pub defaults: BTreeMap<String, Installation>,
 }
 
-/// An independent default selection for one SDK family.
+/// An independent default selection for a tool family and target platform.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct DefaultSelection {
     /// Requirement whose saved binding may advance on update.
@@ -122,7 +124,12 @@ impl SdkManager {
         let defaults = state
             .defaults
             .keys()
-            .map(|family| Ok((family.clone(), self.default_in(&state, family)?.unwrap())))
+            .map(|family| {
+                Ok((
+                    family.clone(),
+                    self.default_at_key(&state, family)?.unwrap(),
+                ))
+            })
             .collect::<Result<_>>()?;
         Ok(SdkStatus {
             installations: state.installations,
@@ -300,7 +307,7 @@ impl SdkManager {
         let identity = format!(
             "{}\n{digest}\n{}",
             serde_json::to_string(&exact).map_err(|e| invalid(e.to_string()))?,
-            super::operating_system()?
+            exact.default_key()
         );
         let id = hex(Checksum::compute(Algorithm::Sha256, identity.as_bytes())?.digest());
         let tree = staging.join("tree");
@@ -312,6 +319,11 @@ impl SdkManager {
             .to_owned();
         let installation = Installation {
             id,
+            java_version: if exact.java().is_some() {
+                Some(archive::java_version(&tree.join(&home))?)
+            } else {
+                None
+            },
             sdk: exact,
             home,
             managed: true,
@@ -373,14 +385,11 @@ impl SdkManager {
         let path = path.canonicalize()?;
         let (home, sdk) = if let Some(java_request) = request.java() {
             let home = archive::find_home(&path, request)?;
-            let runtime = janex_java::runtime::JavaRuntime::probe(
-                &home.join("bin").join(request.executable()),
-            )?;
             let mut java = java_request.clone();
-            java.version = if let Some(update) = runtime.version_text.strip_prefix("1.8.0_") {
-                format!("8.0.{update}")
+            java.version = if java.descriptor()?.is_nik() {
+                archive::nik_version(&home)?
             } else {
-                runtime.version_text
+                archive::java_version(&home)?
             };
             java.validate()?;
             (home, SdkRequest::Java(java))
@@ -396,6 +405,11 @@ impl SdkManager {
         let id = hex(Checksum::compute(Algorithm::Sha256, identity.as_slice())?.digest());
         let installation = Installation {
             id,
+            java_version: if sdk.java().is_some() {
+                Some(archive::java_version(&home)?)
+            } else {
+                None
+            },
             sdk,
             home,
             managed: false,
@@ -422,7 +436,7 @@ impl SdkManager {
         let mut state = self.read()?;
         let (installation, request) = self.resolve_in(&state, target)?;
         state.defaults.insert(
-            request.family().into(),
+            request.default_key(),
             DefaultSelection {
                 request,
                 id: (target == installation.id).then(|| installation.id.clone()),
@@ -437,7 +451,9 @@ impl SdkManager {
         validate_family(family)?;
         let _lock = self.lock(true)?;
         let mut state = self.read()?;
-        state.defaults.remove(family);
+        state
+            .defaults
+            .remove(&default_key(family, &super::SdkPlatform::native()?));
         self.save(&state)
     }
 
@@ -448,17 +464,43 @@ impl SdkManager {
         self.default_in(&state, family)
     }
 
-    /// Resolves an exact default ID or the configured movable requirement.
+    /// Returns a default for an explicit target platform without downloading or applying emulation fallback.
+    pub fn default_for(
+        &self,
+        family: &str,
+        platform: &super::SdkPlatform,
+    ) -> Result<Option<Installation>> {
+        validate_family(family)?;
+        platform.validate()?;
+        self.default_at_key(&self.read()?, &default_key(family, platform))
+    }
+
+    /// Clears only the default for the requested family and target platform.
+    pub fn clear_default_for(&self, family: &str, platform: &super::SdkPlatform) -> Result<()> {
+        validate_family(family)?;
+        platform.validate()?;
+        let _lock = self.lock(true)?;
+        let mut state = self.read()?;
+        state.defaults.remove(&default_key(family, platform));
+        self.save(&state)
+    }
+
+    /// Resolves the native-platform default, keeping portable tools independent of architecture.
     pub(super) fn default_in(
         &self,
         state: &Registry,
         family: &str,
     ) -> Result<Option<Installation>> {
-        let Some(default) = state.defaults.get(family) else {
+        self.default_at_key(state, &default_key(family, &super::SdkPlatform::native()?))
+    }
+
+    /// Resolves an exact default ID or its movable request in one platform slot.
+    fn default_at_key(&self, state: &Registry, key: &str) -> Result<Option<Installation>> {
+        let Some(default) = state.defaults.get(key) else {
             return Ok(None);
         };
-        if default.request.family() != family {
-            return Err(invalid("default SDK family mismatch"));
+        if default.request.default_key() != key {
+            return Err(invalid("default SDK target mismatch"));
         }
         if let Some(id) = &default.id {
             return state
@@ -521,9 +563,12 @@ impl SdkManager {
             }
             matches[0].clone()
         };
-        if let Some(default) = self.default_in(&state, installation.sdk.family())?
-            && default.id == installation.id
-        {
+        if state.defaults.keys().any(|key| {
+            self.default_at_key(&state, key)
+                .ok()
+                .flatten()
+                .is_some_and(|d| d.id == installation.id)
+        }) {
             return Err(invalid(
                 "SDK is the global default; select another version or clear the default first",
             ));
@@ -636,9 +681,8 @@ impl SdkManager {
             }
         }
         for (family, default) in &state.defaults {
-            validate_family(family)?;
             default.request.validate()?;
-            self.default_in(&state, family)?;
+            self.default_at_key(&state, family)?;
         }
         Ok(state)
     }
@@ -728,6 +772,15 @@ fn bind(state: &mut Registry, request: SdkRequest, id: &str, pinned: bool) {
         installation: id.into(),
         pinned,
     });
+}
+
+/// Builds a family default key using a native or explicitly selected platform.
+fn default_key(family: &str, platform: &super::SdkPlatform) -> String {
+    if family == "java" {
+        format!("java/{}", platform.key())
+    } else {
+        family.into()
+    }
 }
 
 /// Validates path confinement before consuming registry data.
@@ -878,13 +931,17 @@ mod tests {
             write!(
                 writer,
                 "JAVA_VERSION=\"{}\"\nOS_ARCH=\"{}\"\n",
-                version.split('+').next().unwrap(),
-                requested.java().unwrap().architecture
+                if requested.java().unwrap().descriptor().unwrap().is_nik() {
+                    "21.0.8"
+                } else {
+                    version.split('+').next().unwrap()
+                },
+                requested.java().unwrap().platform.arch
             )
             .unwrap();
             for name in [
-                super::super::java_name(),
-                if cfg!(windows) { "javac.exe" } else { "javac" },
+                requested.java().unwrap().platform.executable("java"),
+                requested.java().unwrap().platform.executable("javac"),
             ] {
                 writer
                     .start_file(format!("jdk/bin/{name}"), options)
@@ -918,10 +975,10 @@ mod tests {
         let manager = SdkManager::new(temp.path().join("home")).unwrap();
         assert!(manager.list().unwrap().is_empty());
         assert!(!manager.root.exists());
-        let request = SdkRequest::parse("bellsoft@21").unwrap();
+        let request = SdkRequest::parse("bellsoft/liberica-jdk@21").unwrap();
         let old = fixture(&manager, &request, "21.0.8+12", false);
         assert!(manager.default_installation("java").unwrap().is_none());
-        manager.set_default("bellsoft@21").unwrap();
+        manager.set_default("bellsoft/liberica-jdk@21").unwrap();
         let new = fixture(&manager, &request, "21.0.9+10", false);
         assert_eq!(manager.list().unwrap().len(), 2);
         assert_eq!(
@@ -936,7 +993,7 @@ mod tests {
                 .to_string()
                 .contains("default")
         );
-        assert!(manager.uninstall("bellsoft@21").is_err());
+        assert!(manager.uninstall("bellsoft/liberica-jdk@21").is_err());
         manager.set_default(&old.id).unwrap();
         assert_eq!(
             manager.default_installation("java").unwrap().unwrap().id,
@@ -953,7 +1010,7 @@ mod tests {
     fn running_lease_blocks_removal_and_pin_prevents_network_updates() {
         let temp = tempfile::tempdir().unwrap();
         let manager = SdkManager::new(temp.path().to_owned()).unwrap();
-        let request = SdkRequest::parse("bellsoft@21").unwrap();
+        let request = SdkRequest::parse("bellsoft/liberica-jdk@21").unwrap();
         let installed = fixture(&manager, &request, "21.0.8+12", true);
         let offline = CatalogOptions {
             offline: true,
@@ -980,7 +1037,7 @@ mod tests {
     fn external_unregister_preserves_files_and_project_pins_exact_id() {
         let temp = tempfile::tempdir().unwrap();
         let manager = SdkManager::new(temp.path().join("home")).unwrap();
-        let request = SdkRequest::parse("bellsoft@21").unwrap();
+        let request = SdkRequest::parse("bellsoft/liberica-jdk@21").unwrap();
         let installed = fixture(&manager, &request, "21.0.8+12", true);
         let project = temp.path().join("project");
         fs::create_dir(&project).unwrap();
@@ -1003,7 +1060,7 @@ mod tests {
     fn corrupt_or_escaping_registry_is_rejected() {
         let temp = tempfile::tempdir().unwrap();
         let manager = SdkManager::new(temp.path().to_owned()).unwrap();
-        let request = SdkRequest::parse("bellsoft@21").unwrap();
+        let request = SdkRequest::parse("bellsoft/liberica-jdk@21").unwrap();
         fixture(&manager, &request, "21.0.8+12", true);
         let mut state = manager.read().unwrap();
         state.installations[0].home = "../outside".into();
@@ -1019,7 +1076,7 @@ mod tests {
         let manager = SdkManager::new(temp.path().join("home")).unwrap();
         let java = fixture(
             &manager,
-            &SdkRequest::parse("bellsoft@21").unwrap(),
+            &SdkRequest::parse("bellsoft/liberica-jdk@21").unwrap(),
             "21.0.8+12",
             true,
         );
@@ -1032,7 +1089,7 @@ mod tests {
         manager.set_default("maven@3.9").unwrap();
         let new = fixture(&manager, &gradle_request, "8.14.3", false);
         let status = manager.status().unwrap();
-        assert_eq!(status.defaults["java"].id, java.id);
+        assert_eq!(status.defaults[&java.sdk.default_key()].id, java.id);
         assert_eq!(status.defaults["maven"].id, maven.id);
         assert_eq!(status.defaults["gradle"].id, new.id);
         assert_eq!(status.installations.len(), 4);
@@ -1079,5 +1136,116 @@ mod tests {
         drop(execution);
         manager.uninstall(&new.id).unwrap();
         assert!(manager.home(&old).unwrap().is_dir());
+    }
+    #[test]
+    fn platform_defaults_updates_and_project_selectors_remain_independent() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = SdkManager::new(temp.path().join("home")).unwrap();
+        let x64 = SdkRequest::parse("bellsoft/liberica-jdk@21[arch=x86-64,variant=full]").unwrap();
+        let arm = SdkRequest::parse("bellsoft/liberica-jdk@21[arch=aarch64,variant=full]").unwrap();
+        let standard = SdkRequest::parse("bellsoft/liberica-jdk@21[arch=x86-64]").unwrap();
+        let old_x64 = fixture(&manager, &x64, "21.0.8+12", false);
+        let old_arm = fixture(&manager, &arm, "21.0.8+12", false);
+        let plain = fixture(&manager, &standard, "21.0.8+12", false);
+        assert_ne!(old_x64.id, old_arm.id);
+        assert_ne!(old_x64.id, plain.id);
+        manager.set_default(&x64.target()).unwrap();
+        manager.set_default(&arm.target()).unwrap();
+        manager.set_pin(&arm, true).unwrap();
+        let new_x64 = fixture(&manager, &x64, "21.0.9+10", false);
+        assert_eq!(
+            manager
+                .default_for("java", &x64.java().unwrap().platform)
+                .unwrap()
+                .unwrap()
+                .id,
+            new_x64.id
+        );
+        assert_eq!(
+            manager
+                .default_for("java", &arm.java().unwrap().platform)
+                .unwrap()
+                .unwrap()
+                .id,
+            old_arm.id
+        );
+        assert_eq!(
+            manager
+                .update(
+                    &arm,
+                    &CatalogOptions {
+                        offline: true,
+                        ..Default::default()
+                    }
+                )
+                .unwrap()
+                .id,
+            old_arm.id
+        );
+        assert_eq!(manager.list().unwrap().len(), 4);
+        assert!(manager.uninstall(&old_arm.id).is_err());
+        assert!(manager.uninstall(&new_x64.id).is_err());
+        manager
+            .clear_default_for("java", &arm.java().unwrap().platform)
+            .unwrap();
+        manager.uninstall(&old_arm.id).unwrap();
+        assert_eq!(manager.resolve(&x64.target()).unwrap().id, new_x64.id);
+        assert!(manager.resolve(&arm.target()).is_err());
+        let project = temp.path().join("project");
+        fs::create_dir(&project).unwrap();
+        manager
+            .use_project(
+                "bellsoft/liberica-jdk@21[arch=x86-64,variant=full]",
+                &project,
+                false,
+            )
+            .unwrap();
+        let text = fs::read_to_string(project.join(".janex-toolchains.toml")).unwrap();
+        assert!(text.contains("arch=x86-64,variant=full"));
+        assert!(!text.contains("os="));
+        let native = SdkRequest::parse("bellsoft/liberica-jdk@21").unwrap();
+        fixture(&manager, &native, "21.0.9+10", false);
+        manager
+            .use_project("bellsoft/liberica-jdk@21", &project, false)
+            .unwrap();
+        let text = fs::read_to_string(project.join(".janex-toolchains.toml")).unwrap();
+        assert_eq!(text.trim(), "java = \"bellsoft/liberica-jdk@21\"");
+    }
+
+    #[test]
+    fn foreign_platform_archives_can_be_managed_without_execution() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = SdkManager::new(temp.path().join("home")).unwrap();
+        let os = if cfg!(windows) { "linux" } else { "windows" };
+        let request =
+            SdkRequest::parse(&format!("bellsoft/liberica-jdk@21[os={os},arch=aarch64]")).unwrap();
+        let installed = fixture(&manager, &request, "21.0.8+12", false);
+        assert_eq!(installed.java_version.as_deref(), Some("21.0.8"));
+        assert!(
+            manager
+                .home(&installed)
+                .unwrap()
+                .join("bin")
+                .join(request.executable())
+                .is_file()
+        );
+        manager.set_default(&request.target()).unwrap();
+        assert!(manager.default_installation("java").unwrap().is_none());
+        assert!(request.check_host().is_err());
+    }
+    #[test]
+    fn nik_installations_keep_product_and_runtime_versions_separate() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = SdkManager::new(temp.path().join("home")).unwrap();
+        let request = SdkRequest::parse("bellsoft/liberica-nik@24").unwrap();
+        let installed = fixture(&manager, &request, "24.0.2+1", false);
+        assert_eq!(installed.sdk.version(), "24.0.2+1");
+        assert_eq!(installed.java_version.as_deref(), Some("21.0.8"));
+        assert_eq!(
+            manager.resolve("bellsoft/liberica-nik@24").unwrap().id,
+            installed.id
+        );
+        assert!(manager.resolve("bellsoft/liberica-jdk@21").is_err());
+        assert!(manager.resolve("bellsoft/liberica-nik@21").is_err());
     }
 }

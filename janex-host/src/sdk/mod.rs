@@ -4,7 +4,10 @@
 //! Native, persistent SDK installation and version selection.
 
 mod archive;
+mod bellsoft;
 mod catalog;
+mod platform;
+mod product;
 mod request;
 mod selection;
 mod shell;
@@ -12,6 +15,8 @@ mod state;
 mod tools;
 
 pub use catalog::{AvailableSdk, CatalogOptions};
+pub use platform::SdkPlatform;
+pub use product::{PRODUCTS, Product};
 pub use request::SdkRequest;
 pub(crate) use selection::application_runtimes;
 pub use selection::project_java;
@@ -22,119 +27,76 @@ pub use state::{Installation, SdkManager, SdkStatus, Selection};
 use crate::{Result, error::invalid};
 use serde::{Deserialize, Serialize};
 
-/// A Java distribution requirement and its platform variant.
+/// A Java-capable product requirement, named variant, and target platform.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct JavaRequest {
-    /// Disco distribution identifier, with `bellsoft` normalized to `liberica`.
-    pub vendor: String,
-    /// Numeric feature, release, complete release plus build number, or `latest`.
+    /// Stable publisher/product identity, independent of the download provider.
+    pub product: String,
+    /// Product version requirement, not necessarily the bundled Java version.
     pub version: String,
-    /// Normalized JVM architecture; independent of the Janex process architecture.
-    pub architecture: String,
-    /// `jdk` or `jre`.
-    pub kind: String,
-    /// Whether the package includes JavaFX.
-    pub javafx: bool,
-    /// Linux `glibc` or `musl`, or `c_std_lib` on other platforms.
-    pub libc: String,
+    /// Product-defined archive variant.
+    pub variant: String,
+    /// Target platform, independent of the running launcher architecture.
+    pub platform: SdkPlatform,
 }
 
 impl JavaRequest {
-    /// Parses `java:<vendor>@<version>` or a recognized shorthand vendor request.
-    /// Defaults to a JDK for the native operating-system architecture and libc.
+    /// Parses a Java product selector, including optional version and platform qualifiers.
     pub fn parse(text: &str) -> Result<Self> {
-        let explicit = text.starts_with("java:");
-        let text = text.strip_prefix("java:").unwrap_or(text);
-        let (vendor, version) = text.split_once('@').ok_or_else(|| {
-            invalid("expected java:<vendor>@<version>, for example java:bellsoft@21")
-        })?;
-        if !explicit
-            && !matches!(
-                vendor,
-                "bellsoft"
-                    | "liberica"
-                    | "temurin"
-                    | "zulu"
-                    | "corretto"
-                    | "microsoft"
-                    | "oracle"
-                    | "semeru"
-                    | "sap_machine"
-                    | "dragonwell"
-                    | "graalvm_community"
-            )
-        {
-            return Err(invalid(
-                "unknown target; use java:<vendor>@<version> for a Java SDK",
-            ));
+        match SdkRequest::parse(text)? {
+            SdkRequest::Java(request) => Ok(request),
+            _ => Err(invalid("expected a Java-capable SDK product")),
+        }
+    }
+
+    /// Resolves the product and version before the shared selector parser applies qualifiers.
+    pub(super) fn parse_base(text: &str) -> Result<Self> {
+        let (id, version) = text.split_once('@').unwrap_or((text, "latest"));
+        let product = product::product(id)?;
+        if product.family != "java" {
+            return Err(invalid("expected a Java-capable SDK product"));
         }
         let request = Self {
-            vendor: if vendor == "bellsoft" {
-                "liberica"
-            } else {
-                vendor
-            }
-            .into(),
+            product: product.id.into(),
             version: version.into(),
-            architecture: janex_platform::native_architecture()?,
-            kind: "jdk".into(),
-            javafx: false,
-            libc: if cfg!(target_os = "linux") {
-                if std::path::Path::new("/etc/alpine-release").exists() {
-                    "musl"
-                } else {
-                    "glibc"
-                }
-            } else {
-                "c_std_lib"
-            }
-            .into(),
+            variant: "standard".into(),
+            platform: SdkPlatform::native()?,
         };
         request.validate()?;
         Ok(request)
     }
 
-    /// Returns a stable, human-readable requirement without platform options.
+    /// Returns a lossless selector including every platform and variant component.
     pub fn target(&self) -> String {
         format!(
-            "java:{}@{}",
-            if self.vendor == "liberica" {
-                "bellsoft"
-            } else {
-                &self.vendor
-            },
-            self.version
+            "{}@{}[variant={},os={},arch={},libc={}]",
+            self.product,
+            self.version,
+            self.variant,
+            self.platform.os,
+            self.platform.arch,
+            self.platform.libc
         )
     }
 
-    /// Validates persisted or caller-constructed requirements before using them.
+    /// Returns the supported product descriptor.
+    pub(super) fn descriptor(&self) -> Result<&'static Product> {
+        product::product(&self.product)
+    }
+
+    /// Validates product identity, its version and variant, and the target platform.
     pub fn validate(&self) -> Result<()> {
-        if self.vendor.is_empty()
-            || self.vendor.len() > 64
-            || !self
-                .vendor
-                .bytes()
-                .all(|c| c.is_ascii_lowercase() || c == b'_')
-        {
-            return Err(invalid("invalid Java distribution identifier"));
+        let product = self.descriptor()?;
+        if product.family != "java" || !product.variants.contains(&self.variant.as_str()) {
+            return Err(invalid("unsupported variant for SDK product"));
         }
         if self.version != "latest" {
             numeric_version(&self.version)?;
         }
-        if !matches!(
-            self.architecture.as_str(),
-            "x86" | "x86-64" | "aarch64" | "arm" | "ppc64le" | "s390x" | "riscv64"
-        ) || !matches!(self.kind.as_str(), "jdk" | "jre")
-            || !matches!(self.libc.as_str(), "glibc" | "musl" | "c_std_lib")
-        {
-            return Err(invalid(
-                "unsupported SDK architecture, package kind, or libc",
-            ));
-        }
-        Ok(())
+        self.platform.validate()
     }
 
-    /// Tests a GA numeric version. A feature request matches its series; other releases are exact.
+    /// Tests a numeric stable product version; one component selects a release series.
     pub fn matches(&self, version: &str) -> bool {
         if self.version == "latest" {
             return numeric_version(version).is_ok();
@@ -186,19 +148,6 @@ pub(crate) fn version_order(a: &str, b: &str) -> std::cmp::Ordering {
     key(a).cmp(&key(b))
 }
 
-/// Returns the current operating system's Disco name.
-pub(crate) fn operating_system() -> Result<&'static str> {
-    match std::env::consts::OS {
-        "windows" => Ok("windows"),
-        "linux" => Ok("linux"),
-        "macos" => Ok("macos"),
-        "freebsd" => Ok("free_bsd"),
-        _ => Err(invalid(
-            "SDK downloads are unsupported on this operating system",
-        )),
-    }
-}
-
 /// Returns the Java executable name on this operating system.
 pub(crate) fn java_name() -> &'static str {
     if cfg!(windows) { "java.exe" } else { "java" }
@@ -215,7 +164,7 @@ mod tests {
 
     #[test]
     fn version_requirements_and_build_order() {
-        let mut request = JavaRequest::parse("bellsoft@21").unwrap();
+        let mut request = JavaRequest::parse("bellsoft/liberica-jdk@21").unwrap();
         assert!(request.matches("21.0.8+12"));
         assert!(!request.matches("22+1"));
         request.version = "21.0.8".into();
@@ -227,14 +176,14 @@ mod tests {
         assert!(version_order("21.0.10+1", "21.0.9+30").is_gt());
         assert!(version_order("21.0.8+12", "21.0.8+9").is_gt());
         assert!(
-            JavaRequest::parse("bellsoft@latest")
+            JavaRequest::parse("bellsoft/liberica-jdk@latest")
                 .unwrap()
                 .matches("25.0.1+8")
         );
         for target in [
-            "bellsoft@../21",
-            "bellsoft@21-ea",
-            "bellsoft@21+",
+            "bellsoft/liberica-jdk@../21",
+            "bellsoft/liberica-jdk@21-ea",
+            "bellsoft/liberica-jdk@21+",
             "java:../bad@21",
             "example@21",
         ] {

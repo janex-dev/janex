@@ -3,7 +3,7 @@
 
 //! Bounded catalog queries and authenticated HTTPS artifact transport.
 
-use super::{JavaRequest, SdkRequest, hex, operating_system, version_order};
+use super::{JavaRequest, SdkRequest, hex, version_order};
 use crate::{Result, error::invalid};
 use janex_format::checksum::{Algorithm, Checksum};
 use serde::Serialize;
@@ -80,26 +80,38 @@ pub(super) fn available(
         return super::tools::available(root, request, options);
     };
     let mut url = Url::parse("https://api.foojay.io/disco/v3.0/packages").unwrap();
-    let archive = if cfg!(windows) { "zip" } else { "tar.gz" };
-    let arch = match request.architecture.as_str() {
+    if request.product.starts_with("bellsoft/") {
+        return super::bellsoft::available(root, request, options);
+    }
+    let product = request.descriptor()?;
+    let archive = if request.platform.os == "windows" {
+        "zip"
+    } else {
+        "tar.gz"
+    };
+    let arch = match request.platform.arch.as_str() {
         "x86-64" => "x64",
         "x86" => "x32",
         other => other,
     };
     url.query_pairs_mut().extend_pairs([
-        ("distribution", request.vendor.as_str()),
+        ("distribution", product.disco.unwrap()),
         ("version", request.version.split('+').next().unwrap()),
-        ("operating_system", operating_system()?),
+        ("operating_system", disco_os(&request.platform.os)),
         ("architecture", arch),
         ("archive_type", archive),
-        ("package_type", request.kind.as_str()),
+        ("package_type", product.kind()),
         ("release_status", "ga"),
         ("directly_downloadable", "true"),
         (
             "javafx_bundled",
-            if request.javafx { "true" } else { "false" },
+            if request.variant == "fx" {
+                "true"
+            } else {
+                "false"
+            },
         ),
-        ("lib_c_type", request.libc.as_str()),
+        ("lib_c_type", disco_libc(&request.platform.libc)),
     ]);
     if request.version == "latest" {
         let pairs = url
@@ -132,15 +144,15 @@ fn parse_packages(
         } else {
             janex_platform::normalize_architecture(architecture)
         };
-        if text(row, "distribution")? != request.vendor
-            || text(row, "operating_system")? != operating_system()?
-            || normalized != request.architecture
-            || text(row, "package_type")? != request.kind
+        if text(row, "distribution")? != request.descriptor()?.disco.unwrap()
+            || text(row, "operating_system")? != disco_os(&request.platform.os)
+            || normalized != request.platform.arch
+            || text(row, "package_type")? != request.descriptor()?.kind()
             || text(row, "archive_type")? != archive
             || text(row, "release_status")? != "ga"
-            || row.get("javafx_bundled").and_then(Value::as_bool) != Some(request.javafx)
+            || row.get("javafx_bundled").and_then(Value::as_bool) != Some(request.variant == "fx")
             || row.get("directly_downloadable").and_then(Value::as_bool) != Some(true)
-            || (cfg!(target_os = "linux") && text(row, "lib_c_type")? != request.libc)
+            || (request.platform.os == "linux" && text(row, "lib_c_type")? != request.platform.libc)
         {
             continue;
         }
@@ -176,6 +188,9 @@ pub(super) fn artifact(
     if package.request.java().is_none() {
         return super::tools::artifact(root, package, options);
     }
+    if package.request.product().starts_with("bellsoft/") {
+        return super::bellsoft::artifact(root, package, options);
+    }
     let value = metadata(
         root,
         &format!("https://api.foojay.io/disco/v3.0/ids/{}", package.id),
@@ -192,7 +207,24 @@ pub(super) fn artifact(
     if text(row, "filename")? != package.filename {
         return Err(invalid("catalog download filename mismatch"));
     }
-    let url = text(row, "direct_download_uri")?.to_owned();
+    secure_artifact(
+        root,
+        text(row, "direct_download_uri")?,
+        &package.filename,
+        row,
+        options,
+    )
+}
+
+/// Resolves a secure digest, including the GitHub release-asset digest fallback.
+pub(super) fn secure_artifact(
+    root: &Path,
+    url: &str,
+    filename: &str,
+    row: &Value,
+    options: &CatalogOptions,
+) -> Result<Artifact> {
+    let url = url.to_owned();
     let parsed = secure_url(&url)?;
     let algorithm = match row.get("checksum_type").and_then(Value::as_str) {
         Some("sha256") => Some(Algorithm::Sha256),
@@ -240,7 +272,7 @@ pub(super) fn artifact(
             let release = metadata(root, &api, options)?;
             if let Some(assets) = release.get("assets").and_then(Value::as_array) {
                 for asset in assets {
-                    if asset.get("name").and_then(Value::as_str) == Some(&package.filename) {
+                    if asset.get("name").and_then(Value::as_str) == Some(filename) {
                         let actual_url = secure_url(text(asset, "browser_download_url")?)?;
                         if actual_url.origin() != parsed.origin()
                             || actual_url.query() != parsed.query()
@@ -269,6 +301,16 @@ pub(super) fn artifact(
     Err(invalid(
         "SDK download has no SHA-256 or SHA-512 checksum; this release cannot be installed",
     ))
+}
+
+/// Maps our OS identity to Disco's platform name.
+fn disco_os(os: &str) -> &str {
+    if os == "freebsd" { "free_bsd" } else { os }
+}
+
+/// Maps non-Linux targets to Disco's neutral libc identifier.
+fn disco_libc(libc: &str) -> &str {
+    if libc == "native" { "c_std_lib" } else { libc }
 }
 
 /// Parses an exact hexadecimal digest without accepting a truncated or nonhex value.
@@ -612,11 +654,11 @@ mod tests {
 
     #[test]
     fn metadata_cannot_override_requested_platform_or_version() {
-        let request = JavaRequest::parse("bellsoft@21").unwrap();
-        let row = serde_json::json!({"id": "1234abcd", "distribution": "liberica", "java_version": "21.0.8+12",
-            "operating_system": operating_system().unwrap(), "architecture": request.architecture,
+        let request = JavaRequest::parse("adoptium/temurin-jdk@21").unwrap();
+        let row = serde_json::json!({"id": "1234abcd", "distribution": "temurin", "java_version": "21.0.8+12",
+            "operating_system": disco_os(&request.platform.os), "architecture": request.platform.arch,
             "package_type": "jdk", "archive_type": "zip", "release_status": "ga", "javafx_bundled": false,
-            "directly_downloadable": true, "lib_c_type": request.libc, "filename": "jdk.zip"});
+            "directly_downloadable": true, "lib_c_type": disco_libc(&request.platform.libc), "filename": "jdk.zip"});
         let mut wrong = row.clone();
         wrong["architecture"] = serde_json::json!("unknown");
         let mut newer = row.clone();

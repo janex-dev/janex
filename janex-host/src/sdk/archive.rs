@@ -3,7 +3,7 @@
 
 //! Bounded extraction into a new, private SDK staging tree.
 
-use super::{JavaRequest, java_name};
+use super::JavaRequest;
 use crate::{Result, error::invalid};
 use std::{
     collections::BTreeSet,
@@ -272,11 +272,14 @@ pub(super) fn find_home(root: &Path, request: &super::SdkRequest) -> Result<Path
     let mut pending = vec![(root.to_owned(), 0)];
     while let Some((path, depth)) = pending.pop() {
         if path.join("release").is_file()
-            && path.join("bin").join(java_name()).is_file()
-            && (request.kind == "jre"
+            && path
+                .join("bin")
+                .join(request.platform.executable("java"))
+                .is_file()
+            && (request.descriptor()?.kind() == "jre"
                 || path
                     .join("bin")
-                    .join(if cfg!(windows) { "javac.exe" } else { "javac" })
+                    .join(request.platform.executable("javac"))
                     .is_file())
         {
             validate_release(&path, request)?;
@@ -326,14 +329,65 @@ fn validate_release(home: &Path, request: &JavaRequest) -> Result<()> {
     }
     let mut release_request = request.clone();
     release_request.version = request.version.split('+').next().unwrap().into();
-    if !release_request.matches(&version) {
+    if !request.descriptor()?.is_nik() && !release_request.matches(&version) {
         return Err(invalid("SDK release version does not match catalog"));
     }
+    if let Some(os) = release_property(home, "OS_NAME")? {
+        let os = match os.as_str() {
+            "Windows" => "windows",
+            "Linux" => "linux",
+            "Darwin" | "Mac OS X" => "macos",
+            "FreeBSD" => "freebsd",
+            other => other,
+        };
+        if os != request.platform.os {
+            return Err(invalid(
+                "SDK operating system does not match selected target",
+            ));
+        }
+    }
     let arch = property("OS_ARCH")?;
-    if janex_platform::normalize_architecture(&arch) != request.architecture {
+    if janex_platform::normalize_architecture(&arch) != request.platform.arch {
         return Err(invalid("SDK architecture does not match catalog"));
     }
     Ok(())
+}
+
+/// Reads one optional property from a bounded Java release file.
+fn release_property(home: &Path, name: &str) -> Result<Option<String>> {
+    let mut text = String::new();
+    fs::File::open(home.join("release"))?
+        .take(65537)
+        .read_to_string(&mut text)?;
+    if text.len() > 65536 {
+        return Err(invalid("SDK release metadata is too large"));
+    }
+    Ok(text
+        .lines()
+        .filter_map(|s| s.split_once('='))
+        .find(|(key, _)| *key == name)
+        .map(|(_, value)| value.trim().trim_matches('"').to_owned()))
+}
+
+/// Reads the bundled Java release without executing a potentially foreign-architecture binary.
+pub(super) fn java_version(home: &Path) -> Result<String> {
+    let value = release_property(home, "JAVA_RUNTIME_VERSION")?
+        .or(release_property(home, "JAVA_VERSION")?)
+        .ok_or_else(|| invalid("missing SDK JAVA_VERSION"))?;
+    let value = value
+        .strip_prefix("1.8.0_")
+        .map_or_else(|| value.clone(), |v| format!("8.0.{v}"));
+    // Vendor suffixes are not part of the numeric Java release or build identity.
+    let value = value.split('-').next().unwrap().to_owned();
+    super::numeric_version(&value)?;
+    Ok(value)
+}
+
+/// Reads NIK's own release identity; the embedded JAVA_VERSION cannot establish it.
+pub(super) fn nik_version(home: &Path) -> Result<String> {
+    release_property(home, "LIBERICA_NIK_VERSION")?
+        .or(release_property(home, "GRAALVM_VERSION")?)
+        .ok_or_else(|| invalid("SDK release metadata does not identify its NIK product version"))
 }
 
 /// Rewinds a downloaded archive and computes its persistent identity after checking the expected digest.

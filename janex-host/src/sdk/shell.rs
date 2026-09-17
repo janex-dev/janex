@@ -92,6 +92,7 @@ impl SdkManager {
                 if installed.sdk.family() != family {
                     return Err(invalid("shell SDK family mismatch"));
                 }
+                installed.sdk.check_host()?;
                 let home = janex_java::runtime::java_path(&self.home(&installed)?);
                 validate_home(&home, family)?;
                 bins.push(home.join("bin"));

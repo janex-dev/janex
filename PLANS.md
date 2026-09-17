@@ -6,7 +6,15 @@ for the project's long-term direction and delivery priorities.
 ## SDK Management
 
 - Add shared `available`, `install`, `list`, `update`, `uninstall`, `default`, `current`, `home`,
-  `use`, `pin`, `unpin`, `exec`, and `env` commands, initially backed by Java distributions from Foojay Disco.
+  `use`, `pin`, `unpin`, `exec`, and `env` commands. Identify products by publisher/product,
+  independently of their tool family, named variant, provider, and target OS/architecture/libc.
+- Query BellSoft directly for Liberica JDK/JRE editions and NIK product releases; use Foojay Disco
+  for the other supported Java products. Record bundled Java versions separately from product versions.
+- Preserve independent Java defaults for every target platform. Share lossless selectors across
+  installation, updates, shell selection, defaults, and removal. Omitted project platform values
+  remain portable; explicit non-native targets never silently fall back to the native architecture.
+- Read external Java release metadata without executing it, allowing foreign-architecture registration.
+  Store foreign-OS SDKs without offering them for activation or application runtime discovery.
 - Preserve all installed versions. Record requirements separately from concrete releases, platform
   variants, and SHA-256 identities. Support fixed builds and pinned request bindings.
 - Download over HTTPS and require a secure archive checksum; obtain GitHub asset SHA-256 metadata

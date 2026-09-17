@@ -48,7 +48,7 @@ fn registered_sdk_supports_selection_exec_and_safe_unregister() {
     let home = temp.path().join("home");
     let project = temp.path().join("project's workspace");
     fs::create_dir(&project).unwrap();
-    let target = format!("java:bellsoft@{}", runtime.feature);
+    let target = format!("bellsoft/liberica-jdk@{}", runtime.feature);
     let output = success(invoke(
         &home,
         &project,
@@ -147,7 +147,11 @@ fn empty_list_is_read_only_and_malformed_requests_do_not_create_installations() 
     let home = temp.path().join("home");
     success(invoke(&home, temp.path(), &["list", "--json"]));
     assert!(!home.exists());
-    for target in ["bellsoft@../21", "java:../vendor@21", "org.example:app:1.0"] {
+    for target in [
+        "bellsoft/liberica-jdk@../21",
+        "java:../vendor@21",
+        "org.example:app:1.0",
+    ] {
         assert!(
             !invoke(&home, temp.path(), &["install", target, "--offline"])
                 .status
@@ -272,4 +276,169 @@ fn portable_tools_share_commands_and_preserve_independent_selections() {
     ));
     success(invoke(&home, &project, &["uninstall", "maven@3.9.9"]));
     assert!(maven.is_dir());
+}
+
+/// Creates a foreign-architecture Java home whose executables must never be run during registration.
+fn java_fixture(root: &Path, arch: &str) {
+    fs::create_dir_all(root.join("bin")).unwrap();
+    fs::write(
+        root.join("release"),
+        format!(
+            "JAVA_VERSION=\"21.0.8\"\nJAVA_RUNTIME_VERSION=\"21.0.8+12\"\nOS_ARCH=\"{arch}\"\n"
+        ),
+    )
+    .unwrap();
+    for name in if cfg!(windows) {
+        ["java.exe", "javac.exe"]
+    } else {
+        ["java", "javac"]
+    } {
+        fs::write(root.join("bin").join(name), b"not executable").unwrap();
+    }
+}
+
+#[test]
+fn cli_selects_platform_defaults_variants_and_portable_project_requests() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let project = temp.path().join("project");
+    fs::create_dir(&project).unwrap();
+    let product = "bellsoft/liberica-jdk@21";
+    for arch in ["x86-64", "aarch64"] {
+        let sdk = temp.path().join(arch);
+        java_fixture(&sdk, arch);
+        success(invoke(
+            &home,
+            &project,
+            &[
+                "install",
+                product,
+                "--arch",
+                arch,
+                "--variant",
+                "full",
+                "--path",
+                sdk.to_str().unwrap(),
+            ],
+        ));
+        success(invoke(
+            &home,
+            &project,
+            &["default", product, "--arch", arch, "--variant", "full"],
+        ));
+    }
+    let status: serde_json::Value =
+        serde_json::from_str(&success(invoke(&home, &project, &["list", "--json"]))).unwrap();
+    assert_eq!(status["installations"].as_array().unwrap().len(), 2);
+    assert_eq!(status["defaults"].as_object().unwrap().len(), 2);
+    for arch in ["x86-64", "aarch64"] {
+        let environment = success(invoke(
+            &home,
+            &project,
+            &["env", "--arch", arch, "--shell", "powershell"],
+        ));
+        assert!(environment.contains(arch));
+        let path = success(invoke(
+            &home,
+            &project,
+            &["home", product, "--arch", arch, "--variant", "full"],
+        ));
+        assert!(path.trim().ends_with(arch));
+    }
+    assert!(
+        !invoke(
+            &home,
+            &project,
+            &["home", product, "--arch", "x86-64", "--variant", "standard"]
+        )
+        .status
+        .success()
+    );
+    assert!(
+        !invoke(
+            &home,
+            &project,
+            &["env", "--arch", "x86", "--shell", "powershell"]
+        )
+        .status
+        .success()
+    );
+    success(invoke(
+        &home,
+        &project,
+        &[
+            "use",
+            product,
+            "--project",
+            "--arch",
+            "aarch64",
+            "--variant",
+            "full",
+        ],
+    ));
+    let text = fs::read_to_string(project.join(".janex-toolchains.toml")).unwrap();
+    assert!(text.contains("arch=aarch64") && text.contains("variant=full"));
+    assert!(!text.contains("os="));
+    let output = success(invoke(
+        &home,
+        &project,
+        &[
+            "use",
+            product,
+            "--arch",
+            "x86-64",
+            "--variant",
+            "full",
+            "--shell",
+            "powershell",
+        ],
+    ));
+    assert!(output.contains("x86-64"));
+    assert!(
+        !invoke(
+            &home,
+            &project,
+            &[
+                "uninstall",
+                "bellsoft/liberica-jdk@21.0.8+12",
+                "--arch",
+                "aarch64",
+                "--variant",
+                "full"
+            ]
+        )
+        .status
+        .success()
+    );
+    success(invoke(
+        &home,
+        &project,
+        &["default", "--clear", "--arch", "aarch64"],
+    ));
+    success(invoke(
+        &home,
+        &project,
+        &[
+            "uninstall",
+            "bellsoft/liberica-jdk@21.0.8+12",
+            "--arch",
+            "aarch64",
+            "--variant",
+            "full",
+        ],
+    ));
+    assert!(temp.path().join("aarch64/release").exists());
+    let products: serde_json::Value = serde_json::from_str(&success(invoke(
+        &home,
+        &project,
+        &["available", "java", "--json"],
+    )))
+    .unwrap();
+    assert!(
+        products
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["id"] == "bellsoft/liberica-nik")
+    );
 }

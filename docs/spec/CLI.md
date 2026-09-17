@@ -24,30 +24,37 @@ use `janex run` to launch a local `.janex` file.
 
 ### Install and choose a default
 
-Install a JDK and make it your default Java installation:
+List Java products, then install a JDK and make it your default:
 
 ```shell
-janex available bellsoft@21
-janex install bellsoft@21
-janex default bellsoft@21
+janex available java
+janex available bellsoft/liberica-jdk@21
+janex install bellsoft/liberica-jdk@21
+janex default bellsoft/liberica-jdk@21
 ```
 
 You can keep several versions installed, including different Java distributions:
 
 ```shell
-janex install bellsoft@21 temurin@25
+janex install bellsoft/liberica-jdk@21 adoptium/temurin-jdk@25
 janex install gradle@8 maven@3.9
 janex list
 janex current
-janex home bellsoft@21
+janex home bellsoft/liberica-jdk@21
 ```
 
 `list` shows installed versions and their IDs. `current` shows the SDKs selected for the current
 environment. `home` prints an installation's directory.
 
-Each tool family has its own default. Installing another version does not change that default or
-remove older versions. To clear Java's default, use `janex default --clear --family java`;
-use `gradle` or `maven` as the family for those tools.
+Products use `publisher/product` names. `bellsoft/liberica-jdk`, `bellsoft/liberica-jre`, and
+`bellsoft/liberica-nik` are separate products. `gradle` and `maven` are short aliases for
+`gradle/gradle` and `apache/maven`.
+
+Java has a separate default for each target platform. Gradle and Maven each have one portable
+default. Installing another SDK keeps existing installations. Updating a request used as a default
+moves that default to the new build, unless pinned. To clear the native Java default, use
+`janex default --clear`; add `--arch aarch64` to clear that architecture's default instead.
+For Gradle or Maven, use `--family gradle` or `--family maven`.
 
 ### Select versions
 
@@ -55,17 +62,50 @@ The part after `@` determines which versions an install or update can choose:
 
 | Request | Meaning |
 | --- | --- |
-| `bellsoft@21` | The latest available release of Java 21. |
-| `bellsoft@21.0.8` | Java 21.0.8; updates stay on this release. |
-| `bellsoft@21.0.8+12` | One specific Java build. |
-| `temurin@latest` | The latest stable release from that distribution. |
+| `bellsoft/liberica-jdk@21` | The latest available release of Java 21. |
+| `bellsoft/liberica-jdk@21.0.8` | Java 21.0.8; updates stay on this release. |
+| `bellsoft/liberica-jdk@21.0.8+12` | One specific Java build. |
+| `adoptium/temurin-jdk@latest` | The latest stable release from that distribution. |
 | `gradle@8` | A release in the Gradle 8 series. |
 | `maven@3.9` | A release in the Maven 3.9 series. |
 | `maven@3.9.9` | Exactly Maven 3.9.9. |
 
-Java requests also accept `--arch`, `--kind jdk|jre`, `--javafx`, and `--libc glibc|musl`.
-For example, `janex install bellsoft@21 --javafx` selects a JavaFX-bundled distribution.
-Use an installation ID from `janex list` to distinguish installed variants.
+Omitting `@version` means `@latest`. Updates are explicit: run `janex update <PRODUCT>` to
+advance that saved request. NIK versions identify NIK itself; `list --json` records its bundled
+Java version separately as `java_version`.
+
+### Keep several architectures or variants
+
+Choose a product's named edition with `--variant`; `available java` lists supported products and
+editions. Liberica JDK offers `standard`, `full`, and `lite`. Availability depends on the release
+and target platform.
+
+```shell
+janex install bellsoft/liberica-jdk@21 --variant full --arch aarch64
+janex install bellsoft/liberica-jdk@21 --variant full --arch x86-64
+janex default bellsoft/liberica-jdk@21 --variant full --arch aarch64
+janex default bellsoft/liberica-jdk@21 --variant full --arch x86-64
+janex use bellsoft/liberica-jdk@21 --variant full --arch x86-64
+janex exec --arch x86-64 -- java -version
+```
+
+Both installations and defaults coexist. Without platform options, Janex selects the operating
+system's native architecture, even when Janex itself runs under emulation. Explicit selections do
+not fall back to another architecture. Running a non-native architecture requires OS support.
+
+`--os` selects an operating system; `--libc glibc|musl` selects a Linux C library. Foreign-OS SDKs
+can be stored and registered but cannot be activated on the current OS. These options and
+`--variant` also apply to `home`, `use`, `default`, `update`, `pin`, `unpin`, and `uninstall`.
+`update --all` updates each saved variant and platform request independently.
+
+For different choices in one command, use quoted selectors:
+
+```shell
+janex install 'bellsoft/liberica-jdk@21[variant=full,arch=aarch64]' 'bellsoft/liberica-jdk@21[arch=x86-64]'
+```
+
+`list` displays complete selectors and installation IDs. An ID selects one exact installation
+and cannot be combined with variant or platform options.
 
 ### Use SDKs in your shell
 
@@ -85,7 +125,7 @@ Once loaded, activate your SDK selections or switch versions in the current term
 ```shell
 janex activate
 java -version
-janex use temurin@25 gradle@8
+janex use adoptium/temurin-jdk@25 gradle@8
 janex deactivate
 ```
 
@@ -101,18 +141,20 @@ If you move the Janex executable, run `janex init` again and reload the script.
 In your project directory, save the versions it needs:
 
 ```shell
-janex use --project bellsoft@21
+janex use --project bellsoft/liberica-jdk@21
 janex use --project gradle@8
 ```
 
 These commands update `.janex-toolchains.toml`, one tool family at a time. Add `--pin` to save an
 exact local installation ID instead of a version request. The selected SDK must already be installed.
+Unspecified platform values remain unspecified in the project file, so another machine uses its own
+native platform. Explicit `--arch`, `--os`, `--libc`, and `--variant` values are retained.
 
 To run one command without changing your shell, use `exec`:
 
 ```shell
-janex exec --java bellsoft@21 -- java -version
-janex exec --java bellsoft@21 --gradle gradle@8 -- gradle build
+janex exec --java bellsoft/liberica-jdk@21 -- java -version
+janex exec --java bellsoft/liberica-jdk@21 --gradle gradle@8 -- gradle build
 ```
 
 For `exec`, explicit options take priority over SDK home variables, project selections, and global
@@ -123,10 +165,10 @@ and the same `--java`, `--gradle`, and `--maven` selections as `exec`.
 ### Update, pin, and remove
 
 ```shell
-janex update bellsoft@21
+janex update bellsoft/liberica-jdk@21
 janex update --all
-janex pin bellsoft@21
-janex unpin bellsoft@21
+janex pin bellsoft/liberica-jdk@21
+janex unpin bellsoft/liberica-jdk@21
 ```
 
 Updates follow the saved version request and keep previous installations. Pinning holds a request
@@ -142,7 +184,7 @@ Choose another default or clear the current one before removing it. Janex also r
 an SDK in use by a Janex-managed process. If a project refers to a removed SDK, install it again or
 change the project's selection.
 
-To register an SDK you already have, use `janex install bellsoft@21 --path /opt/jdk-21`.
+To register an SDK you already have, use `janex install bellsoft/liberica-jdk@21 --path /opt/jdk-21`.
 This also works for Gradle and Maven. Janex leaves that directory in place when you unregister it
 with `uninstall`.
 

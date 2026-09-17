@@ -215,6 +215,7 @@ impl SdkManager {
                 if installed.sdk.family() != family {
                     return Err(invalid("selected SDK belongs to a different family"));
                 }
+                installed.sdk.check_host()?;
                 let home = self.home(&installed)?;
                 validate_home(&home, family)?;
                 leases.push(self.lease(&installed.id)?);
@@ -241,7 +242,7 @@ impl SdkManager {
         let value = if pin || target == installation.id {
             installation.id
         } else {
-            request.target()
+            target.to_owned()
         };
         let path = directory.join(".janex-toolchains.toml");
         let mut project = if path.exists() {
@@ -355,12 +356,21 @@ pub(crate) fn application_runtimes(
         let mut installed = state
             .installations
             .iter()
-            .filter(|i| i.sdk.java().is_some())
+            .filter(|i| {
+                i.sdk
+                    .java()
+                    .is_some_and(|j| j.platform.os == std::env::consts::OS)
+            })
             .collect::<Vec<_>>();
         installed.sort_by(|a, b| {
-            (Some(&a.sdk.java().unwrap().architecture) != native.as_ref())
-                .cmp(&(Some(&b.sdk.java().unwrap().architecture) != native.as_ref()))
-                .then_with(|| b.sdk.compare(&a.sdk))
+            (Some(&a.sdk.java().unwrap().platform.arch) != native.as_ref())
+                .cmp(&(Some(&b.sdk.java().unwrap().platform.arch) != native.as_ref()))
+                .then_with(|| {
+                    super::version_order(
+                        b.java_version.as_deref().unwrap_or(b.sdk.version()),
+                        a.java_version.as_deref().unwrap_or(a.sdk.version()),
+                    )
+                })
         });
         for i in installed {
             managed.push(manager.home(i)?.join("bin").join(java_name()));
@@ -404,7 +414,7 @@ pub(crate) fn application_runtimes(
         )));
     }
     if !options.is_explicit()
-        && !state.defaults.contains_key("java")
+        && manager.default_in(&state, "java")?.is_none()
         && let Ok(native) = janex_platform::native_architecture()
     {
         result.sort_by_key(|(runtime, _)| runtime.architecture != native);
