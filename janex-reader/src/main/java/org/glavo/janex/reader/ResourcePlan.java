@@ -7,6 +7,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.*;
 import org.glavo.janex.reader.internal.JarSource;
+import org.glavo.janex.reader.internal.ResourceTable;
 
 /// Immutable selected resources referencing an unchanged snapshot, independent of a launch transport.
 ///
@@ -171,11 +172,11 @@ public final class ResourcePlan {
         /// Expanded resource paths in traversal order; directory names end with a slash.
         private final Map<String, File> files;
 
-        /// Retains validated preparation data without exposing mutable input arrays or collections.
-        Root(String name, boolean module, Map<String, File> files) {
+        /// Retains validated preparation data and its immutable name index.
+        Root(String name, boolean module, ResourceTable<File> files) {
             this.name = name;
             this.module = module;
-            this.files = Collections.unmodifiableMap(new LinkedHashMap<>(files));
+            this.files = files;
         }
 
         /// Returns original JAR filename.

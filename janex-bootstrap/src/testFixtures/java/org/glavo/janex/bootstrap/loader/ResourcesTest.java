@@ -63,6 +63,18 @@ public final class ResourcesTest {
                     return output;
                 }, null, null, limits)) {
                     JanexReader.Launch launch = reader.launch("main");
+                    try (ResourceIndex direct = new ResourceIndex(launch.resources)) {
+                        Map<String, ResourceIndex.Resource> files = direct.roots.get(0).files;
+                        if (valid && !new ArrayList<String>(files.keySet()).equals(new ArrayList<String>(expected.keySet()))) {
+                            throw new AssertionError("Direct resource paths differ at vector " + vector);
+                        }
+                        for (Map.Entry<String, ResourceIndex.Resource> entry : files.entrySet()) {
+                            byte[] bytes = entry.getValue().readBytes();
+                            if (valid && !Arrays.equals(expected.get(entry.getKey()), bytes)) {
+                                throw new AssertionError("Direct resource bytes differ at vector " + vector + ": " + entry.getKey());
+                            }
+                        }
+                    }
                     try (ResourceIndex index = new ResourceIndex(new ByteArrayInputStream(ResourceIndexes.encode(launch.resources)))) {
                         if (index.roots.size() != 1) {
                             throw new AssertionError("Expected exactly one root");

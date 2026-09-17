@@ -19,6 +19,7 @@ import java.util.zip.ZipOutputStream;
 import org.glavo.janex.reader.internal.Conditions;
 import org.glavo.janex.reader.internal.Input;
 import org.glavo.janex.reader.internal.JarArchive;
+import org.glavo.janex.reader.internal.ResourceTable;
 
 /// Exercises deterministic encoding and version boundaries independently of the native writer.
 public final class ReaderTest {
@@ -75,6 +76,7 @@ public final class ReaderTest {
         check(extension.containsKey(99L));
         archives();
         resourcePlan();
+        resourceTables();
         dataPools();
         repeatedPoolEntries();
         poolIndexFraming();
@@ -254,6 +256,61 @@ public final class ReaderTest {
         check(empty.size() == 1 && empty.byteLength(0) == 0);
     }
 
+    /// Compares compact lookup and iteration with an insertion-ordered map, including hash collisions.
+    private static void resourceTables() {
+        for (int count : new int[]{0, 1, 3, 31, 256, 1024}) {
+            Map<String, Integer> expected = new java.util.LinkedHashMap<String, Integer>();
+            for (int i = 0; i < count; i++) {
+                String name;
+                if (i < 128) {
+                    StringBuilder collision = new StringBuilder();
+                    for (int bit = 0; bit < 8; bit++) collision.append((i & (1 << bit)) == 0 ? "Aa" : "BB");
+                    name = collision.toString();
+                } else {
+                    name = "dir/\ud83d\ude00-" + i + ".class";
+                }
+                expected.put(name, i);
+            }
+            ResourceTable<Integer> table = ResourceTable.mapValues(expected, value -> value);
+            ResourceTable<String> mapped = ResourceTable.mapValues(table, Object::toString);
+            check(table.equals(expected) && expected.equals(table));
+            check(new java.util.ArrayList<String>(table.keySet()).equals(new java.util.ArrayList<String>(expected.keySet())));
+            check(new java.util.ArrayList<String>(mapped.keySet()).equals(new java.util.ArrayList<String>(expected.keySet())));
+            check(table.get("BBBBBBBBBBBBBBBB") == null && !table.containsKey("absent"));
+            check(table.get(null) == null && table.get(1) == null);
+            for (Map.Entry<String, Integer> entry : expected.entrySet()) {
+                String key = new String(entry.getKey());
+                check(table.get(key).equals(entry.getValue()));
+                check(mapped.get(key).equals(entry.getValue().toString()));
+            }
+            Map<String, Integer> visited = new java.util.LinkedHashMap<String, Integer>();
+            table.forEach(visited::put);
+            check(visited.equals(expected));
+            if (count > 0) {
+                try {
+                    mapped.entrySet().iterator().next().setValue("changed");
+                    throw new AssertionError("Mutable resource entry");
+                } catch (UnsupportedOperationException expectedFailure) {
+                    check(mapped.values().iterator().next().equals("0"));
+                }
+                try {
+                    table.keySet().iterator().remove();
+                    throw new AssertionError("Mutable resource names");
+                } catch (UnsupportedOperationException expectedFailure) {
+                    check(table.size() == count);
+                }
+            }
+            expected.clear();
+            check(table.size() == count && mapped.size() == count);
+        }
+        try {
+            new ResourceTable<Integer>(new String[]{"Aa", "BB", "Aa"}, new Integer[]{1, 2, 3});
+            throw new AssertionError("Duplicate resource name accepted");
+        } catch (IllegalArgumentException expected) {
+            check(expected.getMessage().contains("Duplicate"));
+        }
+    }
+
     /// Checks that public resource accessors do not expose owned mutable storage.
     private static void resourcePlan() throws IOException {
         byte[] bytes = {42};
@@ -264,7 +321,7 @@ public final class ReaderTest {
         ResourcePlan.File file = new ResourcePlan.File(1, transforms, Instant.MAX, null, null, 0);
         Map<String, ResourcePlan.File> files = new java.util.LinkedHashMap<String, ResourcePlan.File>();
         files.put("value", file);
-        ResourcePlan.Root root = new ResourcePlan.Root("example.jar", false, files);
+        ResourcePlan.Root root = new ResourcePlan.Root("example.jar", false, ResourceTable.mapValues(files, value -> value));
         DataPool immutable = DataPool.copyOf(new byte[][]{new byte[0], new byte[]{42}});
         DataPool[] pools = {immutable};
         ResourcePlan plan = new ResourcePlan(java.nio.file.Paths.get("snapshot.janex"), ReadLimits.DEFAULT,

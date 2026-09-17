@@ -13,6 +13,7 @@ import org.glavo.janex.reader.ReadLimits;
 import org.glavo.janex.reader.ResourcePlan;
 import org.glavo.janex.reader.DataPool;
 import org.glavo.janex.reader.internal.JarSource;
+import org.glavo.janex.reader.internal.ResourceTable;
 import org.glavo.janex.reader.internal.codec.ClassFiles;
 import org.glavo.janex.reader.internal.codec.ZstandardFrames;
 import org.glavo.janex.reader.internal.codec.zstd.Zstandard;
@@ -111,7 +112,7 @@ public final class ResourceIndex implements Closeable {
     }
 
     /// Opens an immutable resource plan directly, without serializing an intermediate index.
-    /// Open snapshot handles are owned by this index; plan arrays are copied and pools remain shared.
+    /// Open snapshot handles are owned by this index; immutable plan metadata may be shared.
     /// External JAR handles are opened on first payload access and closed with this index.
     /// Construction failure closes the opened snapshot.
     /// @param plan validated resources over an unchanged, caller-owned snapshot file
@@ -334,26 +335,25 @@ public final class ResourceIndex implements Closeable {
         Root(ResourcePlan.Root root) {
             name = root.name();
             module = root.module();
-            Map<String, Resource> entries = new LinkedHashMap<String, Resource>();
-            for (Map.Entry<String, ResourcePlan.File> file : root.files().entrySet()) {
-                entries.put(file.getKey(), new Resource(file.getValue()));
-            }
-            files = Collections.unmodifiableMap(entries);
+            files = ResourceTable.mapValues(root.files(), Resource::new);
         }
 
         /// Reads one root and rejects duplicate names.
         Root(DataInputStream input) throws IOException {
             name = text(input);
             module = input.readBoolean();
-            Map<String, Resource> entries = new LinkedHashMap<String, Resource>();
             int count = count(input);
+            String[] names = new String[count];
+            Resource[] entries = new Resource[count];
             for (int i = 0; i < count; i++) {
-                String path = text(input);
-                if (entries.put(path, new Resource(input)) != null) {
-                    throw new IOException("Duplicate resource name");
-                }
+                names[i] = text(input);
+                entries[i] = new Resource(input);
             }
-            files = Collections.unmodifiableMap(entries);
+            try {
+                files = new ResourceTable<Resource>(names, entries);
+            } catch (IllegalArgumentException invalid) {
+                throw new IOException("Invalid resource names", invalid);
+            }
         }
 
         /// Returns the original JAR filename.

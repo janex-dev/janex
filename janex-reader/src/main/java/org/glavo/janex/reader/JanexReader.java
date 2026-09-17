@@ -13,6 +13,7 @@ import org.glavo.janex.reader.internal.Input;
 import org.glavo.janex.reader.internal.JarArchive;
 import org.glavo.janex.reader.internal.JarSource;
 import org.glavo.janex.reader.internal.ModuleRequirement;
+import org.glavo.janex.reader.internal.ResourceTable;
 import org.glavo.janex.reader.internal.codec.ZstandardFrames;
 
 import static org.glavo.janex.reader.internal.Input.*;
@@ -761,6 +762,24 @@ public final class JanexReader implements Closeable {
         return Integer.compare(left.length() - l, right.length() - r);
     }
 
+    /// Orders paths by UTF-8 components, placing a directory's descendants before its next sibling.
+    private static int comparePaths(String left, String right) {
+        int l = 0;
+        int r = 0;
+        while (l < left.length() && r < right.length()) {
+            int a = left.codePointAt(l);
+            int b = right.codePointAt(r);
+            if (a != b) {
+                if (a == '/') return -1;
+                if (b == '/') return 1;
+                return Integer.compare(a, b);
+            }
+            l += Character.charCount(a);
+            r += Character.charCount(b);
+        }
+        return Integer.compare(left.length() - l, right.length() - r);
+    }
+
     /// Inserts missing directory parents while rejecting file/directory conflicts.
     private void directory(Map<String, Node> tree, String path) throws IOException {
         for (String current = path;;) {
@@ -794,7 +813,7 @@ public final class JanexReader implements Closeable {
         String jarName = metadata.containsKey("janex.java.jar_name") ? text(metadata.get("janex.java.jar_name")) : "resources.jar";
         require(jarName.endsWith(".jar") && jarName.indexOf('/') < 0 && jarName.indexOf('\\') < 0 && jarName.indexOf(0) < 0,
                 "Invalid root JAR filename");
-        Map<String, Node> tree = new TreeMap<String, Node>(JanexReader::compareText);
+        Map<String, Node> tree = new TreeMap<String, Node>(JanexReader::comparePaths);
         tree.put("", new Node());
         int layers = limits.elements(input.uint());
         for (int layer = 0; layer < layers; layer++) {
@@ -889,6 +908,37 @@ public final class JanexReader implements Closeable {
 
     /// Rewrites manifests and expands aliases for an imported or embedded root.
     private Root finishRoot(String jarName, boolean module, Map<String, Node> tree, boolean agent) throws IOException {
+        boolean links = false;
+        for (Node node : tree.values()) {
+            if (node.source == -2) {
+                links = true;
+                break;
+            }
+        }
+        if (!links) {
+            Iterator<Map.Entry<String, Node>> entries = tree.entrySet().iterator();
+            while (entries.hasNext()) {
+                Map.Entry<String, Node> entry = entries.next();
+                String name = entry.getKey();
+                Node node = entry.getValue();
+                if (node.source >= 0) {
+                    node = prepareFile(name, node, agent);
+                    if (node != null) {
+                        entry.setValue(node);
+                        countFile(node);
+                    }
+                } else {
+                    int depth = name.isEmpty() ? 0 : 1;
+                    for (int i = 0; i < name.length(); i++) {
+                        if (name.charAt(i) == '/') depth++;
+                    }
+                    limits.depth(depth);
+                }
+                if (node == null || name.isEmpty() && !includeRoot) entries.remove();
+            }
+            limits.elements(tree.size());
+            return new Root(jarName, module, tree);
+        }
         Map<String, List<String>> children = new HashMap<String, List<String>>();
         for (String name : tree.keySet()) {
             if (!name.isEmpty()) {
@@ -900,6 +950,29 @@ public final class JanexReader implements Closeable {
         Map<String, Node> expanded = new LinkedHashMap<String, Node>();
         expand(tree, children, "", "", expanded, new HashSet<String>(), agent);
         return new Root(jarName, module, expanded);
+    }
+
+    /// Prepares a file at its visible path, returning null for a stale JAR signature.
+    private Node prepareFile(String path, Node node, boolean agent) throws IOException {
+        if (jarSignature(path)) return null;
+        materialize(node);
+        if (!agent && asciiEquals(path, "META-INF/MANIFEST.MF")) {
+            require(node.transforms.length == 0, "Manifest cannot contain class-file transforms");
+            byte[] original = bytes(node.source);
+            if (has(node.metadata, 0)) verify(binary(get(node.metadata, 0)), original);
+            Node manifest = new Node();
+            manifest.source = inline(runtimeManifest(original));
+            manifest.metadata = node.metadata;
+            return manifest;
+        }
+        return node;
+    }
+
+    /// Charges one visible file against the aggregate logical byte allowance.
+    private void countFile(Node node) throws IOException {
+        logicalBytes += node.transforms.length == 0 ? sources.get(node.source).length
+                : node.transforms[node.transforms.length - 1].decodedLength();
+        require(logicalBytes <= logicalLimit, "Logical resource byte limit exceeded");
     }
 
     /// Identifies stale signature files directly inside META-INF, including expanded aliases.
@@ -1041,29 +1114,15 @@ public final class JanexReader implements Closeable {
         }
         limits.text(alias);
         if (node.source >= 0) {
-            if (jarSignature(alias)) {
-                return;
-            }
-            materialize(node);
-            if (!agent && asciiEquals(alias, "META-INF/MANIFEST.MF")) {
-                require(node.transforms.length == 0, "Manifest cannot contain class-file transforms");
-                byte[] original = bytes(node.source);
-                if (has(node.metadata, 0)) {
-                    verify(binary(get(node.metadata, 0)), original);
-                }
-                Node manifest = new Node();
-                manifest.source = inline(runtimeManifest(original));
-                manifest.metadata = node.metadata;
-                node = manifest;
-            }
+            node = prepareFile(alias, node, agent);
+            if (node == null) return;
         }
         if (!alias.isEmpty() || includeRoot) {
             require(output.put(alias, node) == null, "Duplicate expanded resource");
             limits.elements(output.size());
         }
         if (node.source >= 0) {
-            logicalBytes += node.transforms.length == 0 ? sources.get(node.source).length : node.transforms[node.transforms.length - 1].decodedLength();
-            require(logicalBytes <= logicalLimit, "Logical resource byte limit exceeded");
+            countFile(node);
             return;
         }
         limits.depth(active.size());
@@ -1311,7 +1370,9 @@ public final class JanexReader implements Closeable {
         }
         List<ResourcePlan.Root> selectedRoots = new ArrayList<ResourcePlan.Root>();
         for (Root root : roots) {
-            Map<String, ResourcePlan.File> files = new LinkedHashMap<String, ResourcePlan.File>();
+            String[] names = new String[root.files.size()];
+            ResourcePlan.File[] files = new ResourcePlan.File[names.length];
+            int position = 0;
             for (Map.Entry<String, Node> entry : root.files.entrySet()) {
                 Node node = entry.getValue();
                 ResourcePlan.ClassFileTransform[] transforms = new ResourcePlan.ClassFileTransform[node.transforms.length];
@@ -1322,12 +1383,12 @@ public final class JanexReader implements Closeable {
                             : new ResourcePlan.ClassFileTransform(transform.decodedLength(), poolIndex);
                 }
                 Integer permissions = has(node.metadata, 5) ? (int) number(get(node.metadata, 5)) : null;
-                files.put(node.source == -1 && !entry.getKey().isEmpty() ? entry.getKey() + "/" : entry.getKey(),
-                        new ResourcePlan.File(node.source < 0 ? node.source : sourceIds[node.source], transforms,
-                                (Instant) get(node.metadata, 2), (Instant) get(node.metadata, 3),
-                                (Instant) get(node.metadata, 4), permissions));
+                names[position] = node.source == -1 && !entry.getKey().isEmpty() ? entry.getKey() + "/" : entry.getKey();
+                files[position++] = new ResourcePlan.File(node.source < 0 ? node.source : sourceIds[node.source], transforms,
+                        (Instant) get(node.metadata, 2), (Instant) get(node.metadata, 3),
+                        (Instant) get(node.metadata, 4), permissions);
             }
-            selectedRoots.add(new ResourcePlan.Root(root.name, root.module, files));
+            selectedRoots.add(new ResourcePlan.Root(root.name, root.module, new ResourceTable<ResourcePlan.File>(names, files)));
         }
         return new ResourcePlan(path, limits, selectedSources, selectedPools, requirements, selectedRoots);
     }
@@ -1426,7 +1487,7 @@ public final class JanexReader implements Closeable {
             Map<String, Node> layer = layers.computeIfAbsent(version, ignored -> new TreeMap<String, Node>(JanexReader::compareText));
             require(layer.put(name, node) == null, "Conflicting JAR resource paths");
         }
-        Map<String, Node> tree = new TreeMap<String, Node>(JanexReader::compareText);
+        Map<String, Node> tree = new TreeMap<String, Node>(JanexReader::comparePaths);
         Map<String, Node> validation = new TreeMap<String, Node>(JanexReader::compareText);
         tree.put("", new Node());
         validation.put("", new Node());
