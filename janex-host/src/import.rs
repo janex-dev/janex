@@ -53,28 +53,12 @@ pub struct ImportedRoot {
 }
 
 impl ImportedRoot {
-    /// Encodes the source filename and manifest-supplied automatic module name.
-    pub(crate) fn metadata(&self) -> Result<Value> {
-        let mut entries = vec![(Value::uint(0), Value::text(&self.jar_name))];
-        if let Some(name) = self
-            .manifest
-            .as_ref()
-            .and_then(|m| m.get("Automatic-Module-Name"))
-        {
-            entries.push((
-                Value::text(crate::adapters::AUTOMATIC_MODULE_NAME),
-                Value::text(name),
-            ));
-        }
-        Ok(Value::map(entries)?)
-    }
-
     /// Creates a resource root whose data pool will be stored at the supplied reference.
     pub fn into_resource_root(self, data_pool: BlobRef) -> Result<ResourceRoot> {
         Ok(ResourceRoot {
             data_pool,
             data: DataPool::new(),
-            metadata: self.metadata()?,
+            metadata: Value::map([(Value::uint(0), Value::text(&self.jar_name))])?,
             layers: self.layers,
         })
     }

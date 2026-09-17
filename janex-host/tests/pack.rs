@@ -77,9 +77,6 @@ fn packages_directory_resources_arguments_and_ordered_dependencies() {
     fs::write(temp.path().join("main/a.bin"), shared).unwrap();
     fs::write(temp.path().join("main/b.bin"), shared).unwrap();
     fs::write(temp.path().join("main/empty"), b"").unwrap();
-    let manifest = b"Manifest-Version: 1.0\r\nAutomatic-Module-Name: example.main\r\n\r\n";
-    fs::create_dir(temp.path().join("main/META-INF")).unwrap();
-    fs::write(temp.path().join("main/META-INF/MANIFEST.MF"), manifest).unwrap();
     fs::write(
         temp.path().join("main/invalid.class"),
         b"ordinary non-class resource",
@@ -111,21 +108,7 @@ fn packages_directory_resources_arguments_and_ordered_dependencies() {
     assert_eq!(launch.class_path.len(), 3);
     assert_eq!(launch.module_path.len(), 1);
     let resource = root(&launch.class_path[0], &mut blobs);
-    assert_eq!(
-        resource
-            .metadata
-            .get_text("janex.java.automatic_module_name")
-            .unwrap()
-            .unwrap()
-            .as_text()
-            .unwrap(),
-        "example.main"
-    );
     let tree = resource.merge(&context(), Limits::default()).unwrap();
-    assert_eq!(
-        tree.read_file("META-INF/MANIFEST.MF", &mut blobs).unwrap(),
-        manifest
-    );
     assert_eq!(tree.read_file("a.bin", &mut blobs).unwrap(), shared);
     for path in ["a.bin", "b.bin", "empty", "invalid.class"] {
         let Node::File { metadata, .. } = tree.get(path).unwrap() else {

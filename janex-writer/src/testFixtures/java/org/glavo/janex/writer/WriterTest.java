@@ -139,7 +139,7 @@ public final class WriterTest {
     private static void jar(Path root) throws Exception {
         Path jar = root.resolve("library-1.jar");
         try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(jar))) {
-            entry(zip, "META-INF/MANIFEST.MF", "Manifest-Version: 1.0\r\nMain-Class: demo.Main\r\nMulti-Release: true\r\nAutomatic-Module-Name: demo.library\r\n\r\n");
+            entry(zip, "META-INF/MANIFEST.MF", "Manifest-Version: 1.0\r\nMain-Class: demo.Main\r\nMulti-Release: true\r\n\r\n");
             entry(zip, "value.txt", "base");
             entry(zip, "META-INF/versions/9/value.txt", "selected");
             entry(zip, "META-INF/versions/999/value.txt", "future");
@@ -157,10 +157,6 @@ public final class WriterTest {
             require(reader.integrity().completeSecureCoverage(), "Missing integrity coverage");
             var launch = reader.launch("main");
             require(launch.mainClass.equals("demo.Main"), "Manifest main class was lost");
-            var manifest = new java.util.jar.Manifest(new ByteArrayInputStream(content(launch.resources,
-                    launch.resources.roots().get(0), "META-INF/MANIFEST.MF")));
-            require("demo.library".equals(manifest.getMainAttributes().getValue("Automatic-Module-Name")),
-                    "Automatic module name was lost");
             require(launch.arguments.equals(options.arguments), "Arguments changed");
             require(launch.resources.roots().get(0).name().equals("library-1.jar"), "JAR name changed");
             require(text(launch.resources, "value.txt").equals("selected"), "Wrong Multi-Release layer");

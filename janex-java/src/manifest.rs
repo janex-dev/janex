@@ -113,26 +113,15 @@ impl Manifest {
     /// unchanged. Output uses deterministic header order, CRLF, and byte-level continuation
     /// lines; absent Manifest-Version defaults to 1.0.
     pub fn for_runtime(&self) -> Vec<u8> {
-        self.for_runtime_with_module_name(None)
-    }
-
-    /// Encodes a runtime manifest with an optional Automatic-Module-Name override.
-    ///
-    /// The override must be a valid Java module name. Other attributes follow `for_runtime`.
-    pub fn for_runtime_with_module_name(&self, module_name: Option<&str>) -> Vec<u8> {
         let mut bytes = Vec::new();
         write_header(
             &mut bytes,
             "Manifest-Version",
             self.get("Manifest-Version").unwrap_or("1.0"),
         );
-        if let Some(name) = module_name {
-            write_header(&mut bytes, "Automatic-Module-Name", name);
-        }
         for (name, value) in &self.main {
             if !matches!(name.as_str(), "manifest-version" | "class-path")
                 && !signature_header(name)
-                && !(name == "automatic-module-name" && module_name.is_some())
             {
                 write_header(&mut bytes, name, value);
             }
