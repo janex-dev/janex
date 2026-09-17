@@ -230,7 +230,7 @@ public final class ReaderTest {
         int[][] extents = {{0, 0, 1}};
         ResourcePlan.Source inline = new ResourcePlan.Source(bytes, -1, 0, new int[0], new int[0][3], null);
         ResourcePlan.Source extent = new ResourcePlan.Source(null, -1, 0, new int[0], extents, null);
-        int[][] transforms = {{10, 0}};
+        ResourcePlan.ClassFileTransform[] transforms = {new ResourcePlan.ClassFileTransform(10, 0)};
         Instant[] times = {Instant.MAX, null, null};
         ResourcePlan.File file = new ResourcePlan.File(1, transforms, times, 0);
         Map<String, ResourcePlan.File> files = new java.util.LinkedHashMap<String, ResourcePlan.File>();
@@ -242,22 +242,27 @@ public final class ReaderTest {
                 Arrays.asList(inline, extent), pools, java.util.Collections.emptyMap(), Arrays.asList(root));
         bytes[0] = 0;
         extents[0][2] = 0;
-        transforms[0][0] = 0;
+        transforms[0] = new ResourcePlan.ClassFileTransform(0, 1);
         times[0] = null;
         pools[0] = null;
         files.clear();
         check(plan.sources().get(0).inline()[0] == 42);
         check(plan.sources().get(1).extents()[0][2] == 1);
-        check(plan.roots().get(0).files().get("value").transforms()[0][0] == 10);
+        check(plan.roots().get(0).files().get("value").transforms().get(0).decodedLength() == 10);
         check(file.times()[0].equals(Instant.MAX) && file.permissions() == 0);
         check(plan.pools()[0] == immutable && plan.pools()[0].view(1).get() == 42);
         inline.inline()[0] = 0;
         extent.extents()[0][2] = 0;
-        file.transforms()[0][0] = 0;
+        try {
+            file.transforms().set(0, new ResourcePlan.ClassFileTransform(0, 1));
+            throw new AssertionError("Mutable resource transforms");
+        } catch (UnsupportedOperationException expected) {
+            check(file.transforms().get(0).dataPoolIndex() == 0);
+        }
         file.times()[0] = null;
         plan.pools()[0] = null;
         check(inline.inline()[0] == 42 && extent.extents()[0][2] == 1);
-        check(file.transforms()[0][0] == 10 && file.times()[0] != null);
+        check(file.transforms().get(0).decodedLength() == 10 && file.times()[0] != null);
         check(plan.pools()[0] == immutable && plan.pools()[0].view(1).get() == 42);
         try {
             plan.roots().clear();

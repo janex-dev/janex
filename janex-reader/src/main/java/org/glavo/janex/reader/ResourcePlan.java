@@ -155,21 +155,49 @@ public final class ResourcePlan {
         }
     }
 
+    /// An immutable CLASSFILE decoding step using a selected data pool.
+    public static final class ClassFileTransform {
+        /// Number of bytes produced by decoding this step.
+        private final int decodedLength;
+        /// Index of the data pool used by this step.
+        private final int dataPoolIndex;
+
+        /// Creates a decoding step from resolved resource metadata.
+        ///
+        /// @param decodedLength nonnegative decoded byte length
+        /// @param dataPoolIndex nonnegative index in the associated data-pool table
+        public ClassFileTransform(int decodedLength, int dataPoolIndex) {
+            this.decodedLength = decodedLength;
+            this.dataPoolIndex = dataPoolIndex;
+        }
+
+        /// Returns the decoded byte length.
+        public int decodedLength() {
+            return decodedLength;
+        }
+
+        /// Returns the index in the associated data-pool table.
+        public int dataPoolIndex() {
+            return dataPoolIndex;
+        }
+    }
+
     /// A logical resource and its decoded metadata.
     public static final class File {
         /// Source index, or -1 for a directory.
         private final int source;
-        /// CLASSFILE decoded length and data-pool index pairs.
-        private final int[][] transforms;
+        /// Immutable CLASSFILE steps in decoding order.
+        private final List<ClassFileTransform> transforms;
         /// Creation, modification, and access instants; absent values are null.
         private final Instant[] times;
         /// POSIX permission bits, or null when unspecified.
         private final Integer permissions;
 
         /// Retains validated preparation data without exposing mutable input arrays or collections.
-        File(int source, int[][] transforms, Instant[] times, Integer permissions) {
+        File(int source, ClassFileTransform[] transforms, Instant[] times, Integer permissions) {
             this.source = source;
-            this.transforms = copy(transforms);
+            this.transforms = transforms.length == 0 ? Collections.emptyList()
+                    : Collections.unmodifiableList(Arrays.asList(transforms.clone()));
             this.times = times == null ? null : times.clone();
             this.permissions = permissions;
         }
@@ -179,9 +207,9 @@ public final class ResourcePlan {
             return source;
         }
 
-        /// Returns cLASSFILE decoded length and data-pool index pairs.
-        public int[][] transforms() {
-            return copy(transforms);
+        /// Returns an immutable list of CLASSFILE steps in decoding order.
+        public List<ClassFileTransform> transforms() {
+            return transforms;
         }
 
         /// Returns an independent copy of creation, modification, and access instants, or null if no array was supplied.

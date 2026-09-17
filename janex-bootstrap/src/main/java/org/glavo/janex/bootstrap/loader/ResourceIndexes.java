@@ -76,11 +76,11 @@ public final class ResourceIndexes {
                 string(output, entry.getKey(), limits);
                 output.writeInt(file.source());
                 if (file.source() >= 0) {
-                    int[][] transforms = file.transforms();
-                    output.writeInt(transforms.length);
-                    for (int[] transform : transforms) {
-                        output.writeInt(transform[0]);
-                        output.writeInt(transform[1]);
+                    List<ResourcePlan.ClassFileTransform> transforms = file.transforms();
+                    output.writeInt(transforms.size());
+                    for (ResourcePlan.ClassFileTransform transform : transforms) {
+                        output.writeInt(transform.decodedLength());
+                        output.writeInt(transform.dataPoolIndex());
                     }
                 }
                 Instant[] times = file.times();

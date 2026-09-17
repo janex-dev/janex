@@ -376,8 +376,8 @@ public final class ResourceIndex implements Closeable {
     public final class Resource {
         /// Source ID, or -1 for a directory.
         final int id;
-        /// Reversed CLASSFILE transforms as output-size and pool-ID pairs.
-        final int[][] transforms;
+        /// Immutable CLASSFILE steps in decoding order.
+        final List<ResourcePlan.ClassFileTransform> transforms;
         /// Logical resource length, zero for directories.
         final int length;
         /// Nullable creation, modification, and access instants with nanosecond precision.
@@ -423,7 +423,7 @@ public final class ResourceIndex implements Closeable {
         Resource(ResourcePlan.File file) {
             id = file.source();
             transforms = file.transforms();
-            length = id == -1 ? 0 : transforms.length == 0 ? sources[id].length : transforms[transforms.length - 1][0];
+            length = id == -1 ? 0 : transforms.isEmpty() ? sources[id].length : transforms.get(transforms.size() - 1).decodedLength();
             Instant[] values = file.times();
             if (values != null) System.arraycopy(values, 0, times, 0, 3);
             permissions = file.permissions() == null ? -1 : file.permissions();
@@ -435,15 +435,18 @@ public final class ResourceIndex implements Closeable {
             if (id < -1 || id >= sources.length) {
                 throw new IOException("Invalid resource source ID");
             }
-            transforms = new int[id == -1 ? 0 : count(input)][2];
-            for (int[] transform : transforms) {
-                transform[0] = size(input);
-                transform[1] = nonnegative(input.readInt());
-                if (transform[1] >= pools.length) {
+            int transformCount = id == -1 ? 0 : count(input);
+            List<ResourcePlan.ClassFileTransform> steps = new ArrayList<>(transformCount);
+            for (int i = 0; i < transformCount; i++) {
+                int decodedLength = size(input);
+                int poolIndex = nonnegative(input.readInt());
+                if (poolIndex >= pools.length) {
                     throw new IOException("Invalid transform pool ID");
                 }
+                steps.add(new ResourcePlan.ClassFileTransform(decodedLength, poolIndex));
             }
-            length = id == -1 ? 0 : transforms.length == 0 ? sources[id].length : transforms[transforms.length - 1][0];
+            transforms = steps.isEmpty() ? Collections.emptyList() : Collections.unmodifiableList(steps);
+            length = id == -1 ? 0 : transforms.isEmpty() ? sources[id].length : transforms.get(transforms.size() - 1).decodedLength();
             int flags = input.readUnsignedByte();
             if ((flags & ~15) != 0) {
                 throw new IOException("Invalid resource metadata flags");
@@ -474,8 +477,8 @@ public final class ResourceIndex implements Closeable {
                 throw new IOException("Resource reader is closed");
             }
             byte[] bytes = id == -1 ? new byte[0] : source(id);
-            for (int[] transform : transforms) {
-                bytes = ClassFiles.restore(bytes, pools[transform[1]], transform[0],
+            for (ResourcePlan.ClassFileTransform transform : transforms) {
+                bytes = ClassFiles.restore(bytes, pools[transform.dataPoolIndex()], transform.decodedLength(),
                         new ReadLimits(maxBytes, maxElements, ReadLimits.DEFAULT.maxDepth()));
             }
             return bytes;

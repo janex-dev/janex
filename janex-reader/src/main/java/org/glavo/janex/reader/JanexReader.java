@@ -650,8 +650,8 @@ public final class JanexReader implements Closeable {
     private static final class Node {
         /// Source ID, or -1 for a directory, -2 for a link, and -3 for a tombstone.
         int source = -1;
-        /// Reversed transform output-size and data-pool pairs.
-        int[][] transforms = new int[0][2];
+        /// CLASSFILE steps in decoding order; pool references are resolved during materialization.
+        ResourcePlan.ClassFileTransform[] transforms = new ResourcePlan.ClassFileTransform[0];
         /// Relative symbolic-link target, when present.
         String target;
         /// Exact resource metadata.
@@ -678,20 +678,19 @@ public final class JanexReader implements Closeable {
         } else {
             node.reference = new long[]{input.uint(), input.uint()};
         }
-        node.transforms = new int[limits.elements(input.uint())][2];
+        node.transforms = new ResourcePlan.ClassFileTransform[limits.elements(input.uint())];
         node.transformPools = new long[node.transforms.length][];
         require(!directory || node.transforms.length == 0, "Directory content cannot have transforms");
         for (int i = node.transforms.length - 1; i >= 0; i--) {
-            node.transforms[i][0] = limits.bytes(input.uint());
+            int decodedLength = limits.bytes(input.uint());
             require(input.u8() == 1, "Unsupported content transform");
             Map<Object, Object> properties = integers(input.map());
             if (has(properties, 0)) {
                 List<Object> ref = list(get(properties, 0));
                 require(ref.size() == 2, "Invalid transform pool reference");
                 node.transformPools[i] = new long[]{number(ref.get(0)), number(ref.get(1))};
-            } else {
-                node.transforms[i][1] = pool;
             }
+            node.transforms[i] = new ResourcePlan.ClassFileTransform(decodedLength, pool);
         }
         if (directory) {
             materialize(node);
@@ -706,7 +705,8 @@ public final class JanexReader implements Closeable {
             for (int i = 0; i < node.transforms.length; i++) {
                 long[] reference = node.transformPools[i];
                 if (reference != null) {
-                    node.transforms[i][1] = dataPool(reference[0], reference[1]);
+                    node.transforms[i] = new ResourcePlan.ClassFileTransform(
+                            node.transforms[i].decodedLength(), dataPool(reference[0], reference[1]));
                 }
             }
             node.pending = false;
@@ -1055,7 +1055,7 @@ public final class JanexReader implements Closeable {
             limits.elements(output.size());
         }
         if (node.source >= 0) {
-            logicalBytes += node.transforms.length == 0 ? sources.get(node.source).length : node.transforms[node.transforms.length - 1][0];
+            logicalBytes += node.transforms.length == 0 ? sources.get(node.source).length : node.transforms[node.transforms.length - 1].decodedLength();
             require(logicalBytes <= logicalLimit, "Logical resource byte limit exceeded");
             return;
         }
@@ -1264,8 +1264,8 @@ public final class JanexReader implements Closeable {
             for (Node node : root.files.values()) {
                 if (node.source >= 0) {
                     collectSource(node.source, usedSources);
-                    for (int[] transform : node.transforms) {
-                        usedPools.add(transform[1]);
+                    for (ResourcePlan.ClassFileTransform transform : node.transforms) {
+                        usedPools.add(transform.dataPoolIndex());
                     }
                 }
             }
@@ -1304,10 +1304,12 @@ public final class JanexReader implements Closeable {
             Map<String, ResourcePlan.File> files = new LinkedHashMap<String, ResourcePlan.File>();
             for (Map.Entry<String, Node> entry : root.files.entrySet()) {
                 Node node = entry.getValue();
-                int[][] transforms = new int[node.transforms.length][2];
+                ResourcePlan.ClassFileTransform[] transforms = new ResourcePlan.ClassFileTransform[node.transforms.length];
                 for (int i = 0; i < transforms.length; i++) {
-                    transforms[i][0] = node.transforms[i][0];
-                    transforms[i][1] = poolIds.get(node.transforms[i][1]);
+                    ResourcePlan.ClassFileTransform transform = node.transforms[i];
+                    int poolIndex = poolIds.get(transform.dataPoolIndex());
+                    transforms[i] = poolIndex == transform.dataPoolIndex() ? transform
+                            : new ResourcePlan.ClassFileTransform(transform.decodedLength(), poolIndex);
                 }
                 Instant[] times = new Instant[3];
                 for (int i = 0; i < times.length; i++) {
