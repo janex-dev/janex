@@ -58,10 +58,12 @@ fn export_preserves_live_state_and_records_an_explicit_policy() {
     {
         let bytes = fs::read(root.join("assets/janex.reg")).unwrap();
         assert_eq!(&bytes[..2], &[0xff, 0xfe]);
+        let (units, remainder) = bytes[2..].as_chunks::<2>();
+        assert!(remainder.is_empty(), "incomplete UTF-16 code unit");
         let text = String::from_utf16(
-            &bytes[2..]
-                .chunks_exact(2)
-                .map(|s| u16::from_le_bytes([s[0], s[1]]))
+            &units
+                .iter()
+                .map(|s| u16::from_le_bytes(*s))
                 .collect::<Vec<_>>(),
         )
         .unwrap();
@@ -82,13 +84,25 @@ fn export_preserves_live_state_and_records_an_explicit_policy() {
     }
     #[cfg(target_os = "macos")]
     {
+        let bundle = root.join("assets/Janex.app");
+        let executable = Command::new("/usr/bin/plutil")
+            .args(["-extract", "CFBundleExecutable", "raw", "-o", "-"])
+            .arg(bundle.join("Contents/Info.plist"))
+            .output()
+            .unwrap();
+        success(&executable);
+        let executable = String::from_utf8(executable.stdout).unwrap();
         assert!(
-            root.join("assets/Janex.app/Contents/MacOS/applet")
-                .is_file()
+            bundle
+                .join("Contents/MacOS")
+                .join(executable.trim())
+                .is_file(),
+            "missing bundle executable: {}",
+            executable.trim()
         );
         let checked = Command::new("/usr/bin/codesign")
             .args(["--verify", "--deep", "--strict"])
-            .arg(root.join("assets/Janex.app"))
+            .arg(bundle)
             .output()
             .unwrap();
         success(&checked);

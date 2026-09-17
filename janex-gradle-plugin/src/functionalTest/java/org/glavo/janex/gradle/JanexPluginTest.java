@@ -166,10 +166,10 @@ public final class JanexPluginTest {
         Path output = project.resolve("build/distributions/fixture.janex");
         try (JanexReader reader = new JanexReader(output)) {
             var plan = reader.launch("main").resources;
-            require(plan.roots().get(0).files().get("demo/Shared0.class").transforms().length == 1,
+            require(plan.roots().get(0).files().get("demo/Shared0.class").transforms().size() == 1,
                     "Interoperability fixture did not select CLASSFILE transforms");
             require(plan.pools().length == 2
-                    && plan.roots().get(1).files().get("dependency/Shared0.class").transforms().length == 1,
+                    && plan.roots().get(1).files().get("dependency/Shared0.class").transforms().size() == 1,
                     "Interoperability fixture did not retain independent root data pools");
         }
         require(run(List.of(executable.toString(), "run", "--allow-unsigned", "--java", javaExecutable(), output.toString()))
