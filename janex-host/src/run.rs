@@ -510,7 +510,7 @@ impl Paths<'_> {
         let tree = root.merge(self.context, self.blobs.reader().limits())?;
         let result = materialize_tree(
             &tree,
-            root.jar_name()?,
+            &crate::adapters::jar_name(root)?,
             self.blobs,
             &directory,
             self.remaining_bytes,

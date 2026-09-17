@@ -165,7 +165,7 @@ public final class ResourcePlan {
 
     /// A classpath or module-path root with immutable file descriptors.
     public static final class Root {
-        /// Original JAR filename.
+        /// JAR filename used for this Java path entry.
         private final String name;
         /// Whether this root belongs to the module path.
         private final boolean module;
@@ -179,7 +179,7 @@ public final class ResourcePlan {
             this.files = files;
         }
 
-        /// Returns original JAR filename.
+        /// Returns the JAR filename used for this Java path entry.
         public String name() {
             return name;
         }

@@ -31,6 +31,7 @@ public final class ResourcesTest {
                 Files.write(snapshot, bytes(input));
                 boolean valid = input.readBoolean();
                 String diagnostic = new String(bytes(input), StandardCharsets.UTF_8);
+                String expectedName = valid ? new String(bytes(input), StandardCharsets.UTF_8) : null;
                 Map<String, byte[]> expected = new LinkedHashMap<String, byte[]>();
                 Map<String, List<Object>> expectedMetadata = new LinkedHashMap<String, List<Object>>();
                 if (valid) {
@@ -63,6 +64,9 @@ public final class ResourcesTest {
                     return output;
                 }, null, null, limits)) {
                     JanexReader.Launch launch = reader.launch("main");
+                    if (valid && !launch.resources.roots().get(0).name().equals(expectedName)) {
+                        throw new AssertionError("Resource root name differs at vector " + vector);
+                    }
                     try (ResourceIndex direct = new ResourceIndex(launch.resources)) {
                         Map<String, ResourceIndex.Resource> files = direct.roots.get(0).files;
                         if (valid && !new ArrayList<String>(files.keySet()).equals(new ArrayList<String>(expected.keySet()))) {

@@ -114,7 +114,7 @@ final class BlobPool {
             Encoding resource = new Encoding();
             resource.uint(id);
             resource.uint(0);
-            resource.map(Map.of("janex.java.jar_name", resources.name));
+            resource.map(Map.of(0, resources.name));
             resource.writeBytes(layers.toByteArray());
             root = append(resource.toByteArray());
         }

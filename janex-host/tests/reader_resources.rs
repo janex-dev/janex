@@ -159,10 +159,11 @@ fn stored_pool(blobs: &[Vec<u8>]) -> BuiltPool {
     BuiltPool { bytes, type_info }
 }
 
-/// Encodes a container while leaving resource validation to each implementation.
-fn package(layers: &[Layer]) -> Vec<u8> {
+/// Encodes caller-supplied root metadata without enforcing its constraints.
+fn package_with_metadata(layers: &[Layer], metadata: &Value) -> Vec<u8> {
     let mut strings = DataPoolBuilder::new();
-    let mut root = vec![0, 0, 0]; // Data-pool reference and empty root metadata.
+    let mut root = vec![0, 0]; // Data-pool reference.
+    cbor::write_sized(&mut root, metadata).unwrap();
     binary::write_vuint(&mut root, layers.len() as u64).unwrap();
     for layer in layers {
         let condition = if layer.active {
@@ -309,6 +310,11 @@ fn bytes(output: &mut Vec<u8>, value: &[u8]) {
 
 /// Records native acceptance and every expanded file or directory.
 fn vector(output: &mut Vec<u8>, layers: &[Layer], limits: Limits) {
+    vector_with_metadata(output, layers, limits, &Value::empty_map());
+}
+
+/// Records root-name interpretation alongside the native resource-tree oracle.
+fn vector_with_metadata(output: &mut Vec<u8>, layers: &[Layer], limits: Limits, metadata: &Value) {
     let count = u32::from_be_bytes(output[..4].try_into().unwrap());
     output[..4].copy_from_slice(&(count + 1).to_be_bytes());
     for number in [
@@ -318,13 +324,19 @@ fn vector(output: &mut Vec<u8>, layers: &[Layer], limits: Limits) {
     ] {
         output.extend((number as u32).to_be_bytes());
     }
-    let encoded = package(layers);
+    let encoded = package_with_metadata(layers, metadata);
     bytes(output, &encoded);
-    let parsed: Result<Files> = (|| {
+    let parsed: Result<(String, Files)> = (|| {
         let reader = Reader::open_auto(Cursor::new(encoded.as_slice()), limits)?;
         let mut blobs = BlobStore::new(reader);
         let raw = blobs.resolve(BlobRef { pool: 0, index: 1 })?;
         let root = ResourceRoot::decode(&raw, &mut blobs)?;
+        let name = root.name()?.unwrap_or("resources.jar");
+        let jar_name = if name.ends_with(".jar") {
+            name.to_owned()
+        } else {
+            format!("{name}.jar")
+        };
         let context = Context {
             os: "windows".into(),
             arch: "x86-64".into(),
@@ -342,7 +354,7 @@ fn vector(output: &mut Vec<u8>, layers: &[Layer], limits: Limits) {
             &mut files,
             limits,
         )?;
-        Ok(files)
+        Ok((jar_name, files))
     })();
     output.push(u8::from(parsed.is_ok()));
     bytes(
@@ -354,7 +366,8 @@ fn vector(output: &mut Vec<u8>, layers: &[Layer], limits: Limits) {
             .unwrap_or_default()
             .as_bytes(),
     );
-    if let Ok(files) = parsed {
+    if let Ok((jar_name, files)) = parsed {
+        bytes(output, jar_name.as_bytes());
         output.extend((files.len() as u32).to_be_bytes());
         for (name, content, metadata) in files {
             bytes(output, name.as_bytes());
@@ -407,6 +420,50 @@ fn java_resource_layers_and_aliases_match_native_resolution() {
         );
     }
     let limits = Limits::default();
+    for name in [
+        "assets",
+        "assets.zip",
+        "library-1.2.jar",
+        "\u{1f600}",
+        "",
+        ".",
+        "..",
+        "a/b",
+        "a\\b",
+        "a\0",
+    ] {
+        vector_with_metadata(
+            &mut vectors,
+            &[layer(vec![directory(
+                "",
+                vec![file(Name::Inline("value".into()), b"content")],
+            )])],
+            limits,
+            &Value::map([(Value::uint(0), Value::text(name))]).unwrap(),
+        );
+    }
+    vector_with_metadata(
+        &mut vectors,
+        &[],
+        limits,
+        &Value::map([(Value::uint(0), Value::uint(1))]).unwrap(),
+    );
+    for key in [
+        Value::uint(1),
+        Value::uint(u64::MAX),
+        Value::text("org.example.label"),
+        Value::text(""),
+        Value::integer(-1),
+        Value::boolean(true),
+        Value::bytes(b"key"),
+    ] {
+        vector_with_metadata(
+            &mut vectors,
+            &[],
+            limits,
+            &Value::map([(key, Value::null())]).unwrap(),
+        );
+    }
     vector(
         &mut vectors,
         &[layer(vec![

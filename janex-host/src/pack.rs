@@ -569,10 +569,7 @@ fn build_pool(
         data_pool,
         data: strings.finish(),
         layers,
-        metadata: Value::map([(
-            Value::text("janex.java.jar_name"),
-            Value::text(&input.jar_name),
-        )])?,
+        metadata: Value::map([(Value::uint(0), Value::text(&input.jar_name))])?,
     };
     let root_bytes = root.encode(options.import.limits)?;
     let strings = root.data.encode()?;

@@ -57,11 +57,7 @@ fn root(directories: Vec<(&str, Vec<DirectoryEntry>)>) -> ResourceRoot {
     ResourceRoot {
         data_pool: BlobRef { pool: 1, index: 0 },
         data: DataPool::new(),
-        metadata: Value::map([(
-            Value::text("janex.java.jar_name"),
-            Value::text("original-name.jar"),
-        )])
-        .unwrap(),
+        metadata: Value::map([(Value::uint(0), Value::text("original-name.jar"))]).unwrap(),
         layers: vec![Layer {
             condition: Condition::unconditional(),
             directories,
@@ -84,6 +80,40 @@ fn link(name: &str, target: &str) -> DirectoryEntry {
         name: name.into(),
         target: target.into(),
         metadata: Value::empty_map(),
+    }
+}
+
+#[test]
+fn resource_names_determine_java_export_filenames() {
+    let limits = Limits::default();
+    for (name, expected) in [
+        (None, "resources.jar"),
+        (Some("assets"), "assets.jar"),
+        (Some("assets.zip"), "assets.zip.jar"),
+        (Some("library-1.2.jar"), "library-1.2.jar"),
+    ] {
+        let mut root = root(vec![("", vec![file("value", b"content")])]);
+        root.metadata = match name {
+            Some(name) => Value::map([(Value::uint(0), Value::text(name))]).unwrap(),
+            None => Value::empty_map(),
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let result = materialize(
+            &root,
+            &context(),
+            &mut blobs(limits),
+            temp.path(),
+            limits.max_bytes,
+        )
+        .unwrap();
+        assert_eq!(result.path.file_name().unwrap(), expected);
+        let mut jar = zip::ZipArchive::new(fs::File::open(result.path).unwrap()).unwrap();
+        let mut bytes = Vec::new();
+        jar.by_name("value")
+            .unwrap()
+            .read_to_end(&mut bytes)
+            .unwrap();
+        assert_eq!(bytes, b"content");
     }
 }
 

@@ -324,7 +324,7 @@ public final class ResourceIndex implements Closeable {
 
     /// A single logical classpath or module root, preserving its original resource names.
     public final class Root {
-        /// Original JAR filename used in resource and code-source URLs.
+        /// JAR filename used in resource and code-source URLs.
         final String name;
         /// Whether this root belongs to the module path rather than the classpath.
         final boolean module;
@@ -356,7 +356,7 @@ public final class ResourceIndex implements Closeable {
             }
         }
 
-        /// Returns the original JAR filename.
+        /// Returns the JAR filename used for this Java path entry.
         public String name() {
             return name;
         }

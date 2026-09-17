@@ -191,10 +191,7 @@ fn root_round_trip_shares_names_and_retains_metadata() {
     data.intern("Object");
     root.data = data.finish();
     root.metadata = Value::map([
-        (
-            Value::text("janex.java.jar_name"),
-            Value::text("original-name.jar"),
-        ),
+        (Value::uint(0), Value::text("original-name.jar")),
         (Value::text("extension"), Value::null()),
     ])
     .unwrap();
@@ -204,7 +201,7 @@ fn root_round_trip_shares_names_and_retains_metadata() {
     let mut decoded = ResourceRoot::decode(&encoded, &mut blobs).unwrap();
     assert_eq!(decoded.encode(Limits::default()).unwrap(), encoded);
     assert_eq!(decoded.metadata, root.metadata);
-    assert_eq!(decoded.jar_name().unwrap(), "original-name.jar");
+    assert_eq!(decoded.name().unwrap(), Some("original-name.jar"));
     let tree = decoded.merge(&context(), Limits::default()).unwrap();
     assert_eq!(
         tree.read_file("java/lang/Object.class", &mut blobs)
@@ -457,11 +454,40 @@ fn resource_metadata_is_checked_for_each_node_kind() {
             .merge(&context(), Limits::default())
             .is_err()
     );
-    for name in ["../app.jar", "dir\\app.jar", "app.jar\0", "app.zip"] {
+    for name in ["", ".", "..", "../app.jar", "dir\\app.jar", "app.jar\0"] {
         let mut root = root(vec![]);
-        root.metadata =
-            Value::map([(Value::text("janex.java.jar_name"), Value::text(name))]).unwrap();
+        root.metadata = Value::map([(Value::uint(0), Value::text(name))]).unwrap();
         assert!(root.encode(Limits::default()).is_err(), "{name}");
+    }
+}
+
+#[test]
+fn resource_root_names_are_optional_and_independent_of_file_type() {
+    let mut root = root(vec![]);
+    assert_eq!(root.name().unwrap(), None);
+    for name in ["assets", "app.zip", "library-1.2.jar", "\u{1f600}"] {
+        root.metadata = Value::map([
+            (Value::uint(0), Value::text(name)),
+            (Value::uint(u64::MAX), Value::null()),
+            (Value::text("org.example.label"), Value::uint(42)),
+        ])
+        .unwrap();
+        let encoded = root.encode(Limits::default()).unwrap();
+        let mut blobs = store(&[root.data.encode().unwrap()]);
+        let decoded = ResourceRoot::decode(&encoded, &mut blobs).unwrap();
+        assert_eq!(decoded.name().unwrap(), Some(name));
+        assert_eq!(decoded.metadata, root.metadata);
+    }
+    root.metadata = Value::map([(Value::uint(0), Value::uint(1))]).unwrap();
+    assert!(root.encode(Limits::default()).is_err());
+    for key in [
+        Value::text(""),
+        Value::integer(-1),
+        Value::boolean(true),
+        Value::bytes(b"key"),
+    ] {
+        root.metadata = Value::map([(key, Value::null())]).unwrap();
+        assert!(root.encode(Limits::default()).is_err());
     }
 }
 

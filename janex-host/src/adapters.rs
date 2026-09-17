@@ -7,9 +7,21 @@ use crate::Result;
 use janex_format::{
     binary::Limits,
     condition::{Context, RuntimeContext},
+    resource::ResourceRoot,
     version::JavaVersion,
 };
 use janex_java::runtime::JavaRuntime;
+use std::borrow::Cow;
+
+/// Derives the Java path filename from a root name, borrowing names that already end in `.jar`.
+pub(crate) fn jar_name(root: &ResourceRoot) -> Result<Cow<'_, str>> {
+    let name = root.name()?.unwrap_or("resources.jar");
+    Ok(if name.ends_with(".jar") {
+        Cow::Borrowed(name)
+    } else {
+        Cow::Owned(format!("{name}.jar"))
+    })
+}
 
 /// Converts parsing bounds without transferring ownership of format policy.
 pub(crate) fn java_limits(limits: Limits) -> janex_java::Limits {

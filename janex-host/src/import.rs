@@ -58,10 +58,7 @@ impl ImportedRoot {
         Ok(ResourceRoot {
             data_pool,
             data: DataPool::new(),
-            metadata: Value::map([(
-                Value::text("janex.java.jar_name"),
-                Value::text(&self.jar_name),
-            )])?,
+            metadata: Value::map([(Value::uint(0), Value::text(&self.jar_name))])?,
             layers: self.layers,
         })
     }

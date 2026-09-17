@@ -49,7 +49,7 @@ pub(crate) fn inventory(
                 })
                 .transpose()?;
             janex_java::modules::automatic(
-                root.jar_name()?,
+                &crate::adapters::jar_name(root)?,
                 manifest
                     .as_ref()
                     .and_then(|m| m.get("Automatic-Module-Name")),

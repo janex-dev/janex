@@ -151,7 +151,7 @@ fn resource(root: &ResourceRoot, blob: BlobRef) -> janex_format::Result<Json> {
             .push(json!({"condition": cbor(layer.condition.value())?, "directories": directories}));
     }
     Ok(json!({
-        "reference": reference(blob), "name": root.jar_name()?, "data_pool": reference(root.data_pool),
+        "reference": reference(blob), "name": root.name()?, "data_pool": reference(root.data_pool),
         "metadata": cbor(&root.metadata)?, "layers": layers,
     }))
 }

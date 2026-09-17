@@ -880,16 +880,19 @@ struct ResourceLayer {
 ```
 
 ```cddl
-ResourceRootMetadataObject = { * NonemptyText => any }
+ResourceRootMetadataObject = {
+    ? 0: NonemptyText,                          ; name
+    * NonemptyText => any,
+    * uint => any,
+}
 ```
 
 The metadata map may be empty. Readers must resolve `data_pool` before using references to it.
 Multiple resource roots may name the same data-pool blob.
 
-The optional text attribute `janex.java.jar_name` preserves the JAR filename used when materializing
-this root as a Java path entry, including filename-derived automatic module names. It must be a
-single filename ending in `.jar`, without `/`, `\`, or NUL. The default is `resources.jar`.
-Consumers materialize different roots in separate directories to avoid filename collisions.
+The optional `name` names the resource root and suggests a filename when exporting it. It must not
+contain `/`, `\`, or NUL, or equal `.` or `..`. Names need not be unique and do not affect resource
+lookup or root identity. The format defines no default name.
 
 ### Data Pools
 
@@ -1343,6 +1346,11 @@ content.
 
 Local resource roots use the selected runtime and the same host and invocation channel. Each merged
 tree forms one classpath or module-path entry. Multiple entries may share a resource-root blob.
+
+The JAR filename is the root's `name`, with `.jar` appended if that suffix is absent; an unnamed root
+uses `resources.jar`. This filename also determines filename-derived automatic module names.
+JAR importers preserve the original filename in `name`. Consumers materialize different roots in
+separate directories to avoid filename collisions.
 
 In a `JavaPathEntryObject`, a `janex` PURL must use the `java-module` requirement kind and is allowed
 only in `module_path`. Resolving it produces zero or more physical path entries at the same position.

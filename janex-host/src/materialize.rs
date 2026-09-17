@@ -3,7 +3,7 @@
 
 //! Materialization of merged resource trees as temporary Java path entries.
 
-use crate::adapters::java_limits;
+use crate::adapters::{jar_name, java_limits};
 use crate::{Result, error::invalid};
 use janex_format::{
     binary::Limits,
@@ -24,7 +24,7 @@ use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 /// A generated JAR and the amount of logical data written to it.
 #[derive(Debug)]
 pub struct MaterializedRoot {
-    /// Absolute path to the generated JAR, preserving the root's JAR filename.
+    /// Absolute path to the generated JAR, using the Java filename derived from the root name.
     pub path: PathBuf,
     /// Uncompressed bytes actually written, after runtime-manifest rewriting.
     pub logical_bytes: u64,
@@ -48,8 +48,8 @@ pub fn materialize<R: Read + Seek>(
 ) -> Result<MaterializedRoot> {
     let limits = blobs.reader().limits();
     let tree = root.merge(context, limits)?;
-    let name = root.jar_name()?;
-    materialize_tree(&tree, name, blobs, directory, max_bytes)
+    let name = jar_name(root)?;
+    materialize_tree(&tree, &name, blobs, directory, max_bytes)
 }
 
 /// Writes an already merged tree, preserving the caller's validation and selection work.

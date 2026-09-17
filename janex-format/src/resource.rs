@@ -137,7 +137,7 @@ pub struct ResourceRoot {
     pub data_pool: BlobRef,
     /// Resolved pool used by names and CLASSFILE transforms without an override.
     pub data: DataPool,
-    /// Text-keyed root metadata, retaining extensions.
+    /// Integer-keyed root fields and text attributes, retaining extensions.
     pub metadata: Value,
     /// Layers in application order.
     pub layers: Vec<Layer>,
@@ -279,8 +279,8 @@ impl ResourceRoot {
         Ok(bytes)
     }
 
-    /// Returns the preserved JAR filename, or `resources.jar` when absent.
-    pub fn jar_name(&self) -> Result<&str> {
+    /// Returns the optional resource-root name, borrowed from its metadata.
+    pub fn name(&self) -> Result<Option<&str>> {
         // Borrow the text directly from the original map to avoid returning a copied value.
         let mut decoder = minicbor::Decoder::new(self.metadata.as_bytes());
         let count = decoder
@@ -288,21 +288,29 @@ impl ResourceRoot {
             .map_err(|_| invalid("root metadata must be a map"))?
             .ok_or_else(|| invalid("indefinite metadata map"))?;
         for _ in 0..count {
-            let key = decoder
-                .str()
-                .map_err(|_| invalid("root metadata key must be text"))?;
-            if key == "janex.java.jar_name" {
+            let start = decoder.position();
+            let is_name = match decoder.u64() {
+                Ok(key) => key == 0,
+                Err(_) => {
+                    decoder.set_position(start);
+                    decoder
+                        .skip()
+                        .map_err(|_| invalid("invalid root metadata key"))?;
+                    false
+                }
+            };
+            if is_name {
                 let name = decoder
                     .str()
-                    .map_err(|_| invalid("JAR filename must be text"))?;
-                validate_jar_name(name)?;
-                return Ok(name);
+                    .map_err(|_| invalid("resource-root name must be text"))?;
+                validate_root_name(name)?;
+                return Ok(Some(name));
             }
             decoder
                 .skip()
                 .map_err(|_| invalid("invalid root metadata value"))?;
         }
-        Ok("resources.jar")
+        Ok(None)
     }
 
     /// Validates and merges matching layers into a borrowed resource-tree snapshot.
@@ -368,9 +376,19 @@ impl ResourceRoot {
     /// Checks structure independently of condition matching or file-content access.
     fn validate(&self, limits: Limits) -> Result<()> {
         for (key, _) in self.metadata.as_map()? {
-            nonempty(&key)?;
+            match key.as_bytes()[0] >> 5 {
+                0 => {}
+                3 => {
+                    nonempty(&key)?;
+                }
+                _ => {
+                    return Err(invalid(
+                        "root metadata keys must be unsigned integers or nonempty text",
+                    ));
+                }
+            }
         }
-        self.jar_name()?;
+        self.name()?;
         limits.elements(self.layers.len() as u64)?;
         for layer in &self.layers {
             limits.elements(layer.directories.len() as u64)?;
@@ -641,10 +659,10 @@ fn joined(parent: &str, name: &str) -> String {
     }
 }
 
-/// Checks the format's portable JAR filename attribute.
-fn validate_jar_name(name: &str) -> Result<()> {
-    if !name.ends_with(".jar") || name.contains(['/', '\\', '\0']) {
-        return Err(invalid("invalid resource-root JAR filename"));
+/// Checks a nonempty resource-root name without imposing a filename extension.
+fn validate_root_name(name: &str) -> Result<()> {
+    if name.is_empty() || matches!(name, "." | "..") || name.contains(['/', '\\', '\0']) {
+        return Err(invalid("invalid resource-root name"));
     }
     Ok(())
 }

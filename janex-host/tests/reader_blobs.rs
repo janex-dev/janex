@@ -215,6 +215,7 @@ fn vector(output: &mut Vec<u8>, encoded: &[u8], root_index: u64, select: bool, l
             .as_bytes(),
     );
     if let Ok(content) = result {
+        bytes(output, b"resources.jar");
         output.extend(u32::from(content.is_some()).to_be_bytes());
         if let Some(content) = content {
             bytes(output, b"file");

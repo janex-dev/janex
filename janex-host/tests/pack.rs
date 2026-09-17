@@ -296,8 +296,8 @@ fn jar_and_module_descriptor_entry_points_are_inferred() {
         Some("sample.Main")
     );
     assert_eq!(
-        root(&launch.class_path[0], &mut blobs).jar_name().unwrap(),
-        "original-name.jar"
+        root(&launch.class_path[0], &mut blobs).name().unwrap(),
+        Some("original-name.jar")
     );
     options.output = temp.path().join("module.janex");
     options.main_module = Some("sample.app".into());

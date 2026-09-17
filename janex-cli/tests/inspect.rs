@@ -43,11 +43,7 @@ fn fixture(signed: bool, missing_root: bool) -> Vec<u8> {
             index: 0,
         },
         data: DataPool::new(),
-        metadata: Value::map([(
-            Value::text("janex.java.jar_name"),
-            Value::text("sample.jar"),
-        )])
-        .unwrap(),
+        metadata: Value::map([(Value::uint(0), Value::text("sample.zip"))]).unwrap(),
         layers: vec![
             Layer {
                 condition: Condition::unconditional(),
@@ -237,6 +233,7 @@ fn reports_unmerged_layers_exact_ids_ranges_and_all_blobs() {
     assert_eq!(pool["entries"][2]["offset"], (22 + offset).to_string());
     let roots = report["resource_roots"].as_array().unwrap();
     assert_eq!(roots.len(), 1);
+    assert_eq!(roots[0]["name"], "sample.zip");
     assert_eq!(roots[0]["layers"].as_array().unwrap().len(), 2);
     assert_eq!(
         roots[0]["layers"][1]["directories"][0]["entries"][0]["kind"],

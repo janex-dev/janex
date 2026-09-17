@@ -47,9 +47,9 @@ Update [FileFormat.md](docs/spec/FileFormat.md) before implementing the affected
 - Skip an overlay's entire subtree when its condition does not match.
 - Continue ignoring malformed language tags in `LocalizedText`, but require at least one well-formed
   tag and reject tags that are duplicates under case-insensitive comparison.
-- Define the optional resource-root text attribute `janex.java.jar_name` to retain the original JAR
-  filename for Java path materialization. It must be a single filename. Materialize each resource
-  root in a separate directory to avoid filename collisions. Use `resources.jar` when absent.
+- Define the optional resource-root `name` at integer metadata key `0` as a suggested export filename.
+  Java consumers append a missing `.jar` suffix and use `resources.jar` for unnamed roots. JAR importers
+  retain the original filename. Materialize each root in a separate directory to avoid collisions.
 
 Use five Rust crates and two Java projects:
 

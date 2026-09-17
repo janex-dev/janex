@@ -808,11 +808,14 @@ public final class JanexReader implements Closeable {
         int pool = dataPool(input.uint(), input.uint());
         Map<Object, Object> metadata = input.map();
         for (Object key : metadata.keySet()) {
-            Conditions.nonempty(key);
+            if (key instanceof String) Conditions.nonempty(key);
+            else number(key);
         }
-        String jarName = metadata.containsKey("janex.java.jar_name") ? text(metadata.get("janex.java.jar_name")) : "resources.jar";
-        require(jarName.endsWith(".jar") && jarName.indexOf('/') < 0 && jarName.indexOf('\\') < 0 && jarName.indexOf(0) < 0,
-                "Invalid root JAR filename");
+        String rootName = has(metadata, 0) ? text(get(metadata, 0)) : "resources.jar";
+        require(!rootName.isEmpty() && !rootName.equals(".") && !rootName.equals("..")
+                && rootName.indexOf('/') < 0 && rootName.indexOf('\\') < 0 && rootName.indexOf(0) < 0,
+                "Invalid resource-root name");
+        String jarName = rootName.endsWith(".jar") ? rootName : rootName + ".jar";
         Map<String, Node> tree = new TreeMap<String, Node>(JanexReader::comparePaths);
         tree.put("", new Node());
         int layers = limits.elements(input.uint());
@@ -1137,7 +1140,7 @@ public final class JanexReader implements Closeable {
 
     /// One selected application or agent resource root.
     private static final class Root {
-        /// Original JAR filename.
+        /// JAR filename derived from the root name or preserved during JAR import.
         final String name;
         /// Whether this root belongs to the module path.
         final boolean module;

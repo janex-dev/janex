@@ -279,9 +279,10 @@ public final class WriterTest {
                     "Wrong decoded resource length");
             bytes = decoded;
         }
-        int[][] transforms = file.transforms();
-        for (int i = transforms.length - 1; i >= 0; i--) {
-            bytes = ClassFile.restore(bytes, plan.pools()[transforms[i][1]], transforms[i][0], plan.limits());
+        List<ResourcePlan.ClassFileTransform> transforms = file.transforms();
+        for (int i = transforms.size() - 1; i >= 0; i--) {
+            ResourcePlan.ClassFileTransform transform = transforms.get(i);
+            bytes = ClassFile.restore(bytes, plan.pools()[transform.dataPoolIndex()], transform.decodedLength(), plan.limits());
         }
         return bytes;
     }
@@ -370,7 +371,7 @@ public final class WriterTest {
                         for (Path file : paths.filter(Files::isRegularFile).toList()) {
                             String name = classes.relativize(file).toString().replace('\\', '/');
                             require(Arrays.equals(Files.readAllBytes(file), content(plan, name)), "Class resource changed: " + name);
-                            any |= plan.roots().get(0).files().get(name).transforms().length != 0;
+                            any |= !plan.roots().get(0).files().get(name).transforms().isEmpty();
                         }
                     }
                     require(any == enabled, "CLASSFILE switch was not exercised");
@@ -455,7 +456,7 @@ public final class WriterTest {
                 for (int part = 0; part < jars.size(); part++) {
                     String name = jars.get(part).getFileName().toString();
                     var selected = plan.roots().stream().filter(value -> value.name().equals(name)).findFirst().orElseThrow();
-                    int poolId = selected.files().get("shared/Example" + part * 20 + ".class").transforms()[0][1];
+                    int poolId = selected.files().get("shared/Example" + part * 20 + ".class").transforms().get(0).dataPoolIndex();
                     require(poolIds.add(poolId), "Distinct roots reused a data pool");
                     DataPool strings = plan.pools()[poolId];
                     Set<java.nio.ByteBuffer> unique = new HashSet<>();
@@ -475,8 +476,8 @@ public final class WriterTest {
                         String path = "shared/Example" + index + ".class";
                         require(Arrays.equals(Files.readAllBytes(root.resolve("classes").resolve(path)), content(plan, selected, path)),
                                 "Cross-root CLASSFILE bytes changed: " + path);
-                        int[][] transforms = selected.files().get(path).transforms();
-                        require(transforms.length == 1 && transforms[0][1] == poolId, "Class did not use its root pool");
+                        List<ResourcePlan.ClassFileTransform> transforms = selected.files().get(path).transforms();
+                        require(transforms.size() == 1 && transforms.get(0).dataPoolIndex() == poolId, "Class did not use its root pool");
                     }
                 }
             }
@@ -489,7 +490,7 @@ public final class WriterTest {
             JanexWriter.write(options);
             try (JanexReader reader = new JanexReader(options.output)) {
                 for (var selected : reader.launch("main").resources.roots()) {
-                    require(selected.files().values().stream().allMatch(file -> file.transforms().length == 0),
+                    require(selected.files().values().stream().allMatch(file -> file.transforms().isEmpty()),
                             "Root data pooling ignored disabled CLASSFILE transforms");
                 }
             }
