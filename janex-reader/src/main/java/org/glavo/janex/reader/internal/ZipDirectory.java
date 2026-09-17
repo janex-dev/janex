@@ -202,7 +202,10 @@ public final class ZipDirectory {
         int extraLength = (int) integer(header, 28, 2);
         check(nameLength + extraLength <= start - position - 30, "ZIP local fields exceed data region");
         byte[] variable = reader.read(position + 30, nameLength + extraLength);
-        check(Arrays.equals(name, Arrays.copyOf(variable, nameLength)), "ZIP local and central names disagree");
+        check(name.length == nameLength, "ZIP local and central names disagree");
+        for (int i = 0; i < nameLength; i++) {
+            check(name[i] == variable[i], "ZIP local and central names disagree");
+        }
         long data = position + 30 + nameLength + extraLength;
         check(stored >= 0 && stored <= start - data, "ZIP payload outside data region");
         long dataEnd = data + stored;

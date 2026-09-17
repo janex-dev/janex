@@ -27,12 +27,13 @@ public final class ResourcePlan {
     /// Resource roots in lookup order.
     private final List<Root> roots;
 
-    /// Retains validated preparation data without exposing mutable input arrays or collections.
+    /// Takes ownership of the pool array and snapshots the supplied collections.
+    /// The caller must not modify the pool array after this call.
     ResourcePlan(Path snapshot, ReadLimits limits, List<Source> sources, DataPool[] pools, Map<String, String> requirements, List<Root> roots) {
         this.snapshot = snapshot;
         this.limits = limits;
         this.sources = Collections.unmodifiableList(new ArrayList<>(sources));
-        this.pools = pools.clone();
+        this.pools = pools;
         this.requirements = Collections.unmodifiableMap(new LinkedHashMap<>(requirements));
         this.roots = Collections.unmodifiableList(new ArrayList<>(roots));
     }
@@ -118,15 +119,16 @@ public final class ResourcePlan {
         /// Immutable decoded source ranges in assembly order; empty for other source kinds.
         private final List<Extent> extents;
 
-        /// Retains validated source data and an optional immutable external JAR descriptor.
+        /// Copies inline bytes and takes ownership of the filter and extent arrays.
+        /// The caller must not modify either array after this call.
         Source(byte[] inline, long offset, int storedLength, int[] filters, Extent[] extents, JarSource jar) {
             this.inline = inline == null ? null : inline.clone();
             this.jar = jar;
             this.offset = offset;
             this.storedLength = storedLength;
-            this.filters = filters == null ? null : filters.clone();
+            this.filters = filters;
             this.extents = extents.length == 0 ? Collections.emptyList()
-                    : Collections.unmodifiableList(Arrays.asList(extents.clone()));
+                    : Collections.unmodifiableList(Arrays.asList(extents));
         }
 
         /// Returns inline content, or null for other source kinds.
@@ -234,12 +236,13 @@ public final class ResourcePlan {
         /// POSIX permission bits, or null when unspecified.
         private final Integer permissions;
 
-        /// Retains validated preparation data without exposing mutable input arrays or collections.
+        /// Takes ownership of the transform array and retains immutable metadata.
+        /// The caller must not modify the array after this call.
         File(int source, ClassFileTransform[] transforms, Instant creationTime,
                 Instant lastModifiedTime, Instant lastAccessTime, Integer permissions) {
             this.source = source;
             this.transforms = transforms.length == 0 ? Collections.emptyList()
-                    : Collections.unmodifiableList(Arrays.asList(transforms.clone()));
+                    : Collections.unmodifiableList(Arrays.asList(transforms));
             this.creationTime = creationTime;
             this.lastModifiedTime = lastModifiedTime;
             this.lastAccessTime = lastAccessTime;

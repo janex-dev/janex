@@ -254,7 +254,7 @@ public final class ReaderTest {
         check(empty.size() == 1 && empty.byteLength(0) == 0);
     }
 
-    /// Checks that selected-resource descriptions do not expose mutable preparation state.
+    /// Checks that public resource accessors do not expose owned mutable storage.
     private static void resourcePlan() throws IOException {
         byte[] bytes = {42};
         ResourcePlan.Extent[] extents = {new ResourcePlan.Extent(0, 0, 1)};
@@ -270,9 +270,6 @@ public final class ReaderTest {
         ResourcePlan plan = new ResourcePlan(java.nio.file.Paths.get("snapshot.janex"), ReadLimits.DEFAULT,
                 Arrays.asList(inline, extent), pools, java.util.Collections.emptyMap(), Arrays.asList(root));
         bytes[0] = 0;
-        extents[0] = new ResourcePlan.Extent(1, 1, 1);
-        transforms[0] = new ResourcePlan.ClassFileTransform(0, 1);
-        pools[0] = null;
         files.clear();
         check(plan.sources().get(0).inline()[0] == 42);
         check(plan.sources().get(1).extents().get(0).length() == 1);
