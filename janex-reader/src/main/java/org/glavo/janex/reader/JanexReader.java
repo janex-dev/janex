@@ -725,11 +725,18 @@ public final class JanexReader implements Closeable {
         if (path.isEmpty()) {
             return;
         }
-        String[] parts = path.split("/", -1);
-        limits.elements(parts.length);
-        require(!component || parts.length == 1, "Entry name contains slash");
-        for (String part : parts) {
-            require(!part.isEmpty() && (navigation || !part.equals(".") && !part.equals("..")), "Invalid resource path");
+        int count = 0;
+        int start = 0;
+        for (;;) {
+            int slash = path.indexOf('/', start);
+            int end = slash < 0 ? path.length() : slash;
+            int length = end - start;
+            require(length != 0 && (navigation || !(path.charAt(start) == '.'
+                    && (length == 1 || length == 2 && path.charAt(start + 1) == '.'))), "Invalid resource path");
+            limits.elements(++count);
+            require(!component || slash < 0, "Entry name contains slash");
+            if (slash < 0) break;
+            start = slash + 1;
         }
     }
 
@@ -1258,28 +1265,30 @@ public final class JanexReader implements Closeable {
 
     /// Describes selected roots with compact source and data-pool references.
     private ResourcePlan resources(List<Root> roots, Map<String, String> requirements) throws IOException {
-        SortedSet<Integer> usedSources = new TreeSet<Integer>();
-        SortedSet<Integer> usedPools = new TreeSet<Integer>();
+        BitSet usedSources = new BitSet();
+        BitSet usedPools = new BitSet();
         for (Root root : roots) {
             for (Node node : root.files.values()) {
                 if (node.source >= 0) {
                     collectSource(node.source, usedSources);
                     for (ResourcePlan.ClassFileTransform transform : node.transforms) {
-                        usedPools.add(transform.dataPoolIndex());
+                        usedPools.set(transform.dataPoolIndex());
                     }
                 }
             }
         }
-        Map<Integer, Integer> sourceIds = new HashMap<Integer, Integer>();
-        for (int id : usedSources) {
-            sourceIds.put(id, sourceIds.size());
+        int[] sourceIds = new int[sources.size()];
+        int sourceCount = 0;
+        for (int id = usedSources.nextSetBit(0); id >= 0; id = usedSources.nextSetBit(id + 1)) {
+            sourceIds[id] = sourceCount++;
         }
-        Map<Integer, Integer> poolIds = new HashMap<Integer, Integer>();
-        for (int id : usedPools) {
-            poolIds.put(id, poolIds.size());
+        int[] poolIds = new int[dataPools.size()];
+        int poolCount = 0;
+        for (int id = usedPools.nextSetBit(0); id >= 0; id = usedPools.nextSetBit(id + 1)) {
+            poolIds[id] = poolCount++;
         }
-        List<ResourcePlan.Source> selectedSources = new ArrayList<ResourcePlan.Source>();
-        for (int id : usedSources) {
+        List<ResourcePlan.Source> selectedSources = new ArrayList<ResourcePlan.Source>(sourceCount);
+        for (int id = usedSources.nextSetBit(0); id >= 0; id = usedSources.nextSetBit(id + 1)) {
             Source source = sources.get(id);
             int[] filters = new int[source.inline == null && source.encoding != null ? source.encoding.filters.length : 0];
             for (int i = 0; i < filters.length; i++) {
@@ -1288,7 +1297,7 @@ public final class JanexReader implements Closeable {
             ResourcePlan.Extent[] extents = new ResourcePlan.Extent[source.inline == null && source.extents != null ? source.extents.length : 0];
             for (int i = 0; i < extents.length; i++) {
                 ResourcePlan.Extent extent = source.extents[i];
-                int sourceIndex = sourceIds.get(extent.sourceIndex());
+                int sourceIndex = sourceIds[extent.sourceIndex()];
                 extents[i] = sourceIndex == extent.sourceIndex() ? extent
                         : new ResourcePlan.Extent(sourceIndex, extent.offset(), extent.length());
             }
@@ -1296,9 +1305,9 @@ public final class JanexReader implements Closeable {
                     source.inline == null && source.encoding != null ? limits.bytes(source.encoding.stored) : 0,
                     filters, extents, source.jar));
         }
-        DataPool[] selectedPools = new DataPool[usedPools.size()];
-        for (int id : usedPools) {
-            selectedPools[poolIds.get(id)] = dataPools.get(id);
+        DataPool[] selectedPools = new DataPool[poolCount];
+        for (int id = usedPools.nextSetBit(0); id >= 0; id = usedPools.nextSetBit(id + 1)) {
+            selectedPools[poolIds[id]] = dataPools.get(id);
         }
         List<ResourcePlan.Root> selectedRoots = new ArrayList<ResourcePlan.Root>();
         for (Root root : roots) {
@@ -1308,13 +1317,13 @@ public final class JanexReader implements Closeable {
                 ResourcePlan.ClassFileTransform[] transforms = new ResourcePlan.ClassFileTransform[node.transforms.length];
                 for (int i = 0; i < transforms.length; i++) {
                     ResourcePlan.ClassFileTransform transform = node.transforms[i];
-                    int poolIndex = poolIds.get(transform.dataPoolIndex());
+                    int poolIndex = poolIds[transform.dataPoolIndex()];
                     transforms[i] = poolIndex == transform.dataPoolIndex() ? transform
                             : new ResourcePlan.ClassFileTransform(transform.decodedLength(), poolIndex);
                 }
                 Integer permissions = has(node.metadata, 5) ? (int) number(get(node.metadata, 5)) : null;
                 files.put(node.source == -1 && !entry.getKey().isEmpty() ? entry.getKey() + "/" : entry.getKey(),
-                        new ResourcePlan.File(node.source < 0 ? node.source : sourceIds.get(node.source), transforms,
+                        new ResourcePlan.File(node.source < 0 ? node.source : sourceIds[node.source], transforms,
                                 (Instant) get(node.metadata, 2), (Instant) get(node.metadata, 3),
                                 (Instant) get(node.metadata, 4), permissions));
             }
@@ -1324,9 +1333,11 @@ public final class JanexReader implements Closeable {
     }
 
     /// Collects reachable source IDs while preserving the existing dependency order.
-    private void collectSource(int id, Set<Integer> used) {
+    private void collectSource(int id, BitSet used) {
+        if (used.get(id)) return;
+        used.set(id);
         Source source = sources.get(id);
-        if (used.add(id) && source.inline == null && source.extents != null) {
+        if (source.inline == null && source.extents != null) {
             for (ResourcePlan.Extent extent : source.extents) {
                 collectSource(extent.sourceIndex(), used);
             }

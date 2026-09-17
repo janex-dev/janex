@@ -32,6 +32,8 @@ public final class Zstandard {
     private static final Fse[] DEFAULTS = defaults();
     /// Empty history used by dictionary-free calls.
     private static final byte[] EMPTY = new byte[0];
+    /// Immutable initial state shared by dictionary-free calls.
+    private static final Dictionary EMPTY_DICTIONARY = new Dictionary(EMPTY);
 
     /// Prevents instantiation.
     private Zstandard() {
@@ -89,7 +91,7 @@ public final class Zstandard {
         if (input == output || dictionary == output) {
             throw new IllegalArgumentException("Output must be distinct from input and dictionary");
         }
-        Dictionary history = new Dictionary(dictionary);
+        Dictionary history = dictionary.length == 0 ? EMPTY_DICTIONARY : new Dictionary(dictionary);
         Input cursor = new Input(input, inputOffset, inputOffset + inputLength);
         int position = outputOffset;
         int limit = outputOffset + outputLength;
