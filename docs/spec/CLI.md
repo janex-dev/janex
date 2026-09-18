@@ -41,8 +41,10 @@ janex current
 janex home sdk:bellsoft/liberica-jdk@21
 ```
 
-`list` shows installed versions and their IDs. `current` shows the SDKs selected for the current
-environment. `home` prints an installation's directory.
+`list` shows installed versions, platforms, defaults, and pins. Add `--verbose` for full IDs and
+paths. `current` shows selected SDKs with their selection sources, and active application commands.
+Both commands accept `--kind sdk` or `--kind app` and `--json`. `home` prints an installation's directory.
+`available` without a target lists all supported SDK products; application catalogs are not yet supported.
 
 SDK targets require the `sdk:` prefix, including in project toolchain files.
 Products use `publisher/product` names: `sdk:bellsoft/liberica-jdk`, `sdk:bellsoft/liberica-jre`, and
@@ -53,7 +55,8 @@ product and need no prefix. Exact installation IDs remain valid wherever an inst
 Java has a separate default for each target platform. Gradle and Maven each have one portable
 default. Installing another SDK keeps existing installations. Updating a request used as a default
 moves that default to the new build, unless pinned. To clear the native Java default, use
-`janex default --clear`. To clear the family/platform default of an installed SDK, use
+`janex default --clear --family java`. Clearing a default always requires a target or an explicit
+family. To clear the family/platform default of an installed SDK, use
 `janex default --clear "sdk:bellsoft/liberica-jdk@21[arch=aarch64]"`. Its version and variant identify
 an installation; the cleared default is shared by that installation's family and platform.
 For Gradle or Maven, use `--family gradle` or `--family maven`.
@@ -86,7 +89,7 @@ choices, whether installing one SDK or several:
 janex install "sdk:bellsoft/liberica-jdk@21[variant=full,arch=aarch64]" "sdk:gradle@9[variant=all]"
 janex default "sdk:bellsoft/liberica-jdk@21[variant=full,arch=aarch64]"
 janex use "sdk:bellsoft/liberica-jdk@21[variant=full,arch=aarch64]"
-janex exec --java "sdk:bellsoft/liberica-jdk@21[variant=full,arch=x86-64]" -- java -version
+janex exec --with "sdk:bellsoft/liberica-jdk@21[variant=full,arch=x86-64]" -- java -version
 ```
 
 `available java` and `available gradle` list products and their variants. Liberica JDK offers
@@ -106,12 +109,12 @@ The same selectors work with `available`, `home`, `use`, `default`, `update`, `p
 `--offline` and `--timeout` apply to the whole command. Install validates all selectors before
 starting, then installs them sequentially; a failure stops the command and retains completed installs.
 
-`list` displays complete selectors and installation IDs. An ID selects one exact installation
+`list --verbose` displays complete selectors and installation IDs. An ID selects one exact installation
 and cannot carry additional qualifiers.
 
 ### Use SDKs in your shell
 
-Run `janex init` once, then load the script for your shell. With the default Janex directory:
+Run `janex shell init` once, then load the script for your shell. With the default Janex directory:
 
 | Shell | Load command |
 | --- | --- |
@@ -119,7 +122,7 @@ Run `janex init` once, then load the script for your shell. With the default Jan
 | Fish | `source "$HOME/.janex/shell/init.fish"` |
 | PowerShell | `. "$HOME/.janex/shell/init.ps1"` |
 
-`init` prints the correct paths if you use a custom `JANEX_HOME`. Add the load command to your shell
+`shell init` prints the correct paths if you use a custom `JANEX_HOME`. Add the load command to your shell
 profile if you want it in every session; Janex does not edit the profile for you.
 
 Once loaded, activate your SDK selections or switch versions in the current terminal:
@@ -136,33 +139,37 @@ priority. Run `janex use` without arguments to clear manual selections and apply
 project's configuration again. Changing directories does not switch SDKs automatically.
 
 `deactivate` restores the environment from before activation. You can activate it again later.
-If you move the Janex executable, run `janex init` again and reload the script.
+If you move the Janex executable, run `janex shell init` again and reload the script.
 
 ### Choose SDKs for a project or a single command
 
 In your project directory, save the versions it needs:
 
 ```shell
-janex use --project sdk:bellsoft/liberica-jdk@21
-janex use --project sdk:gradle@8
+janex use --project sdk:bellsoft/liberica-jdk@21 sdk:gradle@8
 ```
 
-These commands update `.janex-toolchains.toml`, one tool family at a time. Add `--pin` to save an
-exact local installation ID instead of a version request. The selected SDK must already be installed.
+This updates `.janex-toolchains.toml` after all targets resolve successfully, preserving other
+families. Select at most one SDK per family. Add `--pin` to save exact local installation IDs
+instead of version requests. The selected SDKs must already be installed.
 Unspecified platform values remain unspecified in the project file, so another machine uses its own
 native platform. Explicit `arch`, `os`, `libc`, and `variant` qualifiers are retained.
 
 To run one command without changing your shell, use `exec`:
 
 ```shell
-janex exec --java sdk:bellsoft/liberica-jdk@21 -- java -version
-janex exec --java sdk:bellsoft/liberica-jdk@21 --gradle sdk:gradle@8 -- gradle build
+janex exec --with sdk:bellsoft/liberica-jdk@21 -- java -version
+janex exec --with sdk:bellsoft/liberica-jdk@21 --with sdk:gradle@8 -- gradle build
 ```
 
-For `exec`, explicit options take priority over SDK home variables, project selections, and global
-defaults, in that order. Java can also fall back to a system installation. For scripts,
-`janex env --shell sh` prints environment assignments; it also accepts `powershell` or `fish`
-and the same `--java`, `--gradle`, and `--maven` selections as `exec`.
+For `exec`, repeat `--with` for different SDK families. Explicit targets take priority over SDK
+home variables, project selections, and global defaults, in that order. Java can also fall back
+to a system installation; commands that do not need Java can run without one. Arguments after the
+child command are forwarded unchanged. Use `--` to separate Janex options from that command.
+
+For scripts, `janex shell env --shell sh` prints environment assignments; it also accepts
+`powershell` or `fish` and the same `--with` selections as `exec`. `current` reports the source
+used by this selection process. A home exported by shell integration is reported as an environment variable.
 
 ### Update, pin, and remove
 
@@ -176,7 +183,7 @@ janex unpin sdk:bellsoft/liberica-jdk@21
 Updates follow the saved version request and keep previous installations. Pinning holds a request
 at its current build until you unpin it. You can also pass `--pin` when installing.
 
-To remove an installation, use its exact version or ID from `janex list`:
+To remove an installation, use its exact version or ID from `janex list --verbose`:
 
 ```shell
 janex uninstall <INSTALLATION_ID>
@@ -204,7 +211,7 @@ cfr --help
 janex install pkg:maven/org.benf/cfr@0.152
 ```
 
-Load the scripts written by `janex init`, or add `JANEX_HOME/bin` to your `PATH`, to use installed
+Load the scripts written by `janex shell init`, or add `JANEX_HOME/bin` to your `PATH`, to use installed
 commands. Native entries forward arguments without a shell script. They use the same `JANEX_HOME`
 as Janex; keep that variable set when using a custom home.
 

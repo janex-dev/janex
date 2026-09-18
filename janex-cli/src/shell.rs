@@ -3,11 +3,82 @@
 
 //! Thin shell functions that evaluate only successful native environment responses.
 
+use clap::{Args, Subcommand, ValueEnum};
 use janex_host::{
     Error, Result,
-    sdk::{Shell, quote_shell},
+    sdk::{SdkManager, Shell, quote_shell},
 };
 use std::{fs, io::Write};
+
+/// Shell setup and explicit environment rendering.
+#[derive(Subcommand)]
+pub(super) enum ShellCommand {
+    /// Write loaders for all supported shells and print their load commands.
+    Init(InitArgs),
+    /// Print environment assignments for the selected SDKs.
+    Env(EnvArgs),
+}
+
+/// Shell syntax accepted by environment renderers.
+#[derive(Clone, Copy, ValueEnum)]
+pub(super) enum ShellArg {
+    /// POSIX sh, Bash, or Zsh.
+    #[value(alias = "bash", alias = "zsh")]
+    Sh,
+    /// PowerShell.
+    Powershell,
+    /// Fish.
+    Fish,
+}
+
+impl ShellArg {
+    /// Returns the corresponding SDK environment syntax.
+    pub(super) fn shell(self) -> Shell {
+        match self {
+            Self::Sh => Shell::Sh,
+            Self::Powershell => Shell::PowerShell,
+            Self::Fish => Shell::Fish,
+        }
+    }
+}
+
+/// Loader installation or internal wrapper rendering.
+#[derive(Args)]
+pub(super) struct InitArgs {
+    /// Internal rendering protocol used by installed loaders.
+    #[arg(long, value_enum, hide = true)]
+    shell: Option<ShellArg>,
+}
+
+/// One-shot environment rendering without changing the calling shell.
+#[derive(Args)]
+pub(super) struct EnvArgs {
+    /// Select an installed SDK or installation ID; repeat for different families.
+    #[arg(long = "with", value_name = "TARGET")]
+    targets: Vec<String>,
+    /// Shell syntax for the emitted assignments.
+    #[arg(long, value_enum)]
+    shell: ShellArg,
+}
+
+/// Installs loaders or renders a complete SDK environment.
+pub(super) fn run(command: ShellCommand) -> Result<i32> {
+    match command {
+        ShellCommand::Init(args) => {
+            if let Some(shell) = args.shell {
+                print!("{}", init(shell.shell())?);
+            } else {
+                install()?;
+            }
+        }
+        ShellCommand::Env(args) => {
+            let execution =
+                SdkManager::user()?.execution(&args.targets, Some(&std::env::current_dir()?))?;
+            print!("{}", execution.environment(args.shell.shell())?);
+        }
+    }
+    Ok(0)
+}
 
 /// Updates the three managed loader files without reading SDK state or editing shell profiles.
 /// Each file is replaced atomically; an error can leave earlier files updated.

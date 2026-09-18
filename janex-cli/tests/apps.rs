@@ -416,6 +416,17 @@ fn maven_apps_keep_versions_pins_command_defaults_and_original_jars() {
     .unwrap();
     assert_eq!(installed.as_array().unwrap().len(), 2);
     let first_id = installed[0]["id"].as_str().unwrap();
+    let current: serde_json::Value = serde_json::from_str(&success(invoke(
+        &home,
+        temp.path(),
+        &["current", "--kind", "app", "--json"],
+    )))
+    .unwrap();
+    assert!(current["sdks"].as_object().unwrap().is_empty());
+    assert_eq!(current["applications"]["demo"]["installation"], first_id);
+    let summary = success(invoke(&home, temp.path(), &["list", "--kind", "app"]));
+    assert!(summary.contains("app:demo") && summary.contains("default"));
+    assert!(!summary.contains(first_id));
     let canonical = installed[0]["application"]["purl"].as_str().unwrap();
     assert!(canonical.starts_with("pkg:maven/org.example/demo@1.0?repository_url="));
     janex_format::purl::parse(canonical).unwrap();

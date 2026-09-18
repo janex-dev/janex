@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MPL-2.0
 
 function _janex_init
-    set -l code (command @JANEX_EXE@ init --shell fish | string collect)
+    set -l code (command @JANEX_EXE@ shell init --shell fish | string collect)
     set -l result $pipestatus[1]
     if test $result -ne 0
         return $result

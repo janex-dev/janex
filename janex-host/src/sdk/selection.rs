@@ -6,6 +6,7 @@
 use super::{SdkManager, java_name};
 use crate::{Result, error::invalid};
 use janex_java::runtime::{JavaOptions, JavaRuntime};
+use serde::Serialize;
 use std::{
     collections::BTreeMap,
     ffi::{OsStr, OsString},
@@ -29,21 +30,45 @@ pub enum Shell {
 /// Selected SDK homes retaining uninstall-prevention leases throughout child execution.
 #[derive(Debug)]
 pub struct SdkExecution {
-    /// Java and optional portable tool homes keyed by family.
-    homes: BTreeMap<String, PathBuf>,
+    /// Selected SDKs keyed by family.
+    selections: BTreeMap<String, SelectedSdk>,
     /// Shared leases; unregistered external homes do not have a lease.
     _leases: Vec<fs::File>,
 }
 
-impl SdkExecution {
-    /// Returns the selected Java home without altering the calling process.
-    pub fn home(&self) -> &Path {
-        &self.homes["java"]
-    }
+/// One effective SDK selection and the origin that determined it.
+#[derive(Debug, Serialize)]
+pub struct SelectedSdk {
+    /// Absolute SDK home.
+    pub home: PathBuf,
+    /// Concrete registered selector, absent for an unregistered environment or system home.
+    pub target: Option<String>,
+    /// Registered installation ID, absent for an unregistered home.
+    pub installation: Option<String>,
+    /// Selection origin, following execution precedence.
+    pub source: SelectionSource,
+}
 
-    /// Returns selected homes keyed by SDK family.
-    pub fn homes(&self) -> &BTreeMap<String, PathBuf> {
-        &self.homes
+/// The input that selected an SDK home for execution.
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum SelectionSource {
+    /// A target explicitly supplied for this operation.
+    Explicit,
+    /// An inherited SDK home variable, including values set by shell integration.
+    Environment(String),
+    /// The project toolchain file containing the request.
+    Project(PathBuf),
+    /// The user's persistent family/platform default.
+    Default,
+    /// An automatically discovered Java installation.
+    System,
+}
+
+impl SdkExecution {
+    /// Returns the selected SDKs and their origins, keyed by family.
+    pub fn selections(&self) -> &BTreeMap<String, SelectedSdk> {
+        &self.selections
     }
 
     /// Executes a command with selected SDK environment variables and bin directories on PATH.
@@ -52,7 +77,8 @@ impl SdkExecution {
     pub fn execute(&self, command: &OsStr, arguments: &[OsString]) -> Result<ExitStatus> {
         let mut executable = command.to_owned();
         if Path::new(command).components().count() == 1 {
-            'homes: for home in self.homes.values() {
+            'homes: for selected in self.selections.values() {
+                let home = &selected.home;
                 let suffixes: &[&str] = if cfg!(windows) && Path::new(command).extension().is_none()
                 {
                     &[".exe", ".cmd", ".bat"]
@@ -72,8 +98,8 @@ impl SdkExecution {
         }
         let mut child = Command::new(executable);
         child.args(arguments).env("PATH", self.path()?);
-        for (family, home) in &self.homes {
-            child.env(home_variable(family), home);
+        for (family, selected) in &self.selections {
+            child.env(home_variable(family), &selected.home);
         }
         Ok(child.status()?)
     }
@@ -88,10 +114,12 @@ impl SdkExecution {
             }
         };
         let mut output = String::new();
-        for (family, home) in &self.homes {
+        for (family, selected) in &self.selections {
             let name = home_variable(family);
             let value = quote(
-                home.to_str()
+                selected
+                    .home
+                    .to_str()
                     .ok_or_else(|| invalid("SDK home is not Unicode"))?,
             );
             output.push_str(&match shell {
@@ -133,9 +161,9 @@ impl SdkExecution {
     /// Prepends selected SDK bins, removing duplicate selected paths from the inherited PATH.
     fn path(&self) -> Result<OsString> {
         let bins = self
-            .homes
+            .selections
             .values()
-            .map(|home| home.join("bin"))
+            .map(|selected| selected.home.join("bin"))
             .collect::<Vec<_>>();
         let current = std::env::var_os("PATH").unwrap_or_default();
         std::env::join_paths(
@@ -158,42 +186,42 @@ pub(super) fn home_variable(family: &str) -> &'static str {
 }
 
 impl SdkManager {
-    /// Selects Java and configured tools without downloading. Explicit Java selection precedes
-    /// JAVA_HOME, project selection, the Java default, and system Java discovery.
-    pub fn execution(
-        &self,
-        target: Option<&str>,
-        directory: Option<&Path>,
-    ) -> Result<SdkExecution> {
-        self.execution_with(target, None, None, directory)
-    }
-
-    /// Selects Java, Gradle, and Maven independently. Explicit selection precedes each family's
-    /// environment variable, project requirement, and global default. Only Java uses PATH discovery.
-    pub fn execution_with(
-        &self,
-        java: Option<&str>,
-        gradle: Option<&str>,
-        maven: Option<&str>,
-        directory: Option<&Path>,
-    ) -> Result<SdkExecution> {
+    /// Selects installed SDKs without downloading. Explicit targets precede each family's home
+    /// variable, project request, and global default. Duplicate explicit families are rejected.
+    /// Java discovery is a final optional fallback; other commands do not require Java to exist.
+    pub fn execution(&self, targets: &[String], directory: Option<&Path>) -> Result<SdkExecution> {
         let _lock = self.lock(false)?;
         let state = self.read()?;
-        let project = directory
-            .map(project_requests)
+        let project_path = directory.and_then(project_file);
+        let project = project_path
+            .as_deref()
+            .map(|path| parse_project(&read_project(path)?))
             .transpose()?
             .unwrap_or_default();
-        let mut homes = BTreeMap::new();
+        let mut explicit = BTreeMap::new();
+        for target in targets {
+            let installed = self.resolve_in(&state, target)?.0;
+            if explicit.insert(installed.sdk.family(), installed).is_some() {
+                return Err(invalid(
+                    "only one explicit selection per SDK family is allowed",
+                ));
+            }
+        }
+        let mut selections = BTreeMap::new();
         let mut leases = Vec::new();
-        for (family, explicit) in [("java", java), ("gradle", gradle), ("maven", maven)] {
-            let selected = if let Some(target) = explicit {
-                Some(self.resolve_in(&state, target)?.0)
+        let families = super::PRODUCTS
+            .iter()
+            .map(|p| p.family)
+            .collect::<std::collections::BTreeSet<_>>();
+        for family in families {
+            let (selected, source) = if let Some(installed) = explicit.remove(family) {
+                (Some(installed), SelectionSource::Explicit)
             } else if let Some(path) =
                 std::env::var_os(home_variable(family)).filter(|s| !s.is_empty())
             {
                 let home = PathBuf::from(path).canonicalize()?;
                 validate_home(&home, family)?;
-                if let Some(installed) = state.installations.iter().find(|i| {
+                let installed = state.installations.iter().find(|i| {
                     i.sdk.family() == family
                         && self
                             .home(i)
@@ -201,15 +229,28 @@ impl SdkManager {
                             .and_then(|p| p.canonicalize().ok())
                             .as_ref()
                             == Some(&home)
-                }) {
+                });
+                if let Some(installed) = installed {
+                    installed.sdk.check_host()?;
                     leases.push(self.lease(&installed.id)?);
                 }
-                homes.insert(family.into(), home);
+                selections.insert(
+                    family.into(),
+                    SelectedSdk {
+                        home: janex_java::runtime::java_path(&home),
+                        target: installed.map(|i| i.sdk.target()),
+                        installation: installed.map(|i| i.id.clone()),
+                        source: SelectionSource::Environment(home_variable(family).into()),
+                    },
+                );
                 continue;
             } else if let Some(target) = project.get(family) {
-                Some(self.resolve_in(&state, target)?.0)
+                (
+                    Some(self.resolve_in(&state, target)?.0),
+                    SelectionSource::Project(project_path.clone().unwrap()),
+                )
             } else {
-                self.default_in(&state, family)?
+                (self.default_in(&state, family)?, SelectionSource::Default)
             };
             if let Some(installed) = selected {
                 if installed.sdk.family() != family {
@@ -219,38 +260,65 @@ impl SdkManager {
                 let home = self.home(&installed)?;
                 validate_home(&home, family)?;
                 leases.push(self.lease(&installed.id)?);
-                homes.insert(family.into(), home);
-            } else if family == "java" {
-                let runtime = janex_java::runtime::runtimes(&JavaOptions::default())?.remove(0);
-                homes.insert(family.into(), runtime.home);
+                selections.insert(
+                    family.into(),
+                    SelectedSdk {
+                        home: janex_java::runtime::java_path(&home),
+                        target: Some(installed.sdk.target()),
+                        installation: Some(installed.id),
+                        source,
+                    },
+                );
+            } else if family == "java"
+                && let Ok(runtimes) = janex_java::runtime::runtimes(&JavaOptions::default())
+                && let Some(runtime) = runtimes.into_iter().next()
+            {
+                selections.insert(
+                    family.into(),
+                    SelectedSdk {
+                        home: janex_java::runtime::java_path(&runtime.home),
+                        target: None,
+                        installation: None,
+                        source: SelectionSource::System,
+                    },
+                );
             }
         }
-        for home in homes.values_mut() {
-            *home = janex_java::runtime::java_path(home);
-        }
         Ok(SdkExecution {
-            homes,
+            selections,
             _leases: leases,
         })
     }
 
-    /// Writes one project selection, preserving other SDK families. Exact pins use local installation IDs.
-    pub fn use_project(&self, target: &str, directory: &Path, pin: bool) -> Result<PathBuf> {
+    /// Atomically writes project selections after resolving every target, preserving other families.
+    /// Requires at least one target and rejects duplicate families. Exact pins use local installation IDs.
+    pub fn use_project(&self, targets: &[String], directory: &Path, pin: bool) -> Result<PathBuf> {
+        if targets.is_empty() {
+            return Err(invalid("use --project requires at least one target"));
+        }
         let _lock = self.lock(false)?;
         let state = self.read()?;
-        let (installation, request) = self.resolve_in(&state, target)?;
-        let value = if pin || target == installation.id {
-            installation.id
-        } else {
-            target.to_owned()
-        };
+        let mut updates = BTreeMap::new();
+        for target in targets {
+            let (installation, request) = self.resolve_in(&state, target)?;
+            let value = if pin || *target == installation.id {
+                installation.id
+            } else {
+                target.clone()
+            };
+            if updates.insert(request.family().to_owned(), value).is_some() {
+                return Err(invalid(
+                    "only one project selection per SDK family is allowed",
+                ));
+            }
+        }
         let path = directory.join(".janex-toolchains.toml");
         let mut project = if path.exists() {
             parse_project(&read_project(&path)?)?
         } else {
             BTreeMap::new()
         };
-        project.insert(request.family().into(), value);
+        project.extend(updates);
         let mut text = String::new();
         for (family, target) in project {
             // Validated ASCII targets use JSON quoting compatible with TOML basic strings.
@@ -307,16 +375,24 @@ fn parse_project(text: &str) -> Result<BTreeMap<String, String>> {
 
 /// Reads the nearest project file, stopping at a repository boundary.
 pub(super) fn project_requests(directory: &Path) -> Result<BTreeMap<String, String>> {
+    project_file(directory)
+        .map(|path| parse_project(&read_project(&path)?))
+        .transpose()
+        .map(Option::unwrap_or_default)
+}
+
+/// Finds the nearest project toolchain file without crossing a repository boundary.
+fn project_file(directory: &Path) -> Option<PathBuf> {
     for directory in directory.ancestors() {
         let path = directory.join(".janex-toolchains.toml");
         if path.is_file() {
-            return parse_project(&read_project(&path)?);
+            return Some(path);
         }
         if directory.join(".git").exists() {
             break;
         }
     }
-    Ok(BTreeMap::new())
+    None
 }
 
 /// Reads a small UTF-8 project file, rejecting unexpectedly large input.

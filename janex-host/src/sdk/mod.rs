@@ -20,7 +20,7 @@ pub use product::{PRODUCTS, Product};
 pub use request::SdkRequest;
 pub(crate) use selection::application_runtimes;
 pub use selection::project_java;
-pub use selection::{SdkExecution, Shell};
+pub use selection::{SdkExecution, SelectedSdk, SelectionSource, Shell};
 pub use shell::quote as quote_shell;
 pub use state::{Installation, SdkManager, SdkStatus, Selection};
 

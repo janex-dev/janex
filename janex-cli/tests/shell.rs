@@ -77,7 +77,7 @@ fn exercise(shell: &str, script: &str, extension: &str) {
     success(
         Command::new(&executable)
             .env("JANEX_HOME", &home)
-            .arg("init")
+            .args(["shell", "init"])
             .output()
             .unwrap(),
     );
@@ -143,14 +143,18 @@ fn initialization_updates_only_managed_scripts_without_resolving_sdks() {
             .env("JANEX_HOME", &home)
             .env("JANEX_SHELL_STATE", "invalid state")
             .current_dir(temp.path())
-            .arg("init")
+            .args(["shell", "init"])
             .output()
             .unwrap();
         assert!(!output.stdout.is_empty());
         success(output);
         for name in ["init.sh", "init.fish", "init.ps1"] {
             let path = home.join("shell").join(name);
-            assert!(fs::read_to_string(&path).unwrap().contains("init --shell"));
+            assert!(
+                fs::read_to_string(&path)
+                    .unwrap()
+                    .contains("shell init --shell")
+            );
             fs::write(path, "outdated").unwrap();
         }
         assert_eq!(fs::read(home.join("cache/keep")).unwrap(), b"cache");
@@ -169,7 +173,7 @@ fn read_only_commands_do_not_initialize_home() {
     for args in [
         vec!["--help"],
         vec!["--version"],
-        vec!["init", "--shell", "sh"],
+        vec!["shell", "init", "--shell", "sh"],
     ] {
         success(
             Command::new(env!("CARGO_BIN_EXE_janex"))

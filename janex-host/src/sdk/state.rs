@@ -52,7 +52,7 @@ pub struct Selection {
 }
 
 /// One consistent registry snapshot for command and IDE presentation.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct SdkStatus {
     /// Completed managed and external installations.
     pub installations: Vec<Installation>,
@@ -970,7 +970,9 @@ mod tests {
             installed.id
         );
         assert_eq!(manager.update(&request, &offline).unwrap().id, installed.id);
-        let execution = manager.execution(Some(&installed.id), None).unwrap();
+        let execution = manager
+            .execution(std::slice::from_ref(&installed.id), None)
+            .unwrap();
         assert!(
             manager
                 .uninstall(&installed.id)
@@ -990,7 +992,9 @@ mod tests {
         let installed = fixture(&manager, &request, "21.0.8+12", true);
         let project = temp.path().join("project");
         fs::create_dir(&project).unwrap();
-        let path = manager.use_project(&installed.id, &project, true).unwrap();
+        let path = manager
+            .use_project(std::slice::from_ref(&installed.id), &project, true)
+            .unwrap();
         assert_eq!(
             super::super::project_java(&project).unwrap(),
             Some(installed.id.clone())
@@ -1054,11 +1058,15 @@ mod tests {
         );
         let project = temp.path().join("project");
         fs::create_dir(&project).unwrap();
-        manager.use_project(&java.id, &project, true).unwrap();
         manager
-            .use_project("sdk:gradle@8", &project, false)
+            .use_project(std::slice::from_ref(&java.id), &project, true)
             .unwrap();
-        let path = manager.use_project(&maven.id, &project, true).unwrap();
+        manager
+            .use_project(&["sdk:gradle@8".into()], &project, false)
+            .unwrap();
+        let path = manager
+            .use_project(std::slice::from_ref(&maven.id), &project, true)
+            .unwrap();
         let content = fs::read_to_string(path).unwrap();
         assert!(
             content.contains(&java.id)
@@ -1066,14 +1074,12 @@ mod tests {
                 && content.contains("sdk:gradle@8")
         );
         let execution = manager
-            .execution_with(
-                Some(&java.id),
-                Some(&new.id),
-                Some(&maven.id),
+            .execution(
+                &[java.id.clone(), new.id.clone(), maven.id.clone()],
                 Some(&project),
             )
             .unwrap();
-        assert_eq!(execution.homes().len(), 3);
+        assert_eq!(execution.selections().len(), 3);
         manager.clear_default("gradle").unwrap();
         assert!(
             manager
@@ -1148,7 +1154,7 @@ mod tests {
         fs::create_dir(&project).unwrap();
         manager
             .use_project(
-                "sdk:bellsoft/liberica-jdk@21[arch=x86-64,variant=full]",
+                &["sdk:bellsoft/liberica-jdk@21[arch=x86-64,variant=full]".into()],
                 &project,
                 false,
             )
@@ -1159,7 +1165,7 @@ mod tests {
         let native = SdkRequest::parse("sdk:bellsoft/liberica-jdk@21").unwrap();
         fixture(&manager, &native, "21.0.9+10", false);
         manager
-            .use_project("sdk:bellsoft/liberica-jdk@21", &project, false)
+            .use_project(&["sdk:bellsoft/liberica-jdk@21".into()], &project, false)
             .unwrap();
         let text = fs::read_to_string(project.join(".janex-toolchains.toml")).unwrap();
         assert_eq!(text.trim(), "java = \"sdk:bellsoft/liberica-jdk@21\"");

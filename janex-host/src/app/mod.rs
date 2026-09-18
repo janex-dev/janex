@@ -100,6 +100,16 @@ pub struct AppStatus {
     pub commands: BTreeMap<String, CommandSelection>,
 }
 
+impl AppStatus {
+    /// Resolves active commands within this snapshot, retaining command-name order.
+    pub fn active_commands(&self) -> Result<BTreeMap<&str, &Installation>> {
+        self.commands
+            .iter()
+            .map(|(name, selection)| Ok((name.as_str(), command_installation(self, selection)?)))
+            .collect()
+    }
+}
+
 impl Default for AppStatus {
     fn default() -> Self {
         Self {

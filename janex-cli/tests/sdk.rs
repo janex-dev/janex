@@ -110,7 +110,7 @@ fn registered_sdk_supports_selection_exec_and_safe_unregister() {
     let current = success(invoke(&home, &project, &["current", "--json"]));
     let current: serde_json::Value = serde_json::from_str(&current).unwrap();
     assert_eq!(
-        Path::new(current["java_home"].as_str().unwrap())
+        Path::new(current["sdks"]["java"]["home"].as_str().unwrap())
             .canonicalize()
             .unwrap(),
         java_home.canonicalize().unwrap()
@@ -118,12 +118,12 @@ fn registered_sdk_supports_selection_exec_and_safe_unregister() {
     success(invoke(
         &home,
         &project,
-        &["exec", "--java", id, "--", "java", "-version"],
+        &["exec", "--with", id, "--", "java", "-version"],
     ));
     let env = success(invoke(
         &home,
         &project,
-        &["env", "--java", id, "--shell", "powershell"],
+        &["shell", "env", "--with", id, "--shell", "powershell"],
     ));
     assert!(env.starts_with("$env:JAVA_HOME = '"));
     success(invoke(&home, &project, &["use", id, "--project", "--pin"]));
@@ -133,7 +133,11 @@ fn registered_sdk_supports_selection_exec_and_safe_unregister() {
             .contains(id)
     );
     assert!(!invoke(&home, &project, &["uninstall", id]).status.success());
-    success(invoke(&home, &project, &["default", "--clear"]));
+    success(invoke(
+        &home,
+        &project,
+        &["default", "--clear", "--family", "java"],
+    ));
     success(invoke(&home, &project, &["uninstall", id]));
     assert!(java_home.join("release").exists());
     let list: serde_json::Value =
@@ -188,8 +192,15 @@ fn sdk_prefix_is_required_across_commands_and_project_files() {
         vec!["uninstall", "gradle@9.1.0"],
         vec!["use", "gradle@9", "--project"],
         vec!["use", "gradle@9", "--shell", "powershell"],
-        vec!["env", "--gradle", "gradle@9", "--shell", "powershell"],
-        vec!["exec", "--gradle", "gradle@9", "--", "unused-command"],
+        vec![
+            "shell",
+            "env",
+            "--with",
+            "gradle@9",
+            "--shell",
+            "powershell",
+        ],
+        vec!["exec", "--with", "gradle@9", "--", "unused-command"],
     ] {
         let output = invoke(&home, temp.path(), &args);
         assert!(!output.status.success(), "{args:?}");
@@ -279,6 +290,148 @@ fn tool_fixture(root: &Path, family: &str, version: &str) {
     }
 }
 
+/// Exercises SDK selection and reporting without any Java executable on PATH.
+#[test]
+fn generic_selections_report_sources_and_project_updates_are_atomic() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let project = temp.path().join("project");
+    fs::create_dir(&project).unwrap();
+    let first = temp.path().join("gradle8");
+    let second = temp.path().join("gradle9");
+    let maven = temp.path().join("maven");
+    for (target, path, family, version) in [
+        ("sdk:gradle@8", &first, "gradle", "8.14.3"),
+        ("sdk:gradle@9", &second, "gradle", "9.1.0"),
+        ("sdk:maven@3.9", &maven, "maven", "3.9.9"),
+    ] {
+        tool_fixture(path, family, version);
+        success(invoke(
+            &home,
+            &project,
+            &["install", target, "--path", path.to_str().unwrap()],
+        ));
+    }
+    let run = |args: &[&str], environment: Option<&Path>| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_janex"));
+        command
+            .env("JANEX_HOME", &home)
+            .env("PATH", "")
+            .env_remove("JAVA_HOME")
+            .env_remove("GRADLE_HOME")
+            .env_remove("MAVEN_HOME")
+            .env_remove("JANEX_SHELL_STATE")
+            .current_dir(&project)
+            .args(args);
+        if let Some(path) = environment {
+            command.env("GRADLE_HOME", path);
+        }
+        command.output().unwrap()
+    };
+    success(run(&["default", "sdk:gradle@8"], None));
+    let current = |environment| -> serde_json::Value {
+        serde_json::from_str(&success(run(
+            &["current", "--kind", "sdk", "--json"],
+            environment,
+        )))
+        .unwrap()
+    };
+    let state = current(None);
+    assert_eq!(state["sdks"]["gradle"]["source"]["kind"], "default");
+    assert!(state["sdks"].get("java").is_none());
+    assert_eq!(run(&["default", "--clear"], None).status.code(), Some(2));
+    assert_eq!(current(None)["sdks"]["gradle"]["source"]["kind"], "default");
+
+    success(run(
+        &["use", "--project", "sdk:gradle@9", "sdk:maven@3.9"],
+        None,
+    ));
+    let path = project.join(".janex-toolchains.toml");
+    let content = fs::read(&path).unwrap();
+    for targets in [
+        ["sdk:gradle@8", "sdk:maven@99"],
+        ["sdk:gradle@8", "sdk:gradle@9"],
+    ] {
+        assert!(
+            !run(&["use", "--project", targets[0], targets[1]], None)
+                .status
+                .success()
+        );
+        assert_eq!(fs::read(&path).unwrap(), content);
+    }
+    let state = current(None);
+    for family in ["gradle", "maven"] {
+        assert_eq!(state["sdks"][family]["source"]["kind"], "project");
+        assert!(
+            state["sdks"][family]["source"]["value"]
+                .as_str()
+                .unwrap()
+                .ends_with(".janex-toolchains.toml")
+        );
+    }
+    let state = current(Some(&first));
+    assert_eq!(state["sdks"]["gradle"]["source"]["kind"], "environment");
+    assert_eq!(state["sdks"]["gradle"]["source"]["value"], "GRADLE_HOME");
+    let output = success(run(
+        &[
+            "exec",
+            "--with",
+            "sdk:gradle@9",
+            "--with",
+            "sdk:maven@3.9",
+            "--",
+            "gradle",
+            "two words",
+        ],
+        Some(&first),
+    ));
+    assert!(output.contains("gradle9") && output.contains("maven") && output.contains("two words"));
+    assert!(
+        !run(
+            &[
+                "exec",
+                "--with",
+                "sdk:gradle@8",
+                "--with",
+                "sdk:gradle@9",
+                "--",
+                "gradle"
+            ],
+            None
+        )
+        .status
+        .success()
+    );
+    let environment = success(run(
+        &[
+            "shell",
+            "env",
+            "--with",
+            "sdk:gradle@8",
+            "--with",
+            "sdk:maven@3.9",
+            "--shell",
+            "powershell",
+        ],
+        None,
+    ));
+    assert!(environment.contains("gradle8") && environment.contains("maven"));
+
+    let summary = success(run(&["list", "--kind", "sdk"], None));
+    let status: serde_json::Value =
+        serde_json::from_str(&success(run(&["list", "--json"], None))).unwrap();
+    let id = status["installations"][0]["id"].as_str().unwrap();
+    assert!(summary.contains("default") && summary.contains("external"));
+    assert!(!summary.contains(id) && !summary.contains(temp.path().to_str().unwrap()));
+    assert!(success(run(&["list", "--verbose"], None)).contains(id));
+    let apps: serde_json::Value =
+        serde_json::from_str(&success(run(&["list", "--kind", "app", "--json"], None))).unwrap();
+    assert!(apps["installations"].as_array().unwrap().is_empty());
+    success(run(&["default", "--clear", "--family", "gradle"], None));
+    let all = success(run(&["available"], None));
+    assert!(all.contains("sdk:bellsoft/liberica-jdk") && all.contains("sdk:gradle/gradle"));
+}
+
 #[test]
 fn portable_tools_share_commands_and_preserve_independent_selections() {
     let temp = tempfile::tempdir().unwrap();
@@ -317,7 +470,11 @@ fn portable_tools_share_commands_and_preserve_independent_selections() {
             "script environment must use ordinary Windows paths"
         );
     }
-    let env = success(invoke(&home, &project, &["env", "--shell", "powershell"]));
+    let env = success(invoke(
+        &home,
+        &project,
+        &["shell", "env", "--shell", "powershell"],
+    ));
     assert!(
         env.contains("$env:GRADLE_HOME")
             && env.contains("$env:MAVEN_HOME")
@@ -345,7 +502,16 @@ fn portable_tools_share_commands_and_preserve_independent_selections() {
         !invoke(
             &home,
             &project,
-            &["exec", "--java", "sdk:gradle@8", "--", "java", "-version"]
+            &[
+                "exec",
+                "--with",
+                "sdk:gradle@8",
+                "--with",
+                "sdk:gradle@8",
+                "--",
+                "java",
+                "-version"
+            ]
         )
         .status
         .success()
@@ -420,8 +586,9 @@ fn cli_selects_platform_defaults_variants_and_portable_project_requests() {
             &home,
             &project,
             &[
+                "shell",
                 "env",
-                "--java",
+                "--with",
                 &format!("{product}[arch={arch},variant=full]"),
                 "--shell",
                 "powershell",
@@ -449,8 +616,9 @@ fn cli_selects_platform_defaults_variants_and_portable_project_requests() {
             &home,
             &project,
             &[
+                "shell",
                 "env",
-                "--java",
+                "--with",
                 &format!("{product}[arch=x86,variant=full]"),
                 "--shell",
                 "powershell"
@@ -630,7 +798,7 @@ fn gradle_variants_flow_through_cli_projects_and_shell_selection() {
         &project,
         &[
             "exec",
-            "--gradle",
+            "--with",
             "sdk:gradle@9[variant=all]",
             "--",
             "gradle",

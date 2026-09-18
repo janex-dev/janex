@@ -3,29 +3,28 @@
 
 //! Shared CLI entry points for SDK and application management.
 
+use super::shell::ShellArg;
 use clap::{Args, Subcommand, ValueEnum};
 use janex_host::{
     Error, Result,
     app::{AppManager, AppRequest},
     dependency::DependencyOptions,
-    sdk::{CatalogOptions, Installation, PRODUCTS, SdkManager, SdkRequest, Shell},
+    sdk::{CatalogOptions, Installation, PRODUCTS, SdkManager, SdkRequest, SelectionSource},
 };
 use std::{ffi::OsString, path::PathBuf};
 
 /// SDK and application operations in the shared Janex command namespace.
 #[derive(Subcommand)]
 pub(super) enum SdkCommand {
-    /// Write initialization scripts for all supported shells into JANEX_HOME.
-    Init(InitArgs),
     /// Activate SDK selections in the initialized shell.
     Activate(ActivateArgs),
     /// Restore the activation-time environment, retaining shell integration.
     Deactivate(DeactivateArgs),
-    /// List downloadable SDK versions without installing them.
+    /// List supported SDK products or downloadable versions.
     Available(AvailableArgs),
     /// Install SDKs or Maven applications while retaining all existing versions.
     Install(InstallArgs),
-    /// List installed SDKs and applications with their persistent IDs.
+    /// List installed SDKs and applications, including defaults and pins.
     List(ListArgs),
     /// Update saved SDK and application requirements, retaining old versions and respecting pins.
     Update(UpdateArgs),
@@ -33,15 +32,14 @@ pub(super) enum SdkCommand {
     Uninstall(TargetArgs),
     /// Select or clear an SDK default or application command version.
     Default(DefaultArgs),
-    /// Show SDK homes selected by the shell, project, or global defaults.
+    /// Show selected SDKs, their sources, and active application commands.
     Current(CurrentArgs),
     /// Print the directory for an installed SDK or application.
     Home(TargetArgs),
     /// Execute a command with selected SDK homes and tools on PATH.
+    #[command(override_usage = "janex exec [OPTIONS] -- <COMMAND> [ARGS...]")]
     Exec(ExecArgs),
-    /// Print shell environment assignments for an installed SDK.
-    Env(EnvArgs),
-    /// Select SDKs in the current shell, or save one project selection with --project.
+    /// Select SDKs in the current shell, or save project selections with --project.
     Use(UseArgs),
     /// Prevent updates from changing a saved requirement's selected build.
     Pin(PinArgs),
@@ -52,16 +50,15 @@ pub(super) enum SdkCommand {
 /// Pin policy for one saved requirement and platform variant.
 #[derive(Args)]
 pub(super) struct PinArgs {
-    /// Saved SDK product, variant and version requirement.
+    /// Saved SDK or application requirement.
     target: String,
 }
 
 /// Catalog listing request.
 #[derive(Args)]
 pub(super) struct AvailableArgs {
-    /// sdk:product@version selector, or a tool family such as java to list its products.
-    #[arg(default_value = "java")]
-    target: String,
+    /// SDK selector or family; omit to list all supported SDK products.
+    target: Option<String>,
     /// Use only cached catalog metadata.
     #[arg(long, conflicts_with = "refresh")]
     offline: bool,
@@ -100,6 +97,12 @@ pub(super) struct InstallArgs {
 /// Installed SDK and application listing options.
 #[derive(Args)]
 pub(super) struct ListArgs {
+    /// Include only SDKs or applications.
+    #[arg(long, value_enum)]
+    kind: Option<Kind>,
+    /// Include full installation IDs and paths.
+    #[arg(long, short, conflicts_with = "json")]
+    verbose: bool,
     /// Emit structured JSON including saved requests, SDK defaults, and application commands.
     #[arg(long)]
     json: bool,
@@ -133,19 +136,25 @@ pub(super) struct TargetArgs {
 #[derive(Args)]
 pub(super) struct DefaultArgs {
     /// Installed SDK or application selector, or an exact installation ID.
-    #[arg(required_unless_present = "clear")]
+    #[arg(required_unless_present = "family", conflicts_with = "family")]
     target: Option<String>,
-    /// Clear the target's SDK default or application command; omitting the target clears native Java.
+    /// Clear the target's SDK default or application command; requires a target or --family.
     #[arg(long)]
     clear: bool,
     /// SDK family whose default is cleared; setting a target infers its family.
-    #[arg(long, value_parser = ["java", "gradle", "maven"], default_value = "java", requires = "clear", conflicts_with = "target")]
-    family: String,
+    #[arg(long, value_parser = sdk_family, requires = "clear")]
+    family: Option<String>,
 }
 
-/// Current SDK selection query.
+/// Effective SDK selections and active application commands.
 #[derive(Args)]
 pub(super) struct CurrentArgs {
+    /// Include only SDKs or application commands.
+    #[arg(long, value_enum)]
+    kind: Option<Kind>,
+    /// Include full installation IDs and paths.
+    #[arg(long, short, conflicts_with = "json")]
+    verbose: bool,
     /// Emit structured JSON.
     #[arg(long)]
     json: bool,
@@ -154,49 +163,21 @@ pub(super) struct CurrentArgs {
 /// Command and SDK selection for a child process.
 #[derive(Args)]
 pub(super) struct ExecArgs {
-    /// Explicit installed Java target or installation ID.
-    #[arg(long, value_name = "TARGET")]
-    java: Option<String>,
-    /// Explicit installed Gradle target or installation ID.
-    #[arg(long, value_name = "TARGET")]
-    gradle: Option<String>,
-    /// Explicit installed Maven target or installation ID.
-    #[arg(long, value_name = "TARGET")]
-    maven: Option<String>,
+    /// Select an installed SDK or installation ID; repeat for different families.
+    #[arg(long = "with", value_name = "TARGET")]
+    targets: Vec<String>,
     /// Child executable and uninterpreted arguments.
-    #[arg(required = true, num_args = 1.., trailing_var_arg = true, allow_hyphen_values = true)]
+    #[arg(required = true, num_args = 1.., trailing_var_arg = true)]
     command: Vec<OsString>,
 }
 
-/// CLI shell names.
+/// Installation kinds accepted by status filters.
 #[derive(Clone, Copy, ValueEnum)]
-pub(super) enum ShellArg {
-    /// sh, bash, or zsh.
-    #[value(alias = "bash", alias = "zsh")]
-    Sh,
-    /// PowerShell.
-    Powershell,
-    /// Fish.
-    Fish,
-}
-
-impl ShellArg {
-    /// Returns the environment renderer used by this shell syntax.
-    pub(super) fn shell(self) -> Shell {
-        match self {
-            Self::Sh => Shell::Sh,
-            Self::Powershell => Shell::PowerShell,
-            Self::Fish => Shell::Fish,
-        }
-    }
-}
-
-/// Shell initialization request.
-#[derive(Args)]
-pub(super) struct InitArgs {
-    /// Internal rendering protocol used by the installed initialization scripts.
-    #[arg(long, value_enum, hide = true)]
-    shell: Option<ShellArg>,
+pub(super) enum Kind {
+    /// Runtime and toolchain installations.
+    Sdk,
+    /// Installed applications and their commands.
+    App,
 }
 
 /// Shell activation request, normally supplied by the shell function.
@@ -215,29 +196,12 @@ pub(super) struct DeactivateArgs {
     shell: Option<ShellArg>,
 }
 
-/// Shell environment rendering options.
-#[derive(Args)]
-pub(super) struct EnvArgs {
-    /// Explicit installed Java target or installation ID.
-    #[arg(long, value_name = "TARGET")]
-    java: Option<String>,
-    /// Explicit installed Gradle target or installation ID.
-    #[arg(long, value_name = "TARGET")]
-    gradle: Option<String>,
-    /// Explicit installed Maven target or installation ID.
-    #[arg(long, value_name = "TARGET")]
-    maven: Option<String>,
-    /// Shell whose assignments should be emitted for evaluation by the caller.
-    #[arg(long, value_enum)]
-    shell: ShellArg,
-}
-
 /// Shell or project selection request.
 #[derive(Args)]
 pub(super) struct UseArgs {
     /// Installed SDK target or installation ID.
     targets: Vec<String>,
-    /// Save one selection in the current project without changing the shell.
+    /// Save selections in the current project without changing the shell.
     #[arg(long)]
     project: bool,
     /// Save the exact installation ID instead of its version requirement.
@@ -250,24 +214,15 @@ pub(super) struct UseArgs {
 
 /// Executes SDK commands without embedding policy in argument parsing.
 pub(super) fn run(command: SdkCommand) -> Result<i32> {
-    if let SdkCommand::Init(args) = command {
-        if let Some(shell) = args.shell {
-            print!("{}", super::shell::init(shell.shell())?);
-        } else {
-            super::shell::install()?;
-        }
-        return Ok(0);
-    }
     let manager = SdkManager::user()?;
     let applications = AppManager::user()?;
     match command {
-        SdkCommand::Init(_) => unreachable!(),
         SdkCommand::Activate(args) => {
             let shell =
                 args.shell
                     .ok_or_else(|| {
                         Error::InvalidInput(
-                "run janex init and load the generated shell script before using activate".into(),
+                "run janex shell init and load the generated shell script before using activate".into(),
             )
                     })?
                     .shell();
@@ -303,10 +258,18 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
             println!("Unpinned {}", args.target);
         }
         SdkCommand::Available(args) => {
-            if matches!(args.target.as_str(), "java" | "gradle" | "maven") {
+            if args
+                .target
+                .as_deref()
+                .is_none_or(|target| PRODUCTS.iter().any(|p| p.family == target))
+            {
                 let products = PRODUCTS
                     .iter()
-                    .filter(|p| p.family == args.target)
+                    .filter(|p| {
+                        args.target
+                            .as_deref()
+                            .is_none_or(|target| p.family == target)
+                    })
                     .collect::<Vec<_>>();
                 if args.json {
                     json(&products)?;
@@ -317,7 +280,7 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
                 }
                 return Ok(0);
             }
-            let request = SdkRequest::parse(&args.target)?;
+            let request = SdkRequest::parse(args.target.as_deref().unwrap())?;
             let packages = manager.available(
                 &request,
                 &CatalogOptions {
@@ -405,19 +368,78 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
             }
         }
         SdkCommand::List(args) => {
-            let status = manager.status()?;
-            let app_status = applications.status()?;
+            let status = if matches!(args.kind, Some(Kind::App)) {
+                Default::default()
+            } else {
+                manager.status()?
+            };
+            let app_status = if matches!(args.kind, Some(Kind::Sdk)) {
+                Default::default()
+            } else {
+                applications.status()?
+            };
             if args.json {
                 let mut status = value(&status)?;
                 status["applications"] = value(&app_status)?;
                 json(&status)?;
             } else {
-                for installed in status.installations {
-                    show(&manager, &installed)?;
+                let mut rows = Vec::new();
+                for installed in &status.installations {
+                    let mut flags = Vec::new();
+                    if status.defaults.values().any(|i| i.id == installed.id) {
+                        flags.push("default");
+                    }
+                    if status
+                        .selections
+                        .iter()
+                        .any(|s| s.installation == installed.id && s.pinned)
+                    {
+                        flags.push("pinned");
+                    }
+                    if !installed.managed {
+                        flags.push("external");
+                    }
+                    let mut row = vec!["sdk".into(), installed.sdk.target(), status_text(&flags)];
+                    if args.verbose {
+                        row.extend([
+                            installed.id.clone(),
+                            manager.home(installed)?.display().to_string(),
+                        ]);
+                    }
+                    rows.push(row);
                 }
-                for installed in app_status.installations {
-                    show_application(&applications, &installed)?;
+                let commands = app_status.active_commands()?;
+                for installed in &app_status.installations {
+                    let mut flags = Vec::new();
+                    if commands.values().any(|i| i.id == installed.id) {
+                        flags.push("default");
+                    }
+                    if app_status
+                        .selections
+                        .iter()
+                        .any(|s| s.installation == installed.id && s.pinned)
+                    {
+                        flags.push("pinned");
+                    }
+                    let mut row = vec![
+                        format!("app:{}", installed.application.command),
+                        installed.application.target(),
+                        status_text(&flags),
+                    ];
+                    if args.verbose {
+                        row.extend([
+                            installed.id.clone(),
+                            applications.home(&installed.id)?.display().to_string(),
+                        ]);
+                    }
+                    rows.push(row);
                 }
+                table(
+                    &["KIND", "TARGET", "STATUS"],
+                    &rows,
+                    args.verbose,
+                    "No installations.",
+                );
             }
         }
         SdkCommand::Update(args) => {
@@ -522,8 +544,9 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
                     }
                     request.family()
                 } else {
-                    manager.clear_default(&args.family)?;
-                    &args.family
+                    let family = args.family.as_deref().expect("explicit family required");
+                    manager.clear_default(family)?;
+                    family
                 };
                 println!("Cleared the default {family} selection");
             } else {
@@ -544,53 +567,102 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
             );
         }
         SdkCommand::Current(args) => {
-            let execution = manager.execution(None, Some(&std::env::current_dir()?))?;
-            if args.json {
-                json(
-                    &serde_json::json!({"java_home": execution.home(), "homes": execution.homes()}),
-                )?;
+            let execution = if matches!(args.kind, Some(Kind::App)) {
+                None
             } else {
-                for (family, home) in execution.homes() {
-                    println!("{family}  {}", home.display());
+                Some(manager.execution(&[], Some(&std::env::current_dir()?))?)
+            };
+            let status = if matches!(args.kind, Some(Kind::Sdk)) {
+                Default::default()
+            } else {
+                applications.status()?
+            };
+            let commands = status.active_commands()?;
+            let mut rows = Vec::new();
+            let mut result = serde_json::json!({"sdks": {}, "applications": {}});
+            if let Some(execution) = &execution {
+                if args.json {
+                    result["sdks"] = value(execution.selections())?;
+                } else {
+                    for (family, selected) in execution.selections() {
+                        let source = match &selected.source {
+                            SelectionSource::Explicit => "explicit".into(),
+                            SelectionSource::Environment(name) => format!("environment: {name}"),
+                            SelectionSource::Project(path) => {
+                                format!("project: {}", path.display())
+                            }
+                            SelectionSource::Default => "default".into(),
+                            SelectionSource::System => "system discovery".into(),
+                        };
+                        let mut row = vec![
+                            family.clone(),
+                            selected
+                                .target
+                                .clone()
+                                .unwrap_or_else(|| selected.home.display().to_string()),
+                            source,
+                        ];
+                        if args.verbose {
+                            row.extend([
+                                selected.installation.clone().unwrap_or_else(|| "-".into()),
+                                selected.home.display().to_string(),
+                            ]);
+                        }
+                        rows.push(row);
+                    }
                 }
+            }
+            for (name, installed) in commands {
+                if args.json {
+                    result["applications"][name] = serde_json::json!({
+                        "target": installed.application.target(),
+                        "installation": installed.id,
+                        "home": applications.home(&installed.id)?,
+                        "selection": status.commands[name],
+                    });
+                } else {
+                    let mut row = vec![
+                        format!("app:{name}"),
+                        installed.application.target(),
+                        if status.commands[name].installation.is_some() {
+                            "default: fixed installation"
+                        } else {
+                            "default: saved request"
+                        }
+                        .into(),
+                    ];
+                    if args.verbose {
+                        row.extend([
+                            installed.id.clone(),
+                            applications.home(&installed.id)?.display().to_string(),
+                        ]);
+                    }
+                    rows.push(row);
+                }
+            }
+            if args.json {
+                json(&result)?;
+            } else {
+                table(
+                    &["TOOL", "SELECTION", "SOURCE"],
+                    &rows,
+                    args.verbose,
+                    "No active selections.",
+                );
             }
         }
         SdkCommand::Exec(args) => {
-            let execution = manager.execution_with(
-                args.java.as_deref(),
-                args.gradle.as_deref(),
-                args.maven.as_deref(),
-                Some(&std::env::current_dir()?),
-            )?;
+            let execution = manager.execution(&args.targets, Some(&std::env::current_dir()?))?;
             return execution
                 .execute(&args.command[0], &args.command[1..])
                 .map(super::exit_code);
         }
-        SdkCommand::Env(args) => {
-            let execution = manager.execution_with(
-                args.java.as_deref(),
-                args.gradle.as_deref(),
-                args.maven.as_deref(),
-                Some(&std::env::current_dir()?),
-            )?;
-            let shell = match args.shell {
-                ShellArg::Sh => Shell::Sh,
-                ShellArg::Powershell => Shell::PowerShell,
-                ShellArg::Fish => Shell::Fish,
-            };
-            print!("{}", execution.environment(shell)?);
-        }
         SdkCommand::Use(args) => {
             if args.project {
-                if args.targets.len() != 1 {
-                    return Err(Error::InvalidInput(
-                        "use --project requires exactly one target".into(),
-                    ));
-                }
                 println!(
                     "{}",
                     manager
-                        .use_project(&args.targets[0], &std::env::current_dir()?, args.pin)?
+                        .use_project(&args.targets, &std::env::current_dir()?, args.pin)?
                         .display()
                 );
             } else {
@@ -608,6 +680,63 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
         }
     }
     Ok(0)
+}
+
+/// Validates a family against the supported SDK product catalog.
+fn sdk_family(value: &str) -> std::result::Result<String, String> {
+    if PRODUCTS.iter().any(|product| product.family == value) {
+        Ok(value.into())
+    } else {
+        Err(format!("unknown SDK family: {value}"))
+    }
+}
+
+/// Joins installation state markers, using a dash for an inactive unpinned installation.
+fn status_text(flags: &[&str]) -> String {
+    if flags.is_empty() {
+        "-".into()
+    } else {
+        flags.join(", ")
+    }
+}
+
+/// Prints aligned summary rows, adding identity and home columns only in verbose mode.
+fn table(headers: &[&str], rows: &[Vec<String>], verbose: bool, empty: &str) {
+    if rows.is_empty() {
+        println!("{empty}");
+        return;
+    }
+    let mut headers = headers.to_vec();
+    if verbose {
+        headers.extend(["ID", "HOME"]);
+    }
+    let widths = headers
+        .iter()
+        .enumerate()
+        .map(|(index, header)| {
+            rows.iter()
+                .map(|row| row[index].chars().count())
+                .chain(std::iter::once(header.len()))
+                .max()
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    for row in std::iter::once(headers.iter().map(|v| v.to_string()).collect::<Vec<_>>())
+        .chain(rows.iter().cloned())
+    {
+        let columns = row
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                if index + 1 == row.len() {
+                    value.clone()
+                } else {
+                    format!("{value:width$}", width = widths[index])
+                }
+            })
+            .collect::<Vec<_>>();
+        println!("{}", columns.join("  "));
+    }
 }
 
 /// Displays an installation's exact target, ID, and home.

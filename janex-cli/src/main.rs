@@ -8,7 +8,7 @@ mod integration;
 mod sdk;
 mod shell;
 
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use janex_host::pack::{PackOptions, PackSigner, pack};
 use janex_host::{
     authentication::{self, CmsAlgorithm, MATERIAL_LIMITS, OpenPgpAlgorithm},
@@ -50,6 +50,9 @@ enum Command {
     /// Manage installed SDK versions and execution environments.
     #[command(flatten)]
     Sdk(sdk::SdkCommand),
+    /// Configure shell integration and print SDK environments.
+    #[command(subcommand)]
+    Shell(shell::ShellCommand),
     /// Package a directory or JAR as a Janex application.
     Pack(Box<PackArgs>),
     /// Run a local Janex file or an installed Maven application.
@@ -281,7 +284,56 @@ fn dispatch() -> janex_host::Result<i32> {
             return manager.execute(&name, true, options).map(exit_code);
         }
     }
-    run(Cli::parse())
+    let matches = cli_command().get_matches();
+    run(Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit()))
+}
+
+/// Groups top-level help while deriving command descriptions from the parser definitions.
+fn cli_command() -> clap::Command {
+    let command = Cli::command();
+    let mut help = String::from(
+        "Manage SDKs, package and launch applications with Janex\n\nUsage: janex <COMMAND>\n",
+    );
+    for (heading, names) in [
+        (
+            "Installations",
+            &[
+                "install",
+                "list",
+                "available",
+                "update",
+                "uninstall",
+                "pin",
+                "unpin",
+                "home",
+            ][..],
+        ),
+        (
+            "Selection and execution",
+            &[
+                "run",
+                "exec",
+                "use",
+                "default",
+                "current",
+                "activate",
+                "deactivate",
+            ][..],
+        ),
+        ("Packages", &["pack", "inspect"][..]),
+        ("Configuration", &["shell", "integration", "open"][..]),
+    ] {
+        help.push_str(&format!("\n{heading}:\n"));
+        for name in names {
+            let subcommand = command.find_subcommand(name).expect("help command exists");
+            help.push_str(&format!(
+                "  {name:<12} {}\n",
+                subcommand.get_about().unwrap()
+            ));
+        }
+    }
+    help.push_str("\nOptions:\n  -h, --help     Print help\n  -V, --version  Print version\n\nUse janex <COMMAND> --help for options and arguments.\n");
+    command.override_help(help)
 }
 
 /// Executes a parsed command without interpreting argument contents as shell text.
@@ -295,6 +347,7 @@ fn run(cli: Cli) -> janex_host::Result<i32> {
         Command::Integration(command) => return integration::run(command).map(|()| 0),
         Command::Inspect(args) => return inspect::run(args),
         Command::Sdk(command) => return sdk::run(command),
+        Command::Shell(command) => return shell::run(command),
         Command::Pack(args) => {
             let args = *args;
             let mut options = PackOptions::new(args.source, args.output);
@@ -505,8 +558,53 @@ fn exit_code(status: ExitStatus) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    //! Command parsing must stop interpreting options at the local target.
+    //! Command scopes and argument forwarding remain independent of application arguments.
     use super::*;
+
+    #[test]
+    fn command_scopes_and_execution_argument_boundary_are_explicit() {
+        for arguments in [
+            vec!["janex", "default", "--clear"],
+            vec!["janex", "default", "--family", "java"],
+            vec!["janex", "default", "--clear", "--family", "unknown"],
+            vec!["janex", "init"],
+            vec!["janex", "env"],
+        ] {
+            assert!(Cli::try_parse_from(arguments).is_err());
+        }
+        let matches = cli_command()
+            .try_get_matches_from([
+                "janex",
+                "exec",
+                "--with",
+                "sdk:gradle@9",
+                "--",
+                "gradle",
+                "--with",
+                "literal",
+                "",
+                "--help",
+            ])
+            .unwrap();
+        let arguments = matches.subcommand_matches("exec").unwrap();
+        assert_eq!(
+            arguments
+                .get_many::<OsString>("command")
+                .unwrap()
+                .cloned()
+                .collect::<Vec<_>>(),
+            ["gradle", "--with", "literal", "", "--help"].map(OsString::from)
+        );
+        let mut command = cli_command();
+        let help = command.render_help().to_string();
+        for subcommand in Cli::command().get_subcommands() {
+            assert!(
+                help.lines()
+                    .any(|line| line.split_whitespace().next() == Some(subcommand.get_name()))
+            );
+        }
+        assert!(help.contains("Installations:") && help.contains("Configuration:"));
+    }
 
     #[test]
     fn run_forwards_every_argument_after_the_target() {

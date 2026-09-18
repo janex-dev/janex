@@ -14,10 +14,10 @@ executable is a prefix for creating self-launching application packages.
 ```shell
 janex install sdk:bellsoft/liberica-jdk@21
 janex default sdk:bellsoft/liberica-jdk@21
-janex init
+janex shell init
 ```
 
-`janex init` writes shell integration scripts into `JANEX_HOME/shell` and prints loading commands.
+`janex shell init` writes shell integration scripts into `JANEX_HOME/shell` and prints loading commands.
 `JANEX_HOME` defaults to `~/.janex`; set it to an absolute path to use another directory.
 The executable can reside elsewhere. SDK installations are separate from disposable dependency caches.
 Shell startup files are not modified automatically.
@@ -30,7 +30,7 @@ For example:
 janex activate
 ```
 
-After moving the executable, run `janex init` again and reload the script.
+After moving the executable, run `janex shell init` again and reload the script.
 See the [CLI guide](docs/spec/CLI.md) for packaging, launching, and SDK commands.
 
 Use `janex integration register` to add Janex to the system's file-opening options, and
@@ -52,7 +52,7 @@ Install JDK 25, Rust, and the platform's native build tools. Use the root Gradle
 ```
 
 Release binaries are written to `target/release/` unless Cargo output settings override it.
-`installJanex` copies executables into the specified directory; run `janex init` separately.
+`installJanex` copies executables into the specified directory; run `janex shell init` separately.
 
 Use `packageArtifacts -PjanexTarget=<rust-target>` to build, check, and package a distribution
 under `build/distributions/`. Windows archives use ZIP; Unix archives use tar.xz and require `xz`.

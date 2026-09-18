@@ -43,12 +43,25 @@ for the project's long-term direction and delivery priorities.
   and evaluate only successful native results. Validate real interpreters and failure atomicity.
   Keep automatic directory hooks as subsequent work.
 - Distribute executables independently of `JANEX_HOME`, with embedded shell templates.
-  `janex init` writes all supported loaders into `JANEX_HOME/shell`, binding the current executable
+  `janex shell init` writes all supported loaders into `JANEX_HOME/shell`, binding the current executable
   and user directory. Keep shell rendering internal and retain integration after `deactivate`.
   Reinitialization updates only managed scripts. Root Gradle installation accepts an explicit
   executable directory; platform archives contain executables and documentation at the root.
 - Keep SDK switching based on shell environment updates. Application installation exposes
   stable command entry points in `JANEX_HOME/bin`, independently of the active SDK environment.
+
+## CLI Interaction
+
+- Keep `install`, `list`, `update`, and version selection shared across SDKs and applications.
+  Require explicit targets when clearing defaults; catalog queries without a target list all SDK products.
+- Use repeatable `--with` SDK selectors for `exec` and `shell env`. Keep `use` shell-local;
+  `use --project` writes multiple family selections atomically after resolving every target.
+- Group top-level help by workflow. Keep loader setup and environment rendering under `shell`.
+  Show concise installation summaries and selection sources; expose IDs and paths with `--verbose`
+  and structured records with `--json`. Support SDK/application filters on `list` and `current`.
+- Reserve project dependency operations (`add`, `remove`, `lock`, `sync`) and named task execution
+  (`task`) for future work. Keep `run` focused on applications and `exec` on child commands in an SDK
+  environment. Temporary package execution must not change global command entries or defaults.
 
 ## Maven Application Installation
 
