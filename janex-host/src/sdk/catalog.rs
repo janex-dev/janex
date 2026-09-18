@@ -657,7 +657,7 @@ mod tests {
 
     #[test]
     fn metadata_cannot_override_requested_platform_or_version() {
-        let request = SdkRequest::parse("adoptium/temurin-jdk@21").unwrap();
+        let request = SdkRequest::parse("sdk:adoptium/temurin-jdk@21").unwrap();
         let row = serde_json::json!({"id": "1234abcd", "distribution": "temurin", "java_version": "21.0.8+12",
             "operating_system": disco_os(&request.platform.as_ref().unwrap().os), "architecture": request.platform.as_ref().unwrap().arch,
             "package_type": "jdk", "archive_type": "zip", "release_status": "ga", "javafx_bundled": false,

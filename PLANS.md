@@ -10,7 +10,9 @@ for the project's long-term direction and delivery priorities.
   independently of their tool family, named variant, provider, and target OS/architecture/libc.
 - Query BellSoft directly for Liberica JDK/JRE editions and NIK product releases; use Foojay Disco
   for the other supported Java products. Record bundled Java versions separately from product versions.
-- Use one selector syntax for SDK versions, variants, and platforms in single- and multi-target commands;
+- Require `sdk:product@version` for SDK selectors across commands and project toolchain files;
+  reject unprefixed product selectors. Keep family queries and exact installation IDs distinct.
+  Use the same per-target variant and platform qualifiers in single- and multi-target commands;
   keep operation options separate and validate all install selectors before starting.
 - Store product, version, variant, and optional platform in one shared SDK request model.
   Let each product define its variants and default; Gradle supports `bin` and `all`, with independent

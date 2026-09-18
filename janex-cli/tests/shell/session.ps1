@@ -15,14 +15,14 @@ if ($env:PATH -ne $originalPath) { throw 'Initialization duplicated PATH entries
 janex activate
 if ($env:GRADLE_HOME -ne $env:JANEX_TEST_FIRST) { throw 'Initial project selection failed' }
 if ((gradle) -ne 'fixture') { throw 'Direct tool lookup failed' }
-janex use gradle@8.14.3
+janex use sdk:gradle@8.14.3
 if ($LASTEXITCODE -ne 0 -or $env:GRADLE_HOME -ne $env:JANEX_TEST_SECOND) { throw 'Shell switch failed' }
 janex activate
 if ($env:GRADLE_HOME -ne $env:JANEX_TEST_SECOND) { throw 'Activation lost manual selection' }
 if (($env:PATH -split ';') -contains "$env:JANEX_TEST_FIRST\bin") { throw 'Old SDK remains on PATH' }
 $previousPath = $env:PATH
 $previousState = $env:JANEX_SHELL_STATE
-janex use gradle@8.14.2 maven@99.0.0 2>$null
+janex use sdk:gradle@8.14.2 sdk:maven@99.0.0 2>$null
 if ($LASTEXITCODE -eq 0 -or $env:PATH -ne $previousPath -or $env:JANEX_SHELL_STATE -ne $previousState) { throw 'Failure changed environment' }
 janex use --invalid-option 2>$null
 if ($LASTEXITCODE -ne 2) { throw 'Native exit code was not preserved' }
@@ -31,7 +31,7 @@ if ($env:GRADLE_HOME -ne $env:JANEX_TEST_FIRST) { throw 'Project reset failed' }
 Set-Location $env:JANEX_TEST_OTHER
 janex use
 if ($env:GRADLE_HOME -ne $env:JANEX_TEST_SECOND) { throw 'Generated home blocked project change' }
-janex use --project gradle@8.14.2
+janex use --project sdk:gradle@8.14.2
 if ($LASTEXITCODE -ne 0 -or $env:GRADLE_HOME -ne $env:JANEX_TEST_SECOND) { throw 'Project write changed shell' }
 janex use
 if ($env:GRADLE_HOME -ne $env:JANEX_TEST_FIRST) { throw 'Updated project was not read' }

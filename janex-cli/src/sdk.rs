@@ -59,7 +59,7 @@ pub(super) struct PinArgs {
 /// Catalog listing request.
 #[derive(Args)]
 pub(super) struct AvailableArgs {
-    /// Product selector, or a tool family such as java to list its products.
+    /// sdk:product@version selector, or a tool family such as java to list its products.
     #[arg(default_value = "java")]
     target: String,
     /// Use only cached catalog metadata.
@@ -76,7 +76,7 @@ pub(super) struct AvailableArgs {
 /// Installation or external registration request.
 #[derive(Args)]
 pub(super) struct InstallArgs {
-    /// SDK selector, Maven PURL, or maven:group:artifact@version shorthand.
+    /// sdk:product@version, a Maven PURL, or maven:group:artifact@version.
     #[arg(required = true)]
     targets: Vec<String>,
     /// Fix the selected build against subsequent update commands.
@@ -311,7 +311,7 @@ pub(super) fn run(command: SdkCommand) -> Result<i32> {
                     json(&products)?;
                 } else {
                     for product in products {
-                        println!("{}  {}", product.id, product.variants.join(", "));
+                        println!("sdk:{}  {}", product.id, product.variants.join(", "));
                     }
                 }
                 return Ok(0);
@@ -665,7 +665,7 @@ enum InstallRequest {
 }
 
 impl InstallRequest {
-    /// Selects the ecosystem from an explicit application prefix or SDK product identity.
+    /// Selects the resolver from an explicit PURL, maven: or sdk: prefix.
     fn parse(target: &str) -> Result<Self> {
         if AppRequest::recognizes(target) {
             AppRequest::parse(target).map(Self::App)

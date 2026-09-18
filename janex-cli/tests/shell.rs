@@ -52,7 +52,7 @@ fn register(root: &Path, home: &Path, version: &str) {
         Command::new(env!("CARGO_BIN_EXE_janex"))
             .env("JANEX_HOME", home)
             .env_remove("JANEX_SHELL_STATE")
-            .args(["install", &format!("gradle@{version}"), "--path"])
+            .args(["install", &format!("sdk:gradle@{version}"), "--path"])
             .arg(root)
             .output()
             .unwrap(),
@@ -87,12 +87,12 @@ fn exercise(shell: &str, script: &str, extension: &str) {
     fs::create_dir(&other).unwrap();
     fs::write(
         project.join(".janex-toolchains.toml"),
-        "gradle = 'gradle@8.14.2'\n",
+        "gradle = 'sdk:gradle@8.14.2'\n",
     )
     .unwrap();
     fs::write(
         other.join(".janex-toolchains.toml"),
-        "gradle = 'gradle@8.14.3'\n",
+        "gradle = 'sdk:gradle@8.14.3'\n",
     )
     .unwrap();
     let script_path = temp.path().join(format!("test.{extension}"));
@@ -189,7 +189,7 @@ fn native_use_requires_integration_and_does_not_write_project_files() {
         .env("JANEX_HOME", temp.path().join("home"))
         .env_remove("JANEX_SHELL_STATE")
         .current_dir(temp.path())
-        .args(["use", "gradle@8"])
+        .args(["use", "sdk:gradle@8"])
         .output()
         .unwrap();
     assert!(!result.status.success());

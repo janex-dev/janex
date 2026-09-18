@@ -48,7 +48,7 @@ fn registered_sdk_supports_selection_exec_and_safe_unregister() {
     let home = temp.path().join("home");
     let project = temp.path().join("project's workspace");
     fs::create_dir(&project).unwrap();
-    let target = format!("bellsoft/liberica-jdk@{}", runtime.feature);
+    let target = format!("sdk:bellsoft/liberica-jdk@{}", runtime.feature);
     let output = success(invoke(
         &home,
         &project,
@@ -148,7 +148,7 @@ fn empty_list_is_read_only_and_malformed_requests_do_not_create_installations() 
     success(invoke(&home, temp.path(), &["list", "--json"]));
     assert!(!home.exists());
     for target in [
-        "bellsoft/liberica-jdk@../21",
+        "sdk:bellsoft/liberica-jdk@../21",
         "java:../vendor@21",
         "org.example:app:1.0",
     ] {
@@ -162,6 +162,58 @@ fn empty_list_is_read_only_and_malformed_requests_do_not_create_installations() 
 }
 
 #[test]
+fn sdk_prefix_is_required_across_commands_and_project_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let output = invoke(
+        &home,
+        temp.path(),
+        &["install", "sdk:gradle@9", "gradle@9", "--offline"],
+    );
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("sdk: prefix")
+    );
+    assert!(!home.exists());
+
+    for args in [
+        vec!["available", "gradle@9", "--offline"],
+        vec!["home", "gradle@9"],
+        vec!["default", "gradle@9"],
+        vec!["update", "gradle@9"],
+        vec!["pin", "gradle@9"],
+        vec!["unpin", "gradle@9"],
+        vec!["uninstall", "gradle@9.1.0"],
+        vec!["use", "gradle@9", "--project"],
+        vec!["use", "gradle@9", "--shell", "powershell"],
+        vec!["env", "--gradle", "gradle@9", "--shell", "powershell"],
+        vec!["exec", "--gradle", "gradle@9", "--", "unused-command"],
+    ] {
+        let output = invoke(&home, temp.path(), &args);
+        assert!(!output.status.success(), "{args:?}");
+        let error = String::from_utf8(output.stderr).unwrap();
+        assert!(error.contains("sdk: prefix"), "{args:?}: {error}");
+    }
+
+    fs::write(
+        temp.path().join(".janex-toolchains.toml"),
+        "gradle = 'gradle@9'\n",
+    )
+    .unwrap();
+    let output = invoke(&home, temp.path(), &["current"]);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("sdk: prefix")
+    );
+    let products = success(invoke(&home, temp.path(), &["available", "gradle"]));
+    assert!(products.starts_with("sdk:gradle/gradle  "));
+}
+
+#[test]
 fn install_rejects_shared_qualifiers_and_validates_all_targets_before_starting() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
@@ -171,7 +223,7 @@ fn install_rejects_shared_qualifiers_and_validates_all_targets_before_starting()
         ("--os", "linux"),
         ("--libc", "musl"),
     ] {
-        for targets in [vec!["gradle@9"], vec!["gradle@9", "maven@3.9"]] {
+        for targets in [vec!["sdk:gradle@9"], vec!["sdk:gradle@9", "sdk:maven@3.9"]] {
             let mut args = vec!["install"];
             args.extend(targets);
             args.extend([option, value, "--offline"]);
@@ -185,8 +237,8 @@ fn install_rejects_shared_qualifiers_and_validates_all_targets_before_starting()
         temp.path(),
         &[
             "install",
-            "gradle@9",
-            "gradle@9[variant=invalid]",
+            "sdk:gradle@9",
+            "sdk:gradle@9[variant=invalid]",
             "--offline",
         ],
     );
@@ -237,7 +289,7 @@ fn portable_tools_share_commands_and_preserve_independent_selections() {
     let maven = temp.path().join("Maven home");
     tool_fixture(&gradle, "gradle", "8.14.3");
     tool_fixture(&maven, "maven", "3.9.9");
-    for (target, path) in [("gradle@8", &gradle), ("maven@3.9", &maven)] {
+    for (target, path) in [("sdk:gradle@8", &gradle), ("sdk:maven@3.9", &maven)] {
         success(invoke(
             &home,
             &project,
@@ -248,7 +300,7 @@ fn portable_tools_share_commands_and_preserve_independent_selections() {
         success(invoke(&home, &project, &["update", target]));
     }
     let text = fs::read_to_string(project.join(".janex-toolchains.toml")).unwrap();
-    assert!(text.contains("gradle@8") && text.contains("maven@3.9"));
+    assert!(text.contains("sdk:gradle@8") && text.contains("sdk:maven@3.9"));
     for command in ["gradle", "mvn"] {
         let output = success(invoke(
             &home,
@@ -284,7 +336,7 @@ fn portable_tools_share_commands_and_preserve_independent_selections() {
         !invoke(
             &home,
             &project,
-            &["install", "gradle@8[arch=x86]", "--offline"]
+            &["install", "sdk:gradle@8[arch=x86]", "--offline"]
         )
         .status
         .success()
@@ -293,15 +345,15 @@ fn portable_tools_share_commands_and_preserve_independent_selections() {
         !invoke(
             &home,
             &project,
-            &["exec", "--java", "gradle@8", "--", "java", "-version"]
+            &["exec", "--java", "sdk:gradle@8", "--", "java", "-version"]
         )
         .status
         .success()
     );
-    success(invoke(&home, &project, &["uninstall", "gradle@8.14.3"]));
+    success(invoke(&home, &project, &["uninstall", "sdk:gradle@8.14.3"]));
     assert!(gradle.is_dir());
     assert!(
-        !invoke(&home, &project, &["uninstall", "maven@3.9.9"])
+        !invoke(&home, &project, &["uninstall", "sdk:maven@3.9.9"])
             .status
             .success()
     );
@@ -310,7 +362,7 @@ fn portable_tools_share_commands_and_preserve_independent_selections() {
         &project,
         &["default", "--clear", "--family", "maven"],
     ));
-    success(invoke(&home, &project, &["uninstall", "maven@3.9.9"]));
+    success(invoke(&home, &project, &["uninstall", "sdk:maven@3.9.9"]));
     assert!(maven.is_dir());
 }
 
@@ -339,7 +391,7 @@ fn cli_selects_platform_defaults_variants_and_portable_project_requests() {
     let home = temp.path().join("home");
     let project = temp.path().join("project");
     fs::create_dir(&project).unwrap();
-    let product = "bellsoft/liberica-jdk@21";
+    let product = "sdk:bellsoft/liberica-jdk@21";
     for arch in ["x86-64", "aarch64"] {
         let sdk = temp.path().join(arch);
         java_fixture(&sdk, arch);
@@ -436,7 +488,7 @@ fn cli_selects_platform_defaults_variants_and_portable_project_requests() {
             &project,
             &[
                 "uninstall",
-                "bellsoft/liberica-jdk@21.0.8+12[arch=aarch64,variant=full]"
+                "sdk:bellsoft/liberica-jdk@21.0.8+12[arch=aarch64,variant=full]"
             ]
         )
         .status
@@ -456,7 +508,7 @@ fn cli_selects_platform_defaults_variants_and_portable_project_requests() {
         &project,
         &[
             "uninstall",
-            "bellsoft/liberica-jdk@21.0.8+12[arch=aarch64,variant=full]",
+            "sdk:bellsoft/liberica-jdk@21.0.8+12[arch=aarch64,variant=full]",
         ],
     ));
     assert!(temp.path().join("aarch64/release").exists());
@@ -493,7 +545,7 @@ fn gradle_variants_flow_through_cli_projects_and_shell_selection() {
             &project,
             &[
                 "install",
-                &format!("gradle@9[variant={variant}]"),
+                &format!("sdk:gradle@9[variant={variant}]"),
                 "--path",
                 tool.to_str().unwrap(),
             ],
@@ -505,7 +557,7 @@ fn gradle_variants_flow_through_cli_projects_and_shell_selection() {
             &project,
             &[
                 "install",
-                "gradle@9[variant=all]",
+                "sdk:gradle@9[variant=all]",
                 "--path",
                 temp.path().join("gradle-bin").to_str().unwrap()
             ]
@@ -523,8 +575,8 @@ fn gradle_variants_flow_through_cli_projects_and_shell_selection() {
         &project,
         &[
             "install",
-            "gradle@9[variant=all]",
-            "gradle@9",
+            "sdk:gradle@9[variant=all]",
+            "sdk:gradle@9",
             "--offline",
             "--json",
         ],
@@ -535,7 +587,11 @@ fn gradle_variants_flow_through_cli_projects_and_shell_selection() {
     success(invoke(
         &home,
         &project,
-        &["update", "gradle@9[variant=all]", "gradle@9[variant=bin]"],
+        &[
+            "update",
+            "sdk:gradle@9[variant=all]",
+            "sdk:gradle@9[variant=bin]",
+        ],
     ));
     for variant in ["bin", "all"] {
         assert!(
@@ -547,26 +603,26 @@ fn gradle_variants_flow_through_cli_projects_and_shell_selection() {
         let path = success(invoke(
             &home,
             &project,
-            &["home", &format!("gradle@9[variant={variant}]")],
+            &["home", &format!("sdk:gradle@9[variant={variant}]")],
         ));
         assert!(path.trim().ends_with(&format!("gradle-{variant}")));
     }
     success(invoke(
         &home,
         &project,
-        &["default", "gradle@9[variant=all]"],
+        &["default", "sdk:gradle@9[variant=all]"],
     ));
     success(invoke(
         &home,
         &project,
-        &["use", "gradle@9[variant=all]", "--project"],
+        &["use", "sdk:gradle@9[variant=all]", "--project"],
     ));
     let text = fs::read_to_string(project.join(".janex-toolchains.toml")).unwrap();
-    assert!(text.contains("gradle@9[variant=all]"));
+    assert!(text.contains("sdk:gradle@9[variant=all]"));
     let environment = success(invoke(
         &home,
         &project,
-        &["use", "gradle@9[variant=bin]", "--shell", "powershell"],
+        &["use", "sdk:gradle@9[variant=bin]", "--shell", "powershell"],
     ));
     assert!(environment.contains("gradle-bin"));
     let output = success(invoke(
@@ -575,31 +631,43 @@ fn gradle_variants_flow_through_cli_projects_and_shell_selection() {
         &[
             "exec",
             "--gradle",
-            "gradle@9[variant=all]",
+            "sdk:gradle@9[variant=all]",
             "--",
             "gradle",
             "test argument",
         ],
     ));
     assert!(output.contains("gradle-all") && output.contains("test argument"));
-    success(invoke(&home, &project, &["unpin", "gradle@9[variant=all]"]));
-    success(invoke(&home, &project, &["pin", "gradle@9[variant=all]"]));
+    success(invoke(
+        &home,
+        &project,
+        &["unpin", "sdk:gradle@9[variant=all]"],
+    ));
+    success(invoke(
+        &home,
+        &project,
+        &["pin", "sdk:gradle@9[variant=all]"],
+    ));
     success(invoke(&home, &project, &["update", "--all"]));
     success(invoke(
         &home,
         &project,
-        &["uninstall", "gradle@9.1.0[variant=bin]"],
+        &["uninstall", "sdk:gradle@9.1.0[variant=bin]"],
     ));
     assert!(
-        !invoke(&home, &project, &["home", "gradle@9"])
+        !invoke(&home, &project, &["home", "sdk:gradle@9"])
             .status
             .success()
     );
     assert!(temp.path().join("gradle-bin").is_dir());
     assert!(
-        !invoke(&home, &project, &["uninstall", "gradle@9.1.0[variant=all]"])
-            .status
-            .success()
+        !invoke(
+            &home,
+            &project,
+            &["uninstall", "sdk:gradle@9.1.0[variant=all]"]
+        )
+        .status
+        .success()
     );
     let products: serde_json::Value = serde_json::from_str(&success(invoke(
         &home,

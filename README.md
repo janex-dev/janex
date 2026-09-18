@@ -12,8 +12,8 @@ Place `janex` (`janex.exe` on Windows) in a directory on PATH. The optional `jan
 executable is a prefix for creating self-launching application packages.
 
 ```shell
-janex install bellsoft/liberica-jdk@21
-janex default bellsoft/liberica-jdk@21
+janex install sdk:bellsoft/liberica-jdk@21
+janex default sdk:bellsoft/liberica-jdk@21
 janex init
 ```
 

@@ -172,7 +172,7 @@ mod tests {
     #[test]
     fn catalog_keeps_product_editions_platforms_and_nik_versions_distinct() {
         let request =
-            SdkRequest::parse("bellsoft/liberica-jdk@21[os=windows,arch=aarch64,variant=full]")
+            SdkRequest::parse("sdk:bellsoft/liberica-jdk@21[os=windows,arch=aarch64,variant=full]")
                 .unwrap();
         let row = serde_json::json!({"GA":true,"os":"windows","architecture":"arm","bitness":64,"packageType":"zip","bundleType":"jdk-full","version":"21.0.8+12","filename":"jdk-full.zip"});
         let mut other = row.clone();
@@ -187,7 +187,7 @@ mod tests {
         assert_eq!(packages.len(), 1);
         assert_eq!(packages[0].version, "21.0.8+12");
         let request =
-            SdkRequest::parse("bellsoft/liberica-nik@24[os=windows,arch=x86-64]").unwrap();
+            SdkRequest::parse("sdk:bellsoft/liberica-nik@24[os=windows,arch=x86-64]").unwrap();
         let row = serde_json::json!({"GA":true,"os":"windows","architecture":"x86","bitness":64,"packageType":"zip","bundleType":"standard","version":"24.0.2+1","component":"nik","filename":"nik.zip","components":[{"component":"liberica","version":"21.0.8+12"}]});
         let packages = parse_packages(&serde_json::json!([row]), request.java().unwrap()).unwrap();
         assert_eq!(packages[0].version, "24.0.2+1");

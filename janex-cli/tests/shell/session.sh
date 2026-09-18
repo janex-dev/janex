@@ -16,14 +16,14 @@ test "$PATH" = "$original_path"
 janex activate
 test "$GRADLE_HOME" = "$JANEX_TEST_FIRST"
 test "$(gradle)" = fixture
-janex use gradle@8.14.3
+janex use sdk:gradle@8.14.3
 test "$GRADLE_HOME" = "$JANEX_TEST_SECOND"
 janex activate
 test "$GRADLE_HOME" = "$JANEX_TEST_SECOND"
 case ":$PATH:" in *":$JANEX_TEST_FIRST/bin:"*) exit 20;; esac
 previous_path=$PATH
 previous_state=$JANEX_SHELL_STATE
-if janex use gradle@8.14.2 maven@99.0.0 2>/dev/null; then exit 21; fi
+if janex use sdk:gradle@8.14.2 sdk:maven@99.0.0 2>/dev/null; then exit 21; fi
 test "$PATH" = "$previous_path"
 test "$JANEX_SHELL_STATE" = "$previous_state"
 result=0
@@ -34,7 +34,7 @@ test "$GRADLE_HOME" = "$JANEX_TEST_FIRST"
 cd "$JANEX_TEST_OTHER"
 janex use
 test "$GRADLE_HOME" = "$JANEX_TEST_SECOND"
-janex use --project gradle@8.14.2
+janex use --project sdk:gradle@8.14.2
 test "$GRADLE_HOME" = "$JANEX_TEST_SECOND"
 janex use
 test "$GRADLE_HOME" = "$JANEX_TEST_FIRST"

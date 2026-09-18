@@ -92,7 +92,7 @@ mod tests {
 
     #[test]
     fn version_requirements_and_build_order() {
-        let mut request = SdkRequest::parse("bellsoft/liberica-jdk@21").unwrap();
+        let mut request = SdkRequest::parse("sdk:bellsoft/liberica-jdk@21").unwrap();
         assert!(request.matches("21.0.8+12"));
         assert!(!request.matches("22+1"));
         request.version = "21.0.8".into();
@@ -104,14 +104,14 @@ mod tests {
         assert!(version_order("21.0.10+1", "21.0.9+30").is_gt());
         assert!(version_order("21.0.8+12", "21.0.8+9").is_gt());
         assert!(
-            SdkRequest::parse("bellsoft/liberica-jdk@latest")
+            SdkRequest::parse("sdk:bellsoft/liberica-jdk@latest")
                 .unwrap()
                 .matches("25.0.1+8")
         );
         for target in [
-            "bellsoft/liberica-jdk@../21",
-            "bellsoft/liberica-jdk@21-ea",
-            "bellsoft/liberica-jdk@21+",
+            "sdk:bellsoft/liberica-jdk@../21",
+            "sdk:bellsoft/liberica-jdk@21-ea",
+            "sdk:bellsoft/liberica-jdk@21+",
             "java:../bad@21",
             "example@21",
         ] {

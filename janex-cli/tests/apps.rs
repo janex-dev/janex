@@ -454,14 +454,14 @@ fn janex_artifacts_and_invalid_batches_are_handled_before_publication() {
     success(invoke(
         &home,
         temp.path(),
-        &["install", "gradle@9", "--path", sdk.to_str().unwrap()],
+        &["install", "sdk:gradle@9", "--path", sdk.to_str().unwrap()],
     ));
     let mixed: serde_json::Value = serde_json::from_str(&success(invoke(
         &home,
         temp.path(),
         &[
             "install",
-            "gradle@9",
+            "sdk:gradle@9",
             &target,
             &janex_target,
             "--offline",
@@ -479,7 +479,7 @@ fn janex_artifacts_and_invalid_batches_are_handled_before_publication() {
         temp.path(),
         &[
             "install",
-            "gradle@9",
+            "sdk:gradle@9",
             "maven:org.example:bad@1[arch=aarch64]",
             "--offline",
         ],
@@ -492,7 +492,7 @@ fn janex_artifacts_and_invalid_batches_are_handled_before_publication() {
         temp.path(),
         &[
             "install",
-            "gradle@9",
+            "sdk:gradle@9",
             "pkg:npm/typescript@5.9.2",
             "--offline",
         ],

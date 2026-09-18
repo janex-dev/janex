@@ -924,10 +924,10 @@ mod tests {
         let manager = SdkManager::new(temp.path().join("home")).unwrap();
         assert!(manager.list().unwrap().is_empty());
         assert!(!manager.root.exists());
-        let request = SdkRequest::parse("bellsoft/liberica-jdk@21").unwrap();
+        let request = SdkRequest::parse("sdk:bellsoft/liberica-jdk@21").unwrap();
         let old = fixture(&manager, &request, "21.0.8+12", false);
         assert!(manager.default_installation("java").unwrap().is_none());
-        manager.set_default("bellsoft/liberica-jdk@21").unwrap();
+        manager.set_default("sdk:bellsoft/liberica-jdk@21").unwrap();
         let new = fixture(&manager, &request, "21.0.9+10", false);
         assert_eq!(manager.list().unwrap().len(), 2);
         assert_eq!(
@@ -942,7 +942,7 @@ mod tests {
                 .to_string()
                 .contains("default")
         );
-        assert!(manager.uninstall("bellsoft/liberica-jdk@21").is_err());
+        assert!(manager.uninstall("sdk:bellsoft/liberica-jdk@21").is_err());
         manager.set_default(&old.id).unwrap();
         assert_eq!(
             manager.default_installation("java").unwrap().unwrap().id,
@@ -959,7 +959,7 @@ mod tests {
     fn running_lease_blocks_removal_and_pin_prevents_network_updates() {
         let temp = tempfile::tempdir().unwrap();
         let manager = SdkManager::new(temp.path().to_owned()).unwrap();
-        let request = SdkRequest::parse("bellsoft/liberica-jdk@21").unwrap();
+        let request = SdkRequest::parse("sdk:bellsoft/liberica-jdk@21").unwrap();
         let installed = fixture(&manager, &request, "21.0.8+12", true);
         let offline = CatalogOptions {
             offline: true,
@@ -986,7 +986,7 @@ mod tests {
     fn external_unregister_preserves_files_and_project_pins_exact_id() {
         let temp = tempfile::tempdir().unwrap();
         let manager = SdkManager::new(temp.path().join("home")).unwrap();
-        let request = SdkRequest::parse("bellsoft/liberica-jdk@21").unwrap();
+        let request = SdkRequest::parse("sdk:bellsoft/liberica-jdk@21").unwrap();
         let installed = fixture(&manager, &request, "21.0.8+12", true);
         let project = temp.path().join("project");
         fs::create_dir(&project).unwrap();
@@ -1009,7 +1009,7 @@ mod tests {
     fn corrupt_or_escaping_registry_is_rejected() {
         let temp = tempfile::tempdir().unwrap();
         let manager = SdkManager::new(temp.path().to_owned()).unwrap();
-        let request = SdkRequest::parse("bellsoft/liberica-jdk@21").unwrap();
+        let request = SdkRequest::parse("sdk:bellsoft/liberica-jdk@21").unwrap();
         fixture(&manager, &request, "21.0.8+12", true);
         let mut state = manager.read().unwrap();
         state.installations[0].home = "../outside".into();
@@ -1025,17 +1025,17 @@ mod tests {
         let manager = SdkManager::new(temp.path().join("home")).unwrap();
         let java = fixture(
             &manager,
-            &SdkRequest::parse("bellsoft/liberica-jdk@21").unwrap(),
+            &SdkRequest::parse("sdk:bellsoft/liberica-jdk@21").unwrap(),
             "21.0.8+12",
             true,
         );
-        let gradle_request = SdkRequest::parse("gradle@8").unwrap();
+        let gradle_request = SdkRequest::parse("sdk:gradle@8").unwrap();
         let old = fixture(&manager, &gradle_request, "8.14.2", false);
-        let maven_request = SdkRequest::parse("maven@3.9").unwrap();
+        let maven_request = SdkRequest::parse("sdk:maven@3.9").unwrap();
         let maven = fixture(&manager, &maven_request, "3.9.9", true);
         manager.set_default(&java.id).unwrap();
-        manager.set_default("gradle@8").unwrap();
-        manager.set_default("maven@3.9").unwrap();
+        manager.set_default("sdk:gradle@8").unwrap();
+        manager.set_default("sdk:maven@3.9").unwrap();
         let new = fixture(&manager, &gradle_request, "8.14.3", false);
         let status = manager.status().unwrap();
         assert_eq!(status.defaults[&java.sdk.default_key()].id, java.id);
@@ -1043,7 +1043,7 @@ mod tests {
         assert_eq!(status.defaults["gradle"].id, new.id);
         assert_eq!(status.installations.len(), 4);
         assert!(manager.home(&old).unwrap().exists());
-        assert!(manager.uninstall("maven@3.9").is_err());
+        assert!(manager.uninstall("sdk:maven@3.9").is_err());
         let offline = CatalogOptions {
             offline: true,
             ..Default::default()
@@ -1055,13 +1055,15 @@ mod tests {
         let project = temp.path().join("project");
         fs::create_dir(&project).unwrap();
         manager.use_project(&java.id, &project, true).unwrap();
-        manager.use_project("gradle@8", &project, false).unwrap();
+        manager
+            .use_project("sdk:gradle@8", &project, false)
+            .unwrap();
         let path = manager.use_project(&maven.id, &project, true).unwrap();
         let content = fs::read_to_string(path).unwrap();
         assert!(
             content.contains(&java.id)
                 && content.contains(&maven.id)
-                && content.contains("gradle@8")
+                && content.contains("sdk:gradle@8")
         );
         let execution = manager
             .execution_with(
@@ -1090,9 +1092,11 @@ mod tests {
     fn platform_defaults_updates_and_project_selectors_remain_independent() {
         let temp = tempfile::tempdir().unwrap();
         let manager = SdkManager::new(temp.path().join("home")).unwrap();
-        let x64 = SdkRequest::parse("bellsoft/liberica-jdk@21[arch=x86-64,variant=full]").unwrap();
-        let arm = SdkRequest::parse("bellsoft/liberica-jdk@21[arch=aarch64,variant=full]").unwrap();
-        let standard = SdkRequest::parse("bellsoft/liberica-jdk@21[arch=x86-64]").unwrap();
+        let x64 =
+            SdkRequest::parse("sdk:bellsoft/liberica-jdk@21[arch=x86-64,variant=full]").unwrap();
+        let arm =
+            SdkRequest::parse("sdk:bellsoft/liberica-jdk@21[arch=aarch64,variant=full]").unwrap();
+        let standard = SdkRequest::parse("sdk:bellsoft/liberica-jdk@21[arch=x86-64]").unwrap();
         let old_x64 = fixture(&manager, &x64, "21.0.8+12", false);
         let old_arm = fixture(&manager, &arm, "21.0.8+12", false);
         let plain = fixture(&manager, &standard, "21.0.8+12", false);
@@ -1144,7 +1148,7 @@ mod tests {
         fs::create_dir(&project).unwrap();
         manager
             .use_project(
-                "bellsoft/liberica-jdk@21[arch=x86-64,variant=full]",
+                "sdk:bellsoft/liberica-jdk@21[arch=x86-64,variant=full]",
                 &project,
                 false,
             )
@@ -1152,13 +1156,13 @@ mod tests {
         let text = fs::read_to_string(project.join(".janex-toolchains.toml")).unwrap();
         assert!(text.contains("arch=x86-64,variant=full"));
         assert!(!text.contains("os="));
-        let native = SdkRequest::parse("bellsoft/liberica-jdk@21").unwrap();
+        let native = SdkRequest::parse("sdk:bellsoft/liberica-jdk@21").unwrap();
         fixture(&manager, &native, "21.0.9+10", false);
         manager
-            .use_project("bellsoft/liberica-jdk@21", &project, false)
+            .use_project("sdk:bellsoft/liberica-jdk@21", &project, false)
             .unwrap();
         let text = fs::read_to_string(project.join(".janex-toolchains.toml")).unwrap();
-        assert_eq!(text.trim(), "java = \"bellsoft/liberica-jdk@21\"");
+        assert_eq!(text.trim(), "java = \"sdk:bellsoft/liberica-jdk@21\"");
     }
 
     #[test]
@@ -1166,8 +1170,10 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let manager = SdkManager::new(temp.path().join("home")).unwrap();
         let os = if cfg!(windows) { "linux" } else { "windows" };
-        let request =
-            SdkRequest::parse(&format!("bellsoft/liberica-jdk@21[os={os},arch=aarch64]")).unwrap();
+        let request = SdkRequest::parse(&format!(
+            "sdk:bellsoft/liberica-jdk@21[os={os},arch=aarch64]"
+        ))
+        .unwrap();
         let installed = fixture(&manager, &request, "21.0.8+12", false);
         assert_eq!(installed.java_version.as_deref(), Some("21.0.8"));
         assert!(
@@ -1186,28 +1192,28 @@ mod tests {
     fn nik_installations_keep_product_and_runtime_versions_separate() {
         let temp = tempfile::tempdir().unwrap();
         let manager = SdkManager::new(temp.path().join("home")).unwrap();
-        let request = SdkRequest::parse("bellsoft/liberica-nik@24").unwrap();
+        let request = SdkRequest::parse("sdk:bellsoft/liberica-nik@24").unwrap();
         let installed = fixture(&manager, &request, "24.0.2+1", false);
         assert_eq!(installed.sdk.version(), "24.0.2+1");
         assert_eq!(installed.java_version.as_deref(), Some("21.0.8"));
         assert_eq!(
-            manager.resolve("bellsoft/liberica-nik@24").unwrap().id,
+            manager.resolve("sdk:bellsoft/liberica-nik@24").unwrap().id,
             installed.id
         );
-        assert!(manager.resolve("bellsoft/liberica-jdk@21").is_err());
-        assert!(manager.resolve("bellsoft/liberica-nik@21").is_err());
+        assert!(manager.resolve("sdk:bellsoft/liberica-jdk@21").is_err());
+        assert!(manager.resolve("sdk:bellsoft/liberica-nik@21").is_err());
     }
     #[test]
     fn gradle_variants_coexist_and_keep_independent_update_bindings() {
         let temp = tempfile::tempdir().unwrap();
         let manager = SdkManager::new(temp.path().join("home")).unwrap();
-        let bin = SdkRequest::parse("gradle@9").unwrap();
-        let all = SdkRequest::parse("gradle@9[variant=all]").unwrap();
+        let bin = SdkRequest::parse("sdk:gradle@9").unwrap();
+        let all = SdkRequest::parse("sdk:gradle@9[variant=all]").unwrap();
         let first_bin = fixture(&manager, &bin, "9.0.0", false);
         let first_all = fixture(&manager, &all, "9.0.0", false);
         assert_ne!(first_bin.id, first_all.id);
-        assert_eq!(manager.resolve("gradle@9").unwrap().id, first_bin.id);
-        manager.set_default("gradle@9[variant=all]").unwrap();
+        assert_eq!(manager.resolve("sdk:gradle@9").unwrap().id, first_bin.id);
+        manager.set_default("sdk:gradle@9[variant=all]").unwrap();
         manager.set_pin(&all, true).unwrap();
         let next_bin = fixture(&manager, &bin, "9.1.0", false);
         assert_eq!(
@@ -1227,7 +1233,7 @@ mod tests {
                 .id,
             first_all.id
         );
-        assert_eq!(manager.resolve("gradle@9").unwrap().id, next_bin.id);
+        assert_eq!(manager.resolve("sdk:gradle@9").unwrap().id, next_bin.id);
         manager.set_pin(&all, false).unwrap();
         let next_all = fixture(&manager, &all, "9.1.0", false);
         assert_eq!(
@@ -1237,12 +1243,15 @@ mod tests {
         assert_eq!(manager.list().unwrap().len(), 4);
         assert_eq!(manager.selections().unwrap().len(), 2);
         assert_eq!(
-            manager.uninstall("gradle@9.0.0[variant=all]").unwrap().id,
+            manager
+                .uninstall("sdk:gradle@9.0.0[variant=all]")
+                .unwrap()
+                .id,
             first_all.id
         );
         assert!(manager.home(&first_bin).unwrap().exists());
         assert_eq!(
-            manager.resolve("gradle@9[variant=all]").unwrap().id,
+            manager.resolve("sdk:gradle@9[variant=all]").unwrap().id,
             next_all.id
         );
     }

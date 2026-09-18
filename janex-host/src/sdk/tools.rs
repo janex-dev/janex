@@ -235,7 +235,7 @@ mod tests {
 
     #[test]
     fn catalogs_exclude_previews_and_check_maven_coordinates() {
-        let request = SdkRequest::parse("gradle@latest").unwrap();
+        let request = SdkRequest::parse("sdk:gradle@latest").unwrap();
         let rows = serde_json::json!([
             {"version":"9.0.0", "snapshot":false,"nightly":false,"releaseNightly":false,"broken":false},
             {"version":"9.1.0-rc-1", "snapshot":false,"nightly":false,"releaseNightly":false,"broken":false},
@@ -244,7 +244,7 @@ mod tests {
         assert_eq!(gradle_packages(&rows, &request).unwrap().len(), 1);
         let xml = b"<metadata><groupId>org.apache.maven</groupId><artifactId>apache-maven</artifactId><versioning><versions><version>3.9.9</version><version>4.0.0-rc-1</version></versions></versioning></metadata>";
         assert_eq!(
-            maven_packages(xml, &SdkRequest::parse("maven@latest").unwrap())
+            maven_packages(xml, &SdkRequest::parse("sdk:maven@latest").unwrap())
                 .unwrap()
                 .len(),
             1
@@ -258,7 +258,7 @@ mod tests {
         std::fs::create_dir_all(&metadata).unwrap();
         let mut packages = Vec::new();
         for (variant, digit) in [("bin", "a"), ("all", "b")] {
-            let request = SdkRequest::parse(&format!("gradle@9[variant={variant}]")).unwrap();
+            let request = SdkRequest::parse(&format!("sdk:gradle@9[variant={variant}]")).unwrap();
             let package = package(&request, "9.1.0");
             let url =
                 format!("https://services.gradle.org/distributions/gradle-9.1.0-{variant}.zip");

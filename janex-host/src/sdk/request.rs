@@ -21,9 +21,13 @@ pub struct SdkRequest {
 }
 
 impl SdkRequest {
-    /// Parses a product selector with optional `[variant=...,os=...,arch=...,libc=...]` qualifiers.
+    /// Parses an `sdk:product[@version]` selector with optional
+    /// `[variant=...,os=...,arch=...,libc=...]` qualifiers. The `sdk:` prefix is required.
     /// Missing versions mean `latest`; the product defines its default variant and platform support.
     pub fn parse(text: &str) -> Result<Self> {
+        let text = text.strip_prefix("sdk:").ok_or_else(|| {
+            invalid("SDK targets require the sdk: prefix; use sdk:publisher/product@version")
+        })?;
         let (base, qualifiers) = split_selector(text)?;
         let (id, version) = base.split_once('@').unwrap_or((base, "latest"));
         let product = super::product::product(id)?;
@@ -106,9 +110,12 @@ impl SdkRequest {
         exact
     }
 
-    /// Returns a lossless selector including the product variant and any target platform.
+    /// Returns a lossless `sdk:` selector including the product variant and any target platform.
     pub fn target(&self) -> String {
-        let mut result = format!("{}@{}[variant={}", self.product, self.version, self.variant);
+        let mut result = format!(
+            "sdk:{}@{}[variant={}",
+            self.product, self.version, self.variant
+        );
         if let Some(platform) = &self.platform {
             result.push_str(&format!(
                 ",os={},arch={},libc={}",
@@ -267,52 +274,83 @@ mod tests {
     use super::*;
 
     #[test]
+    fn selectors_require_sdk_prefix_and_preserve_product_identity() {
+        for bare in [
+            "bellsoft/liberica-jdk",
+            "bellsoft/liberica-jdk@21",
+            "gradle",
+            "gradle@9",
+            "maven@3.9",
+        ] {
+            let error = SdkRequest::parse(bare).unwrap_err().to_string();
+            assert!(error.contains("sdk: prefix"), "{bare}: {error}");
+            let request = SdkRequest::parse(&format!("sdk:{bare}")).unwrap();
+            assert!(!request.product().starts_with("sdk:"));
+            assert!(request.target().starts_with("sdk:"));
+            assert_eq!(SdkRequest::parse(&request.target()).unwrap(), request);
+        }
+        assert_eq!(
+            SdkRequest::parse("sdk:gradle").unwrap(),
+            SdkRequest::parse("sdk:gradle/gradle@latest").unwrap()
+        );
+        assert_eq!(
+            SdkRequest::parse("sdk:maven@3.9").unwrap(),
+            SdkRequest::parse("sdk:apache/maven@3.9").unwrap()
+        );
+    }
+
+    #[test]
     fn tool_series_and_exact_releases_are_distinct() {
-        assert!(SdkRequest::parse("gradle@8").unwrap().matches("8.14.3"));
-        assert!(SdkRequest::parse("maven@3.9").unwrap().matches("3.9.9"));
-        assert!(!SdkRequest::parse("maven@3.9.9").unwrap().matches("3.9.10"));
+        assert!(SdkRequest::parse("sdk:gradle@8").unwrap().matches("8.14.3"));
+        assert!(SdkRequest::parse("sdk:maven@3.9").unwrap().matches("3.9.9"));
         assert!(
-            !SdkRequest::parse("maven@latest")
+            !SdkRequest::parse("sdk:maven@3.9.9")
+                .unwrap()
+                .matches("3.9.10")
+        );
+        assert!(
+            !SdkRequest::parse("sdk:maven@latest")
                 .unwrap()
                 .matches("4.0.0-rc-1")
         );
         assert!(
-            !SdkRequest::parse("gradle@8")
+            !SdkRequest::parse("sdk:gradle@8")
                 .unwrap()
-                .accepts(&SdkRequest::parse("maven@8").unwrap())
+                .accepts(&SdkRequest::parse("sdk:maven@8").unwrap())
         );
-        assert!(SdkRequest::parse("gradle@../8").is_err());
+        assert!(SdkRequest::parse("sdk:gradle@../8").is_err());
     }
     #[test]
     fn products_variants_and_platforms_have_lossless_selectors() {
         let full =
-            SdkRequest::parse("bellsoft/liberica-jdk@21[variant=full,arch=arm64,os=windows]")
+            SdkRequest::parse("sdk:bellsoft/liberica-jdk@21[variant=full,arch=arm64,os=windows]")
                 .unwrap();
         assert_eq!(SdkRequest::parse(&full.target()).unwrap(), full);
         assert_eq!(full.platform.as_ref().unwrap().arch, "aarch64");
-        let nik = SdkRequest::parse("bellsoft/liberica-nik@21[os=windows,arch=aarch64]").unwrap();
+        let nik =
+            SdkRequest::parse("sdk:bellsoft/liberica-nik@21[os=windows,arch=aarch64]").unwrap();
         assert!(!full.accepts(&nik));
         assert_eq!(
-            SdkRequest::parse("bellsoft/liberica-jdk")
+            SdkRequest::parse("sdk:bellsoft/liberica-jdk")
                 .unwrap()
                 .version(),
             "latest"
         );
         for invalid in [
-            "bellsoft@21",
+            "sdk:bellsoft@21",
             "java:bellsoft@21",
-            "bellsoft/python@3",
-            "adoptium/temurin-jdk@21[variant=full]",
-            "bellsoft/liberica-jdk@21[arch=x86,arch=aarch64]",
-            "bellsoft/liberica-jdk@21[os=windows,libc=musl]",
+            "sdk:bellsoft/python@3",
+            "sdk:adoptium/temurin-jdk@21[variant=full]",
+            "sdk:bellsoft/liberica-jdk@21[arch=x86,arch=aarch64]",
+            "sdk:bellsoft/liberica-jdk@21[os=windows,libc=musl]",
         ] {
             assert!(SdkRequest::parse(invalid).is_err(), "{invalid}");
         }
     }
     #[test]
     fn portable_variants_are_part_of_the_common_product_request() {
-        let bin = SdkRequest::parse("gradle@9").unwrap();
-        let all = SdkRequest::parse("gradle@9[variant=all]").unwrap();
+        let bin = SdkRequest::parse("sdk:gradle@9").unwrap();
+        let all = SdkRequest::parse("sdk:gradle@9[variant=all]").unwrap();
         assert_eq!(bin.variant, "bin");
         assert_eq!(all.variant, "all");
         assert!(bin.platform.is_none() && all.platform.is_none());
@@ -321,12 +359,15 @@ mod tests {
         assert!(all.accepts(&all.with_version("9.1.0")));
         assert_eq!(all.with_version("9.1.0").variant, "all");
         assert_eq!(SdkRequest::parse(&all.target()).unwrap(), all);
-        assert_eq!(SdkRequest::parse("maven@3.9").unwrap().variant, "standard");
+        assert_eq!(
+            SdkRequest::parse("sdk:maven@3.9").unwrap().variant,
+            "standard"
+        );
         for invalid in [
-            "gradle@9[variant=standard]",
-            "gradle@9[variant=full]",
-            "gradle@9[arch=aarch64]",
-            "maven@3.9[variant=all]",
+            "sdk:gradle@9[variant=standard]",
+            "sdk:gradle@9[variant=full]",
+            "sdk:gradle@9[arch=aarch64]",
+            "sdk:maven@3.9[variant=all]",
         ] {
             assert!(SdkRequest::parse(invalid).is_err(), "{invalid}");
         }
