@@ -4,7 +4,7 @@
 //! Persistent Maven application installation and native command dispatch.
 
 mod request;
-pub use request::AppRequest;
+pub use request::{AppRequest, DependencyMode, JarOptions};
 
 use crate::{
     Result,
@@ -39,6 +39,32 @@ pub struct Installation {
     pub sha256: String,
     /// Original artifact URL.
     pub source: String,
+    /// Installed JAR entry point and ordered dependency closure; absent for Janex containers.
+    pub jar: Option<JarLaunch>,
+}
+
+/// Installation-time launch data, read without consulting POMs during startup.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct JarLaunch {
+    /// Binary name of the selected application entry point.
+    pub main_class: String,
+    /// Minimum Java feature required by the entry-point class file.
+    pub java_feature: u32,
+    /// Runtime dependencies in classpath order; the application JAR precedes these entries.
+    pub dependencies: Vec<InstalledDependency>,
+}
+
+/// An immutable dependency owned by an application installation.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InstalledDependency {
+    /// Canonical concrete Maven package identity.
+    pub purl: String,
+    /// Original download URL.
+    pub source: String,
+    /// SHA-256 of the unmodified dependency bytes.
+    pub sha256: String,
+    /// Path relative to the application installation directory.
+    pub file: PathBuf,
 }
 
 /// A saved version requirement and its selected installed release.
@@ -179,17 +205,65 @@ impl AppManager {
         };
         let url = exact.url(false)?;
         let bytes = self.fetch(&url, options, options.max_bytes)?;
-        validate_artifact(&bytes, &exact)?;
+        let mut jar = validate_artifact(&bytes, &exact)?;
         let sha256 = digest(&bytes)?;
+        let repository = Url::parse(&exact.repository).unwrap();
+        let dependencies = if exact.kind == "jar" && exact.jar.dependencies == DependencyMode::Maven
+        {
+            crate::maven::runtime_dependencies(
+                &crate::maven::Artifact {
+                    group: exact.group.clone(),
+                    name: exact.artifact.clone(),
+                    version: exact.version.clone().unwrap(),
+                    extension: "jar".into(),
+                    classifier: exact.classifier.clone(),
+                },
+                &repository,
+                |url| self.fetch(url, options, 4 * 1024 * 1024),
+            )?
+        } else {
+            Vec::new()
+        };
+        fs::create_dir_all(self.root.join("apps"))?;
+        let stage = tempfile::tempdir_in(self.root.join("apps"))?;
+        write_artifact(&stage.path().join(exact.filename()), &bytes)?;
+        for dependency in dependencies {
+            let url = dependency.url(&repository);
+            let bytes = self.fetch(&url, options, options.max_bytes)?;
+            zip::ZipArchive::new(std::io::Cursor::new(&bytes)).map_err(|e| {
+                invalid(format!(
+                    "invalid dependency JAR {}: {e}",
+                    dependency.filename()
+                ))
+            })?;
+            let sha256 = digest(&bytes)?;
+            let file = PathBuf::from("lib")
+                .join(&sha256)
+                .join(dependency.filename());
+            write_artifact(&stage.path().join(&file), &bytes)?;
+            jar.as_mut()
+                .unwrap()
+                .dependencies
+                .push(InstalledDependency {
+                    purl: dependency.purl(&repository),
+                    source: url.into(),
+                    sha256,
+                    file,
+                });
+        }
         let id = format!(
             "app-{}",
-            digest(format!("{}\0{}\0{sha256}", exact.purl(), exact.command).as_bytes())?
+            digest(
+                &serde_json::to_vec(&(&exact, &sha256, &jar))
+                    .map_err(|e| invalid(e.to_string()))?
+            )?
         );
         let installed = Installation {
             id,
             application: exact,
             sha256,
             source: url.into(),
+            jar,
         };
         let _lock = self.lock(true)?;
         let mut state = self.read()?;
@@ -211,12 +285,6 @@ impl AppManager {
                 ));
             }
         } else {
-            fs::create_dir_all(self.root.join("apps"))?;
-            let stage = tempfile::tempdir_in(self.root.join("apps"))?;
-            let mut file = fs::File::create(stage.path().join(installed.application.filename()))?;
-            file.write_all(&bytes)?;
-            file.sync_all()?;
-            drop(file);
             fs::rename(stage.path(), &directory)?;
         }
         fs::create_dir_all(self.root.join("state/app-leases"))?;
@@ -405,14 +473,20 @@ impl AppManager {
         let _lease = fs::File::open(self.lease_path(&installed.id))?;
         fs4::FileExt::lock_shared(&_lease)?;
         options.target = self.artifact_path(installed);
-        let kind = installed.application.kind.clone();
         drop(lock);
         if command {
             options.invocation = "command".into();
         }
         options.allow_unsigned = true;
-        if kind == "jar" {
-            crate::run::prepare_jar(&options)?.execute()
+        if let Some(jar) = &installed.jar {
+            let directory = options.target.parent().unwrap();
+            let class_path = jar
+                .dependencies
+                .iter()
+                .map(|d| directory.join(&d.file))
+                .collect::<Vec<_>>();
+            crate::run::prepare_jar(&options, &jar.main_class, jar.java_feature, &class_path)?
+                .execute()
         } else {
             crate::run::prepare(&options)?.execute()
         }
@@ -547,6 +621,25 @@ impl AppManager {
                 || !installed.sha256.bytes().all(|b| b.is_ascii_hexdigit())
             {
                 return Err(invalid("invalid application installation identity"));
+            }
+            if (installed.application.kind == "jar") != installed.jar.is_some() {
+                return Err(invalid(
+                    "application launch metadata does not match its artifact type",
+                ));
+            }
+            if let Some(jar) = &installed.jar {
+                for dependency in &jar.dependencies {
+                    if dependency.file.as_os_str().is_empty()
+                        || dependency
+                            .file
+                            .components()
+                            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+                    {
+                        return Err(invalid(
+                            "application dependency path escapes its installation",
+                        ));
+                    }
+                }
             }
         }
         for selection in &state.selections {
@@ -720,9 +813,17 @@ fn release(bytes: &[u8], request: &AppRequest) -> Result<String> {
 }
 
 /// Checks executable metadata without running application code or resolving POM dependencies.
-fn validate_artifact(bytes: &[u8], request: &AppRequest) -> Result<()> {
+fn validate_artifact(bytes: &[u8], request: &AppRequest) -> Result<Option<JarLaunch>> {
     if request.kind == "jar" {
-        crate::run::jar_entry(std::io::Cursor::new(bytes))?;
+        let (main_class, java_feature) = crate::run::jar_entry(
+            std::io::Cursor::new(bytes),
+            request.jar.main_class.as_deref(),
+        )?;
+        Ok(Some(JarLaunch {
+            main_class,
+            java_feature,
+            dependencies: Vec::new(),
+        }))
     } else {
         let mut reader = janex_format::container::Reader::open_auto(
             std::io::Cursor::new(bytes),
@@ -731,6 +832,15 @@ fn validate_artifact(bytes: &[u8], request: &AppRequest) -> Result<()> {
         reader.verify_checksums()?;
         let applications = janex_format::application::read_applications(&mut reader)?;
         janex_format::application::select_application(&applications, None)?;
+        Ok(None)
     }
+}
+
+/// Writes an owned installation artifact before publishing the directory.
+fn write_artifact(path: &Path, bytes: &[u8]) -> Result<()> {
+    fs::create_dir_all(path.parent().unwrap())?;
+    let mut file = fs::File::create(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
     Ok(())
 }

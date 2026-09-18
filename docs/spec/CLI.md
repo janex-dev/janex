@@ -265,14 +265,43 @@ owned by other products are not overwritten.
 Application installation currently supports Maven PURLs with `type=jar` or `type=janex`, without
 subpaths. Unsupported types and qualifiers are rejected before installation.
 
-JARs are kept unchanged and must contain `Main-Class` and its class. POM dependency resolution and
-snapshots are not implemented. JAR manifest `Class-Path`, `Launcher-Agent-Class`, `Add-Exports`,
+JAR installation reads the published POM, resolves its runtime dependencies, and downloads the
+selected JARs. It supports parent POMs, properties, imported BOMs, dependency management, classifiers,
+exclusions, optional dependencies, and Maven's nearest-version and declaration-order rules.
+The application is the root project, so its direct optional dependencies are included; optional
+dependencies of libraries are not inherited. Test and provided artifacts are not added to the
+runtime classpath.
+
+Installation records the exact dependencies, their SHA-256 digests, and classpath order. Both launch
+modes use this saved classpath, with the application JAR first. Startup does not read POMs or contact
+repositories. Updating resolves a new dependency set and retains the old installation.
+
+JARs remain unchanged. The entry point comes from `Main-Class`, or from a per-target `main-class`
+option. Use `dependencies=none` for a self-contained JAR, including an executable Spring Boot JAR:
+
+```shell
+janex install 'pkg:maven/org.example/tool@1.0[main-class=example.Main]'
+janex install 'maven:org.example:tool@1.0[classifier=all,dependencies=none]'
+```
+
+The bracketed options are Janex installation settings, separate from the PURL. They work with both
+full PURLs and Maven shorthands. The selected main class must be present in the application JAR.
+The default `dependencies=maven` requires a POM; a missing POM does not silently disable resolution.
+
+Resolution uses the selected Maven repository for the entire graph. POM repository declarations do
+not add repositories. Active-by-default profiles are supported; environment-activated profiles that
+affect dependency selection, version ranges, snapshots, relocations, system dependencies, and custom
+artifact handlers are not yet supported and cause an error when needed by the model or graph.
+
+JAR manifest `Class-Path`, `Launcher-Agent-Class`, `Add-Exports`,
 `Add-Opens`, and `Enable-Native-Access` are not yet supported by this installation path.
-Janex packages must contain one application. Signed packages still require explicit signer pins
+Janex packages must contain one application and use their own dependency declarations; their Maven
+POM does not extend the classpath. Signed packages still require explicit signer pins
 through `janex run`; command entries do not store trust configuration. Installing a package never runs it.
 
 Application downloads use the shared cache, but installations own separate files under
-`JANEX_HOME/apps`. Clearing download caches does not remove installed artifacts. A package's remote
+`JANEX_HOME/apps`, including JAR applications' resolved dependencies. Clearing download caches does
+not remove these files. A Janex package's remote
 dependencies may still need their cache or network access at launch. `list --json` includes application
 records under `applications`; `update --all` updates saved SDK and application requests, respecting pins.
 

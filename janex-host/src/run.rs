@@ -587,16 +587,26 @@ fn target_path(target: &Path) -> Result<PathBuf> {
     Ok(target.into())
 }
 
-/// Reads a standalone executable JAR's main class and its minimum class-file Java feature.
+/// Reads a JAR's selected main class and its minimum class-file Java feature.
 /// External manifest paths and native-launcher-only manifest actions are not supported here.
-pub(crate) fn jar_entry(input: impl Read + std::io::Seek) -> Result<(String, u32)> {
+pub(crate) fn jar_entry(
+    input: impl Read + std::io::Seek,
+    main_class: Option<&str>,
+) -> Result<(String, u32)> {
     let mut jar = zip::ZipArchive::new(input)
         .map_err(|e| invalid(format!("invalid application JAR: {e}")))?;
     let mut manifest = Vec::new();
-    jar.by_name("META-INF/MANIFEST.MF")
-        .map_err(|_| invalid("application JAR has no manifest"))?
-        .take(1024 * 1024 + 1)
-        .read_to_end(&mut manifest)?;
+    match jar.by_name("META-INF/MANIFEST.MF") {
+        Ok(file) => {
+            file.take(1024 * 1024 + 1).read_to_end(&mut manifest)?;
+        }
+        Err(zip::result::ZipError::FileNotFound) if main_class.is_some() => {}
+        Err(error) => {
+            return Err(invalid(format!(
+                "cannot read application manifest: {error}"
+            )));
+        }
+    }
     if manifest.len() > 1024 * 1024 {
         return Err(invalid("application manifest exceeds byte limit"));
     }
@@ -613,14 +623,16 @@ pub(crate) fn jar_entry(input: impl Read + std::io::Seek) -> Result<(String, u32
             .is_some_and(|value| !value.trim().is_empty())
         {
             return Err(Error::Unsupported(format!(
-                "standalone JAR installation does not support manifest {name}; use a self-contained Janex package"
+                "JAR installation does not support manifest {name}; use a self-contained Janex package"
             )));
         }
     }
-    let main = manifest
-        .get("Main-Class")
+    let main = main_class
+        .or_else(|| manifest.get("Main-Class"))
         .filter(|v| !v.is_empty())
-        .ok_or_else(|| invalid("application JAR has no Main-Class"))?
+        .ok_or_else(|| {
+            invalid("application JAR has no Main-Class; specify a main-class installation option")
+        })?
         .to_owned();
     let mut header = [0; 8];
     jar.by_name(&format!("{}.class", main.replace('.', "/")))
@@ -635,9 +647,14 @@ pub(crate) fn jar_entry(input: impl Read + std::io::Seek) -> Result<(String, u32
     Ok((main, feature))
 }
 
-/// Prepares an installed standalone JAR using managed runtime discovery and lossless bootstrap arguments.
-/// The caller retains the original JAR unchanged until the returned plan finishes executing.
-pub(crate) fn prepare_jar(options: &RunOptions) -> Result<ExecutionPlan> {
+/// Prepares an installed JAR with its saved entry point and ordered runtime dependencies.
+/// The caller retains all installation files unchanged until the returned plan finishes executing.
+pub(crate) fn prepare_jar(
+    options: &RunOptions,
+    main: &str,
+    feature: u32,
+    dependencies: &[PathBuf],
+) -> Result<ExecutionPlan> {
     if options.openpgp_trust.is_some() || !options.cms_trust.signers.is_empty() {
         return Err(Error::Trust(
             "Janex signer pins do not authenticate JAR signatures".into(),
@@ -645,45 +662,41 @@ pub(crate) fn prepare_jar(options: &RunOptions) -> Result<ExecutionPlan> {
     }
     if options.application.is_some() {
         return Err(invalid(
-            "JAR applications have a single manifest entry point",
+            "JAR applications have a single installed entry point",
         ));
     }
     let target = fs::canonicalize(&options.target)?;
-    let file = fs::File::open(&target)?;
-    if file.metadata()?.len() > options.max_snapshot_bytes {
-        return Err(invalid("application JAR exceeds byte limit"));
+    let mut class_path = vec![janex_java::runtime::java_path(&target)];
+    for dependency in dependencies {
+        if !dependency.is_file() {
+            return Err(invalid(format!(
+                "installed application dependency is missing: {}",
+                dependency.display()
+            )));
+        }
+        class_path.push(janex_java::runtime::java_path(dependency));
     }
-    let (main, feature) = jar_entry(file)?;
     for (runtime, sdk_lease) in crate::sdk::application_runtimes(&options.java)? {
         if runtime.feature < feature {
             continue;
         }
-        let mut arguments = if options.launch_mode == LaunchMode::Direct {
-            let mut arguments = vec![
-                OsString::from("-jar"),
-                janex_java::runtime::java_path(&target).into_os_string(),
-            ];
-            arguments.extend(options.arguments.iter().cloned());
-            arguments
-        } else {
-            LaunchRequest {
-                entry_point: EntryPoint {
-                    main_class: Some(main.clone()),
-                    main_module: None,
-                },
-                mode: options.launch_mode,
-                jvm_options: Vec::new(),
-                class_path: vec![janex_java::runtime::java_path(&target)],
-                module_path: Vec::new(),
-                agents: Vec::new(),
-                arguments: options.arguments.clone(),
-            }
-            .prepare(
-                &runtime,
-                target.parent().unwrap(),
-                java_limits(options.limits),
-            )?
-        };
+        let mut arguments = LaunchRequest {
+            entry_point: EntryPoint {
+                main_class: Some(main.into()),
+                main_module: None,
+            },
+            mode: options.launch_mode,
+            jvm_options: Vec::new(),
+            class_path,
+            module_path: Vec::new(),
+            agents: Vec::new(),
+            arguments: options.arguments.clone(),
+        }
+        .prepare(
+            &runtime,
+            target.parent().unwrap(),
+            java_limits(options.limits),
+        )?;
         let environment = launch_environment(&mut arguments, options.launch_mode);
         return Ok(ExecutionPlan {
             runtime,

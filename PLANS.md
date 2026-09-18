@@ -36,7 +36,7 @@ for the project's long-term direction and delivery priorities.
   ownership, and lease machinery. Query official metadata and require SHA-256/SHA-512 sidecars.
 - Keep defaults and project selections independent for Java, Gradle, and Maven. Combine selected
   homes during shell activation and execution; preserve Windows batch launcher behavior.
-- Keep transitive Maven application dependency resolution and additional SDK providers as subsequent work.
+- Keep additional SDK providers as subsequent work.
 - Provide thin Bash, Zsh, sh, Fish, and PowerShell integration around native environment rendering.
   Make `use` shell-local and `use --project` explicit. Retain the activation-time environment,
   remove stale SDK PATH entries, apply project selections without stale generated home overrides,
@@ -60,10 +60,20 @@ for the project's long-term direction and delivery priorities.
 - Store the canonical PURL and content digest independently of local command names and update pins.
   Normalize equivalent inputs before lookup and persistence. Keep per-target shorthand options for
   command names and repository URLs; reject unsupported PURL types, qualifiers, and subpaths.
+- Resolve JAR runtime dependencies during installation with an independent Maven model and graph
+  resolver. Apply parent inheritance before interpolation, import BOMs, and preserve Maven version,
+  scope, optionality, and exclusion rules. Compare edge cases with Maven's model builder and resolver.
+  Use one explicit repository for the graph; reject unsupported model semantics rather than silently
+  omitting dependencies. Keep ranges, snapshots, relocation, and environment activation as subsequent work.
+- Persist exact dependency PURLs, source URLs, digests, and ordered classpaths with each immutable
+  installation. Own dependency files independently of disposable caches. Launch without POM resolution
+  in both direct and bootstrap modes, retaining Unicode argument transport in bootstrap mode.
+- Accept per-target `main-class` and `dependencies=none` installation settings outside package identity.
+  Preserve self-contained JARs and their embedded loaders. Janex containers retain their own dependency
+  declarations rather than inheriting a Maven runtime graph.
 - Keep immutable application releases under `JANEX_HOME/apps`, CBOR installation and selection
   records under `state`, disposable downloads under `cache`, and native command entries under `bin`.
-- Install executable standalone JARs without repackaging and Janex containers without changing their
-  signature policy. Do not resolve POM dependencies or mutable snapshots in the initial implementation.
+- Install JARs without repackaging and Janex containers without changing their signature policy.
 - Preserve versions, pin request bindings, select command defaults, and update only explicit requests.
   Prevent command collisions and removal of active applications. Publish complete files before records.
 - Reuse native runtime selection, managed SDK leases, and both Java launch modes. Forward command

@@ -77,6 +77,7 @@ pub(super) struct AvailableArgs {
 #[derive(Args)]
 pub(super) struct InstallArgs {
     /// sdk:product@version, a Maven PURL, or maven:group:artifact@version.
+    /// JAR targets accept [main-class=...,dependencies=none] local options.
     #[arg(required = true)]
     targets: Vec<String>,
     /// Fix the selected build against subsequent update commands.

@@ -3,14 +3,32 @@
 
 //! Maven application PURLs and CLI shorthands, independent of SDK version rules.
 
+use crate::maven::CENTRAL;
 use crate::{Result, error::invalid};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
 use url::Url;
 
-/// Default repository for Maven applications.
-pub const CENTRAL: &str = "https://repo.maven.apache.org/maven2/";
+/// How a JAR installation obtains its runtime dependencies.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DependencyMode {
+    /// Resolve the published POM's runtime dependency graph at installation time.
+    #[default]
+    Maven,
+    /// Keep a self-contained JAR without reading its POM.
+    None,
+}
+
+/// Local JAR launch options, independent of package identity.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct JarOptions {
+    /// Explicit binary class name; absent uses the manifest's Main-Class.
+    pub main_class: Option<String>,
+    /// Whether installation resolves POM dependencies.
+    pub dependencies: DependencyMode,
+}
 
 /// Characters escaped inside a canonical ECMA-427 component.
 const COMPONENT: &AsciiSet = &NON_ALPHANUMERIC
@@ -33,26 +51,22 @@ pub struct AppRequest {
     /// Exact release, or `None` to follow repository release metadata.
     pub(super) version: Option<String>,
     /// Optional Maven artifact classifier.
-    classifier: Option<String>,
+    pub(super) classifier: Option<String>,
     /// Supported Maven artifact type: `jar` or `janex`.
     pub(super) kind: String,
     /// Canonical HTTPS or absolute file repository URL ending with a slash.
-    repository: String,
+    pub(super) repository: String,
     /// Lowercase command name exposed under the Janex bin directory.
     pub command: String,
+    /// JAR launch options; Janex artifacts require the default value and use their own descriptor.
+    pub jar: JarOptions,
 }
 
 impl AppRequest {
     /// Parses a Maven PURL or `maven:group:artifact[@version]` shorthand.
-    /// Shorthands also accept PURL queries and per-target `[key=value]` options.
+    /// Both forms accept local `[key=value]` options; shorthand options may also name qualifiers.
     /// Versions have the same exact meaning in both forms; omit the version to track releases.
     pub fn parse(text: &str) -> Result<Self> {
-        if text.starts_with("pkg:") {
-            return Self::from_purl(text, None);
-        }
-        let text = text
-            .strip_prefix("maven:")
-            .ok_or_else(|| invalid("expected a Maven PURL or maven:group:artifact"))?;
         let (text, options) = match text.split_once('[') {
             Some((base, rest)) => (
                 base,
@@ -63,16 +77,10 @@ impl AppRequest {
             ),
             None => (text, None),
         };
-        let (coordinates, query) = text.split_once('?').unwrap_or((text, ""));
-        let (coordinates, version) = match coordinates.split_once('@') {
-            Some((coordinates, version)) => (coordinates, Some(decode(version)?)),
-            None => (coordinates, None),
-        };
-        let (group, artifact) = coordinates
-            .split_once(':')
-            .ok_or_else(|| invalid("Maven application requires group:artifact"))?;
-        let mut qualifiers = query_qualifiers(query)?;
         let mut command = None;
+        let mut jar = JarOptions::default();
+        let mut option_qualifiers = BTreeMap::new();
+        let mut local_keys = std::collections::BTreeSet::new();
         if let Some(options) = options {
             for item in options.split(',') {
                 let (key, value) = item
@@ -81,9 +89,21 @@ impl AppRequest {
                 if value.is_empty() {
                     return Err(invalid("empty application option"));
                 }
-                if key == "command" {
-                    if command.replace(value.to_owned()).is_some() {
-                        return Err(invalid("duplicate command option"));
+                if matches!(key, "command" | "main-class" | "dependencies") {
+                    if !local_keys.insert(key) {
+                        return Err(invalid("duplicate application option"));
+                    }
+                    match key {
+                        "command" => command = Some(value.to_owned()),
+                        "main-class" => jar.main_class = Some(value.to_owned()),
+                        "dependencies" => {
+                            jar.dependencies = match value {
+                                "maven" => DependencyMode::Maven,
+                                "none" => DependencyMode::None,
+                                _ => return Err(invalid("dependencies must be maven or none")),
+                            }
+                        }
+                        _ => unreachable!(),
                     }
                 } else {
                     let key = if key == "repository" {
@@ -91,17 +111,42 @@ impl AppRequest {
                     } else {
                         key
                     };
-                    insert_qualifier(&mut qualifiers, key, value.into())?;
+                    insert_qualifier(&mut option_qualifiers, key, value.into())?;
                 }
             }
         }
-        Self::from_parts(
-            decode(group)?,
-            decode(artifact)?,
-            version,
-            qualifiers,
-            command,
-        )
+        let mut request = if text.starts_with("pkg:") {
+            if !option_qualifiers.is_empty() {
+                return Err(invalid("use PURL query qualifiers for package coordinates"));
+            }
+            Self::from_purl(text, command)?
+        } else {
+            let text = text
+                .strip_prefix("maven:")
+                .ok_or_else(|| invalid("expected a Maven PURL or maven:group:artifact"))?;
+            let (coordinates, query) = text.split_once('?').unwrap_or((text, ""));
+            let (coordinates, version) = match coordinates.split_once('@') {
+                Some((coordinates, version)) => (coordinates, Some(decode(version)?)),
+                None => (coordinates, None),
+            };
+            let (group, artifact) = coordinates
+                .split_once(':')
+                .ok_or_else(|| invalid("Maven application requires group:artifact"))?;
+            let mut qualifiers = query_qualifiers(query)?;
+            for (key, value) in option_qualifiers {
+                insert_qualifier(&mut qualifiers, &key, value)?;
+            }
+            Self::from_parts(
+                decode(group)?,
+                decode(artifact)?,
+                version,
+                qualifiers,
+                command,
+            )?
+        };
+        request.jar = jar;
+        request.validate()?;
+        Ok(request)
     }
 
     /// Returns the canonical package reference without local command or update policy fields.
@@ -114,22 +159,40 @@ impl AppRequest {
         text.starts_with("pkg:") || text.starts_with("maven:")
     }
 
-    /// Validates the mutable local command name; package components are validated at construction.
+    /// Validates local launch options; package components are validated at construction.
     pub fn validate(&self) -> Result<()> {
-        command_name(&self.command)
+        command_name(&self.command)?;
+        if self.kind != "jar" && self.jar != JarOptions::default() {
+            return Err(invalid("JAR launch options do not apply to Janex packages"));
+        }
+        if self.jar.main_class.as_ref().is_some_and(|name| {
+            name.is_empty()
+                || name.starts_with('-')
+                || name.chars().any(|c| {
+                    c.is_whitespace() || matches!(c, '/' | '\\' | '[' | ']' | ',' | ';' | '\0')
+                })
+        }) {
+            return Err(invalid("invalid application main class"));
+        }
+        Ok(())
     }
 
-    /// Returns a round-trippable CLI target, using shorthand only for a custom command name.
+    /// Returns a round-trippable PURL followed by nondefault local installation options.
     pub fn target(&self) -> String {
-        if self.command == self.artifact.to_ascii_lowercase() {
+        let mut options = Vec::new();
+        if self.command != self.artifact.to_ascii_lowercase() {
+            options.push(format!("command={}", self.command));
+        }
+        if let Some(main) = &self.jar.main_class {
+            options.push(format!("main-class={main}"));
+        }
+        if self.jar.dependencies == DependencyMode::None {
+            options.push("dependencies=none".into());
+        }
+        if options.is_empty() {
             self.purl.clone()
         } else {
-            // Local command names are not PURL qualifiers.
-            format!(
-                "maven:{}[command={}]",
-                self.purl["pkg:maven/".len()..].replacen('/', ":", 1),
-                self.command
-            )
+            format!("{}[{}]", self.purl, options.join(","))
         }
     }
 
@@ -217,6 +280,7 @@ impl AppRequest {
             kind,
             repository,
             command,
+            jar: JarOptions::default(),
         };
         request.purl = request.encode();
         // Persisted identities use the same canonical PURL rules as package metadata.
@@ -313,9 +377,19 @@ impl Serialize for AppRequest {
     /// Stores the canonical PURL and local command without duplicating package coordinates.
     fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut value = serializer.serialize_struct("AppRequest", 2)?;
+        let mut value = serializer.serialize_struct(
+            "AppRequest",
+            if self.jar == JarOptions::default() {
+                2
+            } else {
+                3
+            },
+        )?;
         value.serialize_field("purl", &self.purl)?;
         value.serialize_field("command", &self.command)?;
+        if self.jar != JarOptions::default() {
+            value.serialize_field("jar", &self.jar)?;
+        }
         value.end()
     }
 }
@@ -330,9 +404,16 @@ impl<'de> Deserialize<'de> for AppRequest {
             purl: String,
             /// Local executable name.
             command: String,
+            /// Local JAR launch policy.
+            #[serde(default)]
+            jar: JarOptions,
         }
         let value = StoredRequest::deserialize(deserializer)?;
-        Self::from_purl(&value.purl, Some(value.command)).map_err(serde::de::Error::custom)
+        let mut request =
+            Self::from_purl(&value.purl, Some(value.command)).map_err(serde::de::Error::custom)?;
+        request.jar = value.jar;
+        request.validate().map_err(serde::de::Error::custom)?;
+        Ok(request)
     }
 }
 
@@ -521,6 +602,25 @@ mod tests {
             latest.url(true).unwrap().as_str(),
             "https://repo.maven.apache.org/maven2/org/example/tool/maven-metadata.xml"
         );
+    }
+
+    #[test]
+    fn jar_launch_options_round_trip_without_becoming_purl_qualifiers() {
+        let request = AppRequest::parse("pkg:maven/org.example/tool@1[main-class=example.Main,dependencies=none,command=custom]").unwrap();
+        assert_eq!(request.purl(), "pkg:maven/org.example/tool@1");
+        assert_eq!(AppRequest::parse(&request.target()).unwrap(), request);
+        assert_eq!(
+            serde_json::from_value::<AppRequest>(serde_json::to_value(&request).unwrap()).unwrap(),
+            request
+        );
+        for target in [
+            "pkg:maven/org.example/tool@1?type=janex[dependencies=none]",
+            "maven:org.example:tool@1[dependencies=other]",
+            "maven:org.example:tool@1[main-class=A,main-class=B]",
+            "pkg:maven/org.example/tool@1?main-class=example.Main",
+        ] {
+            assert!(AppRequest::parse(target).is_err(), "{target}");
+        }
     }
 
     #[test]

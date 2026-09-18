@@ -105,6 +105,7 @@ public class Main {
     fn jar(&self, artifact: &str, version: &str, classifier: Option<&str>) -> PathBuf {
         let directory = self.root.join("org/example").join(artifact).join(version);
         fs::create_dir_all(&directory).unwrap();
+        self.pom(artifact, version, "");
         let path = directory.join(format!(
             "{artifact}-{version}{}.jar",
             classifier.map_or(String::new(), |v| format!("-{v}"))
@@ -121,6 +122,13 @@ public class Main {
                 .unwrap(),
         );
         path
+    }
+
+    /// Publishes the unclassified POM shared by an artifact's classifiers.
+    fn pom(&self, artifact: &str, version: &str, body: &str) {
+        let directory = self.root.join("org/example").join(artifact).join(version);
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join(format!("{artifact}-{version}.pom")), format!("<project><modelVersion>4.0.0</modelVersion><groupId>org.example</groupId><artifactId>{artifact}</artifactId><version>{version}</version>{body}</project>")).unwrap();
     }
 
     /// Publishes an explicit release pointer, independently of version sorting.
@@ -170,6 +178,222 @@ fn native(home: &Path, directory: &Path, name: &str, args: &[&str]) -> Output {
         .args(args)
         .output()
         .unwrap()
+}
+
+#[test]
+fn thin_jars_lock_runtime_dependencies_and_launch_without_the_repository() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let repository = Repository::new(temp.path());
+    let source = temp.path().join("Thin.java");
+    let library = temp.path().join("Library.java");
+    fs::write(&source, "public class Thin { public static void main(String[] args) throws Exception { System.out.println(Library.value()); System.out.println(new java.util.Scanner(Thin.class.getResourceAsStream(\"/dependency.txt\"), \"UTF-8\").nextLine()); for (String arg : args) System.out.println(java.util.Base64.getEncoder().encodeToString(arg.getBytes(\"UTF-8\"))); } }").unwrap();
+    fs::write(
+        &library,
+        "public class Library { public static String value() { return \"dependency-class\"; } }",
+    )
+    .unwrap();
+    let compiler =
+        repository
+            .jar_tool
+            .with_file_name(if cfg!(windows) { "javac.exe" } else { "javac" });
+    success(
+        Command::new(compiler)
+            .args(["--release", "8", "-d"])
+            .arg(&repository.classes)
+            .arg(&source)
+            .arg(&library)
+            .output()
+            .unwrap(),
+    );
+    let app = repository.root.join("org/example/thin/1/thin-1.jar");
+    repository.pom("thin", "1", "<dependencies><dependency><groupId>org.example</groupId><artifactId>library</artifactId><version>1</version></dependency><dependency><groupId>org.example</groupId><artifactId>test-only</artifactId><version>1</version><scope>test</scope></dependency></dependencies>");
+    repository.pom("test-only", "1", "");
+    success(
+        Command::new(&repository.jar_tool)
+            .args(["--create", "--file"])
+            .arg(&app)
+            .args(["--main-class", "Thin", "-C"])
+            .arg(&repository.classes)
+            .arg("Thin.class")
+            .output()
+            .unwrap(),
+    );
+    let lib = repository.root.join("org/example/library/1/library-1.jar");
+    repository.pom("library", "1", "");
+    fs::write(
+        repository.classes.join("dependency.txt"),
+        "dependency-resource\n",
+    )
+    .unwrap();
+    success(
+        Command::new(&repository.jar_tool)
+            .args(["--create", "--file"])
+            .arg(&lib)
+            .arg("-C")
+            .arg(&repository.classes)
+            .arg("Library.class")
+            .arg("-C")
+            .arg(&repository.classes)
+            .arg("dependency.txt")
+            .output()
+            .unwrap(),
+    );
+    let target = repository.purl("thin", Some("1"));
+    let installed: serde_json::Value = serde_json::from_str(&success(invoke(
+        &home,
+        temp.path(),
+        &["install", &target, "--json"],
+    )))
+    .unwrap();
+    let id = installed[0]["id"].as_str().unwrap();
+    let dependencies = installed[0]["jar"]["dependencies"].as_array().unwrap();
+    assert_eq!(dependencies.len(), 1);
+    assert_eq!(installed[0]["jar"]["main_class"], "Thin");
+    let dependency = &dependencies[0];
+    assert!(
+        dependency["purl"]
+            .as_str()
+            .unwrap()
+            .starts_with("pkg:maven/org.example/library@1?")
+    );
+    assert_eq!(dependency["sha256"].as_str().unwrap().len(), 64);
+    let installed_library = home
+        .join("apps")
+        .join(id)
+        .join(dependency["file"].as_str().unwrap());
+    assert_eq!(
+        fs::read(&installed_library).unwrap(),
+        fs::read(&lib).unwrap()
+    );
+
+    // A dependency-only update gets a new installation identity and retains the old closure.
+    repository.pom("library", "2", "");
+    fs::copy(
+        &lib,
+        repository.root.join("org/example/library/2/library-2.jar"),
+    )
+    .unwrap();
+    repository.pom("thin", "1", "<dependencies><dependency><groupId>org.example</groupId><artifactId>library</artifactId><version>2</version></dependency></dependencies>");
+    let updated: serde_json::Value = serde_json::from_str(&success(invoke(
+        &home,
+        temp.path(),
+        &["update", &target, "--json"],
+    )))
+    .unwrap();
+    let updated_id = updated[0]["id"].as_str().unwrap();
+    assert_ne!(id, updated_id);
+    assert_eq!(installed[0]["sha256"], updated[0]["sha256"]);
+    assert!(installed_library.is_file());
+
+    // A missing dependency must leave the previous install and command usable.
+    repository.pom("thin", "1", "<dependencies><dependency><groupId>org.example</groupId><artifactId>missing</artifactId><version>1</version></dependency></dependencies>");
+    assert!(
+        !invoke(&home, temp.path(), &["update", &target])
+            .status
+            .success()
+    );
+    let current: serde_json::Value =
+        serde_json::from_str(&success(invoke(&home, temp.path(), &["list", "--json"]))).unwrap();
+    assert_eq!(
+        current["applications"]["installations"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    fs::remove_dir_all(&repository.root).unwrap();
+    let cache = home.join("cache/dependencies");
+    if cache.exists() {
+        fs::remove_dir_all(cache).unwrap();
+    }
+    for mode in ["direct", "bootstrap"] {
+        let output = success(invoke(
+            &home,
+            temp.path(),
+            &[
+                "run",
+                "--offline",
+                "--launch-mode",
+                mode,
+                &target,
+                "argument with spaces",
+            ],
+        ));
+        assert_eq!(
+            output,
+            "dependency-class\ndependency-resource\nYXJndW1lbnQgd2l0aCBzcGFjZXM=\n"
+        );
+    }
+    assert_eq!(
+        success(native(&home, temp.path(), "thin", &["😀"])),
+        "dependency-class\ndependency-resource\n8J+YgA==\n"
+    );
+    success(invoke(
+        &home,
+        temp.path(),
+        &["install", &target, "--offline"],
+    ));
+    success(invoke(&home, temp.path(), &["uninstall", id]));
+    assert!(!installed_library.exists());
+    success(invoke(&home, temp.path(), &["uninstall", updated_id]));
+}
+
+#[test]
+fn explicit_main_class_and_self_contained_policy_are_local_installation_options() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let repository = Repository::new(temp.path());
+    let artifact = repository.jar("standalone", "1", None);
+    fs::remove_file(artifact.with_extension("pom")).unwrap();
+    // Omit the manifest entirely, requiring the per-target entry point.
+    success(
+        Command::new(&repository.jar_tool)
+            .args(["--create", "--no-manifest", "--file"])
+            .arg(&artifact)
+            .arg("-C")
+            .arg(&repository.classes)
+            .arg(".")
+            .output()
+            .unwrap(),
+    );
+    let purl = repository.purl("standalone", Some("1"));
+    let target = format!("{purl}[main-class=Main,dependencies=none]");
+    let installed: serde_json::Value = serde_json::from_str(&success(invoke(
+        &home,
+        temp.path(),
+        &["install", &target, "--json"],
+    )))
+    .unwrap();
+    assert_eq!(
+        installed[0]["application"]["purl"]
+            .as_str()
+            .unwrap()
+            .split('[')
+            .count(),
+        1
+    );
+    assert_eq!(installed[0]["application"]["jar"]["dependencies"], "none");
+    for mode in ["direct", "bootstrap"] {
+        assert_eq!(
+            success(invoke(
+                &home,
+                temp.path(),
+                &["run", "--launch-mode", mode, &target]
+            )),
+            "1\n"
+        );
+    }
+    let missing = format!("{purl}[main-class=Main]");
+    assert!(
+        !invoke(&home, temp.path(), &["install", &missing])
+            .status
+            .success()
+    );
+    assert_eq!(
+        success(native(&home, temp.path(), "standalone", &[])),
+        "1\n"
+    );
 }
 
 #[test]

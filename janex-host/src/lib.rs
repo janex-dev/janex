@@ -12,6 +12,7 @@ mod error;
 pub mod import;
 pub mod integration;
 pub mod materialize;
+pub mod maven;
 mod modules;
 pub mod native_launcher;
 pub mod pack;
