@@ -6,6 +6,7 @@
 mod inspect;
 mod integration;
 mod sdk;
+mod self_manage;
 mod shell;
 
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
@@ -53,6 +54,9 @@ enum Command {
     /// Configure shell integration and print SDK environments.
     #[command(subcommand)]
     Shell(shell::ShellCommand),
+    /// Install or update Janex itself.
+    #[command(name = "self", subcommand)]
+    SelfManage(self_manage::SelfCommand),
     /// Package a directory or JAR as a Janex application.
     Pack(Box<PackArgs>),
     /// Run a local Janex file or a Maven application, downloading it if needed.
@@ -321,7 +325,10 @@ fn cli_command() -> clap::Command {
             ][..],
         ),
         ("Packages", &["pack", "inspect"][..]),
-        ("Configuration", &["shell", "integration", "open"][..]),
+        (
+            "Configuration",
+            &["self", "shell", "integration", "open"][..],
+        ),
     ] {
         help.push_str(&format!("\n{heading}:\n"));
         for name in names {
@@ -348,6 +355,7 @@ fn run(cli: Cli) -> janex_host::Result<i32> {
         Command::Inspect(args) => return inspect::run(args),
         Command::Sdk(command) => return sdk::run(command),
         Command::Shell(command) => return shell::run(command),
+        Command::SelfManage(command) => return self_manage::run(command),
         Command::Pack(args) => {
             let args = *args;
             let mut options = PackOptions::new(args.source, args.output);

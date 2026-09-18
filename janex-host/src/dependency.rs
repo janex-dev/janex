@@ -390,7 +390,8 @@ fn bounded(input: impl Read, limit: u64) -> Result<Vec<u8>> {
 }
 
 /// Downloads an exact representation, checking every redirect before sending its request.
-fn download(mut url: Url, options: &DependencyOptions) -> Result<Vec<u8>> {
+pub(crate) fn download(mut url: Url, options: &DependencyOptions) -> Result<Vec<u8>> {
+    validate_url(&url)?;
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .max_redirects(0)
         .http_status_as_error(false)
@@ -406,6 +407,7 @@ fn download(mut url: Url, options: &DependencyOptions) -> Result<Vec<u8>> {
             .ok_or_else(|| invalid("dependency download timed out"))?;
         let mut response = agent
             .get(url.as_str())
+            .header("User-Agent", concat!("Janex/", env!("CARGO_PKG_VERSION")))
             .header("Accept-Encoding", "identity")
             .config()
             .timeout_global(Some(remaining))

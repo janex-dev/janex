@@ -83,8 +83,13 @@ pub(super) fn run(command: ShellCommand) -> Result<i32> {
 /// Updates the three managed loader files without reading SDK state or editing shell profiles.
 /// Each file is replaced atomically; an error can leave earlier files updated.
 pub(super) fn install() -> Result<()> {
+    install_for(&std::env::current_exe()?)
+}
+
+/// Writes loaders bound to the supplied installed executable.
+pub(super) fn install_for(executable: &std::path::Path) -> Result<()> {
     let home = janex_java::runtime::java_path(&janex_platform::janex_home()?);
-    let executable = janex_java::runtime::java_path(&std::env::current_exe()?);
+    let executable = janex_java::runtime::java_path(executable);
     let executable = executable
         .to_str()
         .ok_or_else(|| Error::InvalidInput("Janex executable path is not Unicode".into()))?;

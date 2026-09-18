@@ -20,5 +20,6 @@ mod persistence;
 mod roots;
 pub mod run;
 pub mod sdk;
+pub mod self_manage;
 
 pub use error::{Error, Result};

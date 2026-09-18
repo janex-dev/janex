@@ -52,6 +52,14 @@ for the project's long-term direction and delivery priorities.
 
 ## CLI Interaction
 
+- Provide `self install` for copying the running CLI into `JANEX_HOME/bin` and generating shell
+  loaders bound to that path. Keep user shell profiles unchanged.
+- Provide `self update` using native-platform GitHub Release assets with required SHA-256 digests,
+  or explicit local ZIP/tar.xz distributions. Stage and probe before replacement; restore failed
+  Windows replacements and retain locked old executables for later cleanup. Serialize self operations.
+  Keep SDK/application installations and defaults unchanged. Publish existing distribution archives
+  from release-triggered builds, without checksum sidecars.
+
 - Keep `install`, `list`, `update`, and version selection shared across SDKs and applications.
   Require explicit targets when clearing defaults; catalog queries without a target list all SDK products.
 - Use repeatable `--with` SDK selectors for `exec` and `shell env`. Keep `use` shell-local;

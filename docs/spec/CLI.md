@@ -10,6 +10,7 @@ janex pack --help
 janex integration register --help
 ```
 
+- [Install and update Janex](#install-and-update-janex)
 - [Manage SDKs](#manage-sdks)
 - [Install applications](#install-applications)
 - [Run an application](#run-an-application)
@@ -17,6 +18,37 @@ janex integration register --help
 - [Inspect a package](#inspect-a-package)
 - [Register file-opening support](#register-file-opening-support)
 - [Files and caches](#files-and-caches)
+
+## Install and update Janex
+
+After extracting a distribution, run `./janex self install` on Unix or
+`.\janex.exe self install` on Windows. It copies the executable into `JANEX_HOME/bin`, writes
+shell loaders, and prints their loading commands. Shell profiles are left for you to edit.
+`JANEX_HOME` defaults to `~/.janex`; set it before installation to choose another directory.
+
+Once you have loaded the shell integration or added `JANEX_HOME/bin` to `PATH`:
+
+```shell
+janex self update
+janex self update --version 0.1.0
+janex self update --from janex-windows-x86_64.zip
+```
+
+Online updates use published GitHub Releases and choose the system's native architecture, even
+when the current executable runs under emulation. The latest stable release never downgrades your
+installation; an explicit version or local archive can. Releases require GitHub's asset SHA-256
+digest, checked before extraction. Local ZIP and tar.xz archives are explicitly trusted inputs;
+add `--sha256 <HEX>` to verify a separately obtained digest. Local updates need no network access.
+
+The staged executable must successfully report its version before replacement. Download,
+checksum, extraction, or validation failures leave the installed executable intact. Windows moves
+the running executable aside and restores it if replacement fails; a locked old copy can remain
+under `bin/.janex-update-*` until a later installation or update removes it.
+
+`self update` must run from the managed installation. Copies installed by another package manager
+should be updated through that manager. SDKs, installed applications, and their defaults are unchanged.
+The separate `janex-launcher` packaging prefix is not installed or updated by these commands.
+Before the first GitHub Release, use `--from` with a downloaded Actions distribution.
 
 ## Manage SDKs
 

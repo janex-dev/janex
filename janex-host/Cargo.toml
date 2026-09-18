@@ -26,6 +26,8 @@ roxmltree = "0.21"
 tar = { version = "0.4", default-features = false }
 flate2 = "1"
 toml = { version = "0.9", default-features = false, features = ["parse", "serde", "std"] }
+semver = "1"
+lzma-rust2 = { version = "0.20", default-features = false, features = ["std", "xz"] }
 
 [dev-dependencies]
 zstd.workspace = true

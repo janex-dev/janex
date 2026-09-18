@@ -8,19 +8,24 @@ for planned capabilities and priorities.
 
 ## Getting Started
 
-Place `janex` (`janex.exe` on Windows) in a directory on PATH. The optional `janex-launcher`
-executable is a prefix for creating self-launching application packages.
+Download and extract a distribution, then run `./janex self install`
+(`.\janex.exe self install` on Windows). This copies Janex into `JANEX_HOME/bin`, writes shell
+loaders, and prints commands for loading them. You can also keep the executable elsewhere on PATH.
+The optional `janex-launcher` executable is a prefix for creating self-launching application packages.
 
 ```shell
 janex install sdk:bellsoft/liberica-jdk@21
 janex default sdk:bellsoft/liberica-jdk@21
-janex shell init
 ```
 
 `janex shell init` writes shell integration scripts into `JANEX_HOME/shell` and prints loading commands.
 `JANEX_HOME` defaults to `~/.janex`; set it to an absolute path to use another directory.
 The executable can reside elsewhere. SDK installations are separate from disposable dependency caches.
 Shell startup files are not modified automatically.
+
+Use `janex self update` to update a managed installation from the latest stable GitHub Release.
+Until releases are published, use a downloaded Actions archive:
+`janex self update --from <archive.zip-or-tar.xz>`.
 
 Load `shell/init.sh` for Bash or Zsh, `shell/init.fish` for Fish, or `shell/init.ps1` for PowerShell.
 For example:
@@ -58,7 +63,7 @@ Use `packageArtifacts -PjanexTarget=<rust-target>` to build, check, and package 
 under `build/distributions/`. Windows archives use ZIP; Unix archives use tar.xz and require `xz`.
 Linux musl and FreeBSD cross-builds also require Zig and cargo-zigbuild.
 Supported targets and tool versions are maintained in the [artifact workflow](.github/workflows/artifacts.yml).
-Download prebuilt archives from its GitHub Actions runs.
+Download prebuilt archives from its GitHub Actions runs or published GitHub Releases.
 
 ## Versioning
 
@@ -66,6 +71,8 @@ Download prebuilt archives from its GitHub Actions runs.
 Development versions end in `-SNAPSHOT`. For a release, remove the suffix, refresh `Cargo.lock`
 with `cargo check --workspace`, and commit both files before creating the matching `v<version>` tag.
 Then set the next development version and refresh the lockfile. Release builds do not change versions.
+Publishing a GitHub Release builds all supported platforms and uploads their distribution archives
+after every platform build succeeds. The release tag must match `v<workspace.package.version>`.
 The file format version is independent.
 
 ## Documentation

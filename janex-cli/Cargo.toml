@@ -28,6 +28,9 @@ mimalloc.workspace = true
 [dev-dependencies]
 janex-signature.workspace = true
 pgp = { version = "0.20", default-features = false }
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2"] }
+tar = { version = "0.4", default-features = false }
+lzma-rust2 = { version = "0.20", default-features = false, features = ["std", "xz", "encoder"] }
 
 [lints]
 workspace = true

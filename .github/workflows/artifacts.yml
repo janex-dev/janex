@@ -5,12 +5,14 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  release:
+    types: [published]
 
 permissions:
   contents: read
 
 concurrency:
-  group: build-artifacts-${{ github.ref }}
+  group: build-artifacts-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -51,6 +53,14 @@ jobs:
             os: macos-15
     steps:
       - uses: actions/checkout@v7
+      - name: Check release version
+        if: github.event_name == 'release'
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"$').Matches.Groups[1].Value
+          if ($env:RELEASE_TAG -cne "v$version") { throw "Release tag does not match Cargo.toml version" }
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ matrix.os == 'windows-11-arm' && 'stable-aarch64-pc-windows-msvc' || 'stable' }}
@@ -94,3 +104,24 @@ jobs:
           compression-level: 0
           retention-days: 14
           archive: false
+
+  publish-release:
+    name: Upload release distributions
+    needs: build
+    if: github.event_name == 'release' && github.repository == 'janex-dev/janex'
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: janex-*
+          path: distributions
+          merge-multiple: true
+          skip-decompress: true
+      - name: Upload distribution archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$RELEASE_TAG" distributions/*
