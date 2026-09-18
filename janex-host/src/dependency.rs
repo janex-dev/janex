@@ -79,11 +79,16 @@ pub fn resolve(
     resolve_address(uri, url, jar_name, checksum, options, require_secure)
 }
 
-/// Acquires application artifacts or metadata over HTTPS using the shared content cache.
+/// Caches application artifacts or metadata from HTTPS or a local file repository.
 pub(crate) fn artifact(uri: &str, options: &DependencyOptions) -> Result<Dependency> {
     let url = Url::parse(uri).map_err(|_| invalid("invalid application URL"))?;
-    validate_url(&url)?;
-    if url.scheme() != "https" {
+    if url.scheme() == "file" {
+        if url.to_file_path().is_err() || url.query().is_some() || url.fragment().is_some() {
+            return Err(invalid("invalid local application URL"));
+        }
+    } else if url.scheme() == "https" {
+        validate_url(&url)?;
+    } else {
         return Err(invalid(
             "application repositories require HTTPS or a local file URL",
         ));
@@ -238,6 +243,13 @@ fn resolve_address(
     });
     let bytes = match reused {
         Some(bytes) => bytes,
+        None if url.scheme() == "file" => bounded(
+            fs::File::open(
+                url.to_file_path()
+                    .map_err(|_| invalid("invalid local application URL"))?,
+            )?,
+            options.max_bytes,
+        )?,
         None => download(url.clone(), options)?,
     };
     let digest = verify(&bytes, checksum)?;

@@ -55,7 +55,7 @@ enum Command {
     Shell(shell::ShellCommand),
     /// Package a directory or JAR as a Janex application.
     Pack(Box<PackArgs>),
-    /// Run a local Janex file or an installed Maven application.
+    /// Run a local Janex file or a Maven application, downloading it if needed.
     #[command(override_usage = "janex run [OPTIONS] <TARGET> [ARGS...]")]
     Run(Box<RunArgs>),
     /// Open a local Janex file using desktop invocation conditions.
@@ -81,10 +81,10 @@ struct RunArgs {
     /// Preserve Unicode arguments through a bootstrap, or use the native Java entry point.
     #[arg(long, value_enum, default_value = "bootstrap")]
     launch_mode: LaunchModeArg,
-    /// Resolve external dependencies only from the verified local cache.
+    /// Resolve uninstalled packages and dependencies only from the verified local cache.
     #[arg(long, conflicts_with = "refresh_dependencies")]
     offline: bool,
-    /// Store dependency cache entries in this directory.
+    /// Store package and dependency cache entries in this directory.
     #[arg(long, value_name = "DIRECTORY")]
     dependency_cache: Option<PathBuf>,
     /// Refresh dependencies even when cache entries are valid.
@@ -96,7 +96,7 @@ struct RunArgs {
     /// Publisher authentication and unsigned execution policy.
     #[command(flatten)]
     trust: TrustArgs,
-    /// Local path, file URI, or installed application selector, then uninterpreted program arguments.
+    /// Local path, file URI, application PURL or shorthand, or installation ID, then program arguments.
     #[arg(value_name = "TARGET", required = true, num_args = 1.., trailing_var_arg = true, allow_hyphen_values = true)]
     target: Vec<OsString>,
 }

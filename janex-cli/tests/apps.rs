@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Glavo
 // SPDX-License-Identifier: MPL-2.0
 
-//! Maven application installation and native command execution in isolated homes.
+//! Maven application installation, cached execution, and native commands in isolated homes.
 
 use std::{
     fs,
@@ -240,6 +240,26 @@ fn thin_jars_lock_runtime_dependencies_and_launch_without_the_repository() {
             .unwrap(),
     );
     let target = repository.purl("thin", Some("1"));
+    let run_home = temp.path().join("run-home");
+    let run_cache = temp.path().join("run-cache");
+    assert_eq!(
+        success(invoke(
+            &run_home,
+            temp.path(),
+            &[
+                "run",
+                "--dependency-cache",
+                run_cache.to_str().unwrap(),
+                &target,
+                "😀"
+            ],
+        )),
+        "dependency-class\ndependency-resource\n8J+YgA==\n"
+    );
+    assert!(!run_home.join("apps").exists());
+    assert!(!run_home.join("state/apps.cbor").exists());
+    assert!(!run_home.join("bin").exists());
+    assert!(!run_home.join("cache/dependencies").exists());
     let installed: serde_json::Value = serde_json::from_str(&success(invoke(
         &home,
         temp.path(),
@@ -308,6 +328,23 @@ fn thin_jars_lock_runtime_dependencies_and_launch_without_the_repository() {
         fs::remove_dir_all(cache).unwrap();
     }
     for mode in ["direct", "bootstrap"] {
+        assert_eq!(
+            success(invoke(
+                &run_home,
+                temp.path(),
+                &[
+                    "run",
+                    "--offline",
+                    "--launch-mode",
+                    mode,
+                    "--dependency-cache",
+                    run_cache.to_str().unwrap(),
+                    &target,
+                    "argument with spaces"
+                ],
+            )),
+            "dependency-class\ndependency-resource\nYXJndW1lbnQgd2l0aCBzcGFjZXM=\n"
+        );
         let output = success(invoke(
             &home,
             temp.path(),
@@ -359,6 +396,18 @@ fn explicit_main_class_and_self_contained_policy_are_local_installation_options(
     );
     let purl = repository.purl("standalone", Some("1"));
     let target = format!("{purl}[main-class=Main,dependencies=none]");
+    for mode in ["direct", "bootstrap"] {
+        assert_eq!(
+            success(invoke(
+                &home,
+                temp.path(),
+                &["run", "--launch-mode", mode, &target]
+            )),
+            "1\n"
+        );
+    }
+    assert!(!home.join("apps").exists());
+    assert!(!home.join("state/apps.cbor").exists());
     let installed: serde_json::Value = serde_json::from_str(&success(invoke(
         &home,
         temp.path(),
@@ -638,6 +687,19 @@ fn janex_artifacts_and_invalid_batches_are_handled_before_publication() {
     );
     assert!(!entry(&home, "container").exists());
     let janex_target = format!("{jar_target}&type=janex");
+    let run_home = temp.path().join("run-home");
+    for mode in ["direct", "bootstrap"] {
+        assert_eq!(
+            success(invoke(
+                &run_home,
+                temp.path(),
+                &["run", "--launch-mode", mode, &janex_target]
+            )),
+            "1.0\n"
+        );
+    }
+    assert!(!run_home.join("apps").exists());
+    assert!(!run_home.join("state/apps.cbor").exists());
     let janex_install: serde_json::Value = serde_json::from_str(&success(invoke(
         &home,
         temp.path(),
@@ -761,4 +823,215 @@ fn janex_artifacts_and_invalid_batches_are_handled_before_publication() {
             .len(),
         1
     );
+}
+
+#[test]
+fn cached_apps_preserve_arguments_and_refresh_without_changing_installations() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let repository = Repository::new(temp.path());
+    repository.jar("demo", "1", None);
+    repository.jar("demo", "2", None);
+    repository.release("demo", "1");
+    let latest = repository.purl("demo", None);
+    let first = repository.purl("demo", Some("1"));
+    let second = repository.purl("demo", Some("2"));
+    let missing = invoke(&home, temp.path(), &["run", "--offline", &latest]);
+    assert!(!missing.status.success());
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("offline cache"));
+    assert!(!home.exists());
+    assert_eq!(
+        success(invoke(
+            &home,
+            temp.path(),
+            &["run", &latest, "", "😀", "--help", "--with", "a b", "\""]
+        )),
+        "1\n\n8J+YgA==\nLS1oZWxw\nLS13aXRo\nYSBi\nIg==\n"
+    );
+    assert_eq!(
+        invoke(&home, temp.path(), &["run", "--offline", &latest, "exit"])
+            .status
+            .code(),
+        Some(23)
+    );
+    repository.release("demo", "2");
+    assert_eq!(
+        success(invoke(&home, temp.path(), &["run", &latest])),
+        "1\n"
+    );
+    assert_eq!(
+        success(invoke(
+            &home,
+            temp.path(),
+            &["run", "--refresh-dependencies", &latest]
+        )),
+        "2\n"
+    );
+    assert!(!home.join("apps").exists());
+    assert!(!home.join("state/apps.cbor").exists());
+    assert!(!home.join("bin").exists());
+
+    // A cached launch may use the same command name as an installed application.
+    success(invoke(&home, temp.path(), &["install", &first]));
+    let before = fs::read(home.join("state/apps.cbor")).unwrap();
+    assert_eq!(
+        success(invoke(&home, temp.path(), &["run", &second])),
+        "2\n"
+    );
+    assert_eq!(before, fs::read(home.join("state/apps.cbor")).unwrap());
+    assert_eq!(success(native(&home, temp.path(), "demo", &[])), "1\n");
+
+    repository.jar("broken", "1", None);
+    repository.pom("broken", "1", "<dependencies><dependency><groupId>org.example</groupId><artifactId>missing</artifactId><version>1</version></dependency></dependencies>");
+    let broken = invoke(
+        &home,
+        temp.path(),
+        &["run", &repository.purl("broken", Some("1"))],
+    );
+    assert!(!broken.status.success());
+    assert!(broken.stdout.is_empty());
+    assert_eq!(before, fs::read(home.join("state/apps.cbor")).unwrap());
+
+    fs::remove_dir_all(&repository.root).unwrap();
+    for mode in ["direct", "bootstrap"] {
+        assert_eq!(
+            success(invoke(
+                &home,
+                temp.path(),
+                &["run", "--offline", "--launch-mode", mode, &latest]
+            )),
+            "2\n"
+        );
+    }
+    // A corrupt cached artifact fails offline; it must not fall back to another installed version.
+    let cached = cached_file(&home.join("cache/dependencies/files"), "demo-2.jar").unwrap();
+    fs::write(cached, b"corrupt").unwrap();
+    let corrupt = invoke(&home, temp.path(), &["run", "--offline", &second]);
+    assert!(!corrupt.status.success());
+    assert!(String::from_utf8_lossy(&corrupt.stderr).contains("checksum mismatch"));
+    assert_eq!(before, fs::read(home.join("state/apps.cbor")).unwrap());
+}
+
+/// Finds a fixture artifact within the digest-addressed cache.
+fn cached_file(directory: &Path, name: &str) -> Option<PathBuf> {
+    for entry in fs::read_dir(directory).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_dir() {
+            if let Some(path) = cached_file(&entry.path(), name) {
+                return Some(path);
+            }
+        } else if entry.file_name() == name {
+            return Some(entry.path());
+        }
+    }
+    None
+}
+
+#[test]
+fn cached_package_requests_honor_repository_overrides_and_signer_pins() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let repository = Repository::new(temp.path());
+    let jar = repository.jar("demo", "1", None);
+    for target in ["pkg:maven/org.example/demo@1", "maven:org.example:demo@1"] {
+        assert_eq!(
+            success(invoke(
+                &home,
+                temp.path(),
+                &["run", "--maven-repository", &repository.url, target]
+            )),
+            "1\n"
+        );
+    }
+    // An explicit qualifier wins over the command's default repository.
+    assert_eq!(
+        success(invoke(
+            &home,
+            temp.path(),
+            &[
+                "run",
+                "--maven-repository",
+                "https://unused.invalid/",
+                &repository.purl("demo", Some("1"))
+            ]
+        )),
+        "1\n"
+    );
+    let fixtures =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../janex-signature/tests/fixtures/cms");
+    let certificate = fixtures.join("rsa256.cert.pem");
+    let package = jar.with_extension("janex");
+    success(invoke(
+        &home,
+        temp.path(),
+        &[
+            "pack",
+            jar.to_str().unwrap(),
+            "--output",
+            package.to_str().unwrap(),
+            "--cms-certificate",
+            certificate.to_str().unwrap(),
+            "--cms-key",
+            fixtures.join("rsa256.key.pem").to_str().unwrap(),
+        ],
+    ));
+    let target = format!("{}&type=janex", repository.purl("demo", Some("1")));
+    assert!(
+        !invoke(&home, temp.path(), &["run", "--allow-unsigned", &target])
+            .status
+            .success()
+    );
+    fs::remove_dir_all(&repository.root).unwrap();
+    assert!(
+        !invoke(
+            &home,
+            temp.path(),
+            &[
+                "run",
+                "--offline",
+                "--trust-cms-certificate",
+                fixtures.join("p256.cert.pem").to_str().unwrap(),
+                &target,
+            ]
+        )
+        .status
+        .success()
+    );
+    for mode in ["direct", "bootstrap"] {
+        assert_eq!(
+            success(invoke(
+                &home,
+                temp.path(),
+                &[
+                    "run",
+                    "--offline",
+                    "--launch-mode",
+                    mode,
+                    "--trust-cms-certificate",
+                    certificate.to_str().unwrap(),
+                    &target,
+                ]
+            )),
+            "1\n"
+        );
+    }
+    // Janex signer pins cannot authenticate a JAR, even if its bytes came from the same repository.
+    assert!(
+        !invoke(
+            &home,
+            temp.path(),
+            &[
+                "run",
+                "--offline",
+                "--trust-cms-certificate",
+                certificate.to_str().unwrap(),
+                &repository.purl("demo", Some("1")),
+            ]
+        )
+        .status
+        .success()
+    );
+    assert!(!home.join("apps").exists());
+    assert!(!home.join("state/apps.cbor").exists());
+    assert!(!home.join("bin").exists());
 }

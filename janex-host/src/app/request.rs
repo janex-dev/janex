@@ -10,11 +10,11 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
 use url::Url;
 
-/// How a JAR installation obtains its runtime dependencies.
+/// How a JAR application obtains its runtime dependencies.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DependencyMode {
-    /// Resolve the published POM's runtime dependency graph at installation time.
+    /// Resolve the published POM's runtime dependency graph before installation or execution.
     #[default]
     Maven,
     /// Keep a self-contained JAR without reading its POM.
@@ -26,7 +26,7 @@ pub enum DependencyMode {
 pub struct JarOptions {
     /// Explicit binary class name; absent uses the manifest's Main-Class.
     pub main_class: Option<String>,
-    /// Whether installation resolves POM dependencies.
+    /// Whether acquisition resolves POM dependencies.
     pub dependencies: DependencyMode,
 }
 
@@ -67,6 +67,11 @@ impl AppRequest {
     /// Both forms accept local `[key=value]` options; shorthand options may also name qualifiers.
     /// Versions have the same exact meaning in both forms; omit the version to track releases.
     pub fn parse(text: &str) -> Result<Self> {
+        Self::parse_with_repository(text, CENTRAL)
+    }
+
+    /// Parses a target, using `repository` only when it has no explicit repository qualifier.
+    pub(crate) fn parse_with_repository(text: &str, repository: &str) -> Result<Self> {
         let (text, options) = match text.split_once('[') {
             Some((base, rest)) => (
                 base,
@@ -119,7 +124,7 @@ impl AppRequest {
             if !option_qualifiers.is_empty() {
                 return Err(invalid("use PURL query qualifiers for package coordinates"));
             }
-            Self::from_purl(text, command)?
+            Self::from_purl(text, command, repository)?
         } else {
             let text = text
                 .strip_prefix("maven:")
@@ -142,6 +147,7 @@ impl AppRequest {
                 version,
                 qualifiers,
                 command,
+                repository,
             )?
         };
         request.jar = jar;
@@ -197,7 +203,7 @@ impl AppRequest {
     }
 
     /// Parses PURL components without treating URL query values as form-encoded text.
-    fn from_purl(text: &str, command: Option<String>) -> Result<Self> {
+    fn from_purl(text: &str, command: Option<String>, repository: &str) -> Result<Self> {
         let text = text
             .strip_prefix("pkg:")
             .ok_or_else(|| invalid("invalid Package URL scheme"))?
@@ -230,6 +236,7 @@ impl AppRequest {
             version,
             query_qualifiers(query)?,
             command,
+            repository,
         )
     }
 
@@ -240,6 +247,7 @@ impl AppRequest {
         version: Option<String>,
         mut qualifiers: BTreeMap<String, String>,
         command: Option<String>,
+        default_repository: &str,
     ) -> Result<Self> {
         for part in group.split('.') {
             component(part)?;
@@ -262,7 +270,7 @@ impl AppRequest {
             qualifiers
                 .remove("repository_url")
                 .as_deref()
-                .unwrap_or(CENTRAL),
+                .unwrap_or(default_repository),
         )?;
         if let Some(key) = qualifiers.keys().next() {
             return Err(crate::Error::Unsupported(format!(
@@ -409,8 +417,8 @@ impl<'de> Deserialize<'de> for AppRequest {
             jar: JarOptions,
         }
         let value = StoredRequest::deserialize(deserializer)?;
-        let mut request =
-            Self::from_purl(&value.purl, Some(value.command)).map_err(serde::de::Error::custom)?;
+        let mut request = Self::from_purl(&value.purl, Some(value.command), CENTRAL)
+            .map_err(serde::de::Error::custom)?;
         request.jar = value.jar;
         request.validate().map_err(serde::de::Error::custom)?;
         Ok(request)

@@ -647,8 +647,8 @@ pub(crate) fn jar_entry(
     Ok((main, feature))
 }
 
-/// Prepares an installed JAR with its saved entry point and ordered runtime dependencies.
-/// The caller retains all installation files unchanged until the returned plan finishes executing.
+/// Prepares a JAR with its selected entry point and ordered runtime dependencies.
+/// The caller retains all input files unchanged until the returned plan finishes executing.
 pub(crate) fn prepare_jar(
     options: &RunOptions,
     main: &str,
@@ -661,16 +661,14 @@ pub(crate) fn prepare_jar(
         ));
     }
     if options.application.is_some() {
-        return Err(invalid(
-            "JAR applications have a single installed entry point",
-        ));
+        return Err(invalid("JAR applications have a single entry point"));
     }
     let target = fs::canonicalize(&options.target)?;
     let mut class_path = vec![janex_java::runtime::java_path(&target)];
     for dependency in dependencies {
         if !dependency.is_file() {
             return Err(invalid(format!(
-                "installed application dependency is missing: {}",
+                "application dependency is missing: {}",
                 dependency.display()
             )));
         }

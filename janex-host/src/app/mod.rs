@@ -1,9 +1,10 @@
 // Copyright (c) 2026 Glavo
 // SPDX-License-Identifier: MPL-2.0
 
-//! Persistent Maven application installation and native command dispatch.
+//! Maven application installation, cached execution, and native command dispatch.
 
 mod request;
+mod run;
 pub use request::{AppRequest, DependencyMode, JarOptions};
 
 use crate::{
@@ -207,33 +208,14 @@ impl AppManager {
                 return Ok(installed);
             }
         }
-        let exact = if request.version.is_none() {
-            let metadata = self.fetch(&request.url(true)?, options, 1024 * 1024)?;
-            request.exact(&release(&metadata, request)?)?
-        } else {
-            request.clone()
-        };
+        let exact = exact_request(request, |url| self.fetch(url, options, 1024 * 1024))?;
         let url = exact.url(false)?;
         let bytes = self.fetch(&url, options, options.max_bytes)?;
         let mut jar = validate_artifact(&bytes, &exact)?;
         let sha256 = digest(&bytes)?;
         let repository = Url::parse(&exact.repository).unwrap();
-        let dependencies = if exact.kind == "jar" && exact.jar.dependencies == DependencyMode::Maven
-        {
-            crate::maven::runtime_dependencies(
-                &crate::maven::Artifact {
-                    group: exact.group.clone(),
-                    name: exact.artifact.clone(),
-                    version: exact.version.clone().unwrap(),
-                    extension: "jar".into(),
-                    classifier: exact.classifier.clone(),
-                },
-                &repository,
-                |url| self.fetch(url, options, 4 * 1024 * 1024),
-            )?
-        } else {
-            Vec::new()
-        };
+        let dependencies =
+            runtime_dependencies(&exact, |url| self.fetch(url, options, 4 * 1024 * 1024))?;
         fs::create_dir_all(self.root.join("apps"))?;
         let stage = tempfile::tempdir_in(self.root.join("apps"))?;
         write_artifact(&stage.path().join(exact.filename()), &bytes)?;
@@ -461,8 +443,10 @@ impl AppManager {
         Ok(installed)
     }
 
-    /// Executes an installed selector or registered command, retaining its lease until Java exits.
-    /// Stored artifacts run independently of the download cache; signed containers retain run-time trust checks.
+    /// Executes a selector or registered command, preferring an installed release.
+    /// Installed releases retain a lease until Java exits and run independently of the download cache.
+    /// Uninstalled PURLs run from the shared cache without changing installations or command defaults.
+    /// Signed containers retain run-time trust checks in both cases.
     pub fn execute(
         &self,
         target: &str,
@@ -477,8 +461,18 @@ impl AppManager {
                 .get(target)
                 .ok_or_else(|| invalid("application command is not registered"))?;
             command_installation(&state, selection)?
+        } else if target.starts_with("app-") {
+            installation(&state, target)?
         } else {
-            resolve(&state, target)?
+            let request =
+                AppRequest::parse_with_repository(target, &options.dependencies.maven_repository)?;
+            match find_request(&state, &request)? {
+                Some(installed) => installed,
+                None => {
+                    drop(lock);
+                    return self.execute_cached(&request, options);
+                }
+            }
         };
         let _lease = fs::File::open(self.lease_path(&installed.id))?;
         fs4::FileExt::lock_shared(&_lease)?;
@@ -695,7 +689,9 @@ impl AppManager {
         }
         let mut options = options.clone();
         options.max_bytes = limit;
-        options.cache_directory = Some(self.root.join("cache/dependencies"));
+        if options.cache_directory.is_none() {
+            options.cache_directory = Some(self.root.join("cache/dependencies"));
+        }
         Ok(crate::dependency::artifact(url.as_str(), &options)?.bytes)
     }
 }
@@ -715,22 +711,60 @@ fn resolve<'a>(state: &'a AppStatus, target: &str) -> Result<&'a Installation> {
         return installation(state, target);
     }
     let request = AppRequest::parse(target)?;
-    if let Some(selection) = state.selections.iter().find(|s| s.request == request) {
-        return installation(state, &selection.installation);
+    find_request(state, &request)?.ok_or_else(|| invalid("application is not installed"))
+}
+
+/// Finds a saved binding or a single concrete release; ambiguity remains an error.
+fn find_request<'a>(
+    state: &'a AppStatus,
+    request: &AppRequest,
+) -> Result<Option<&'a Installation>> {
+    if let Some(selection) = state.selections.iter().find(|s| s.request == *request) {
+        return installation(state, &selection.installation).map(Some);
     }
     let mut matches = state
         .installations
         .iter()
-        .filter(|i| i.application == request);
-    let found = matches
-        .next()
-        .ok_or_else(|| invalid("application is not installed"))?;
+        .filter(|i| i.application == *request);
+    let found = matches.next();
     if matches.next().is_some() {
         return Err(invalid(
             "ambiguous application release; select an installation ID",
         ));
     }
     Ok(found)
+}
+
+/// Resolves an omitted version through the repository's explicit release pointer.
+fn exact_request(
+    request: &AppRequest,
+    fetch: impl FnOnce(&Url) -> Result<Vec<u8>>,
+) -> Result<AppRequest> {
+    if request.version.is_some() {
+        return Ok(request.clone());
+    }
+    request.exact(&release(&fetch(&request.url(true)?)?, request)?)
+}
+
+/// Resolves the same runtime graph for installed and cached JAR applications.
+fn runtime_dependencies(
+    request: &AppRequest,
+    fetch: impl FnMut(&Url) -> Result<Vec<u8>>,
+) -> Result<Vec<crate::maven::Artifact>> {
+    if request.kind != "jar" || request.jar.dependencies == DependencyMode::None {
+        return Ok(Vec::new());
+    }
+    crate::maven::runtime_dependencies(
+        &crate::maven::Artifact {
+            group: request.group.clone(),
+            name: request.artifact.clone(),
+            version: request.version.clone().unwrap(),
+            extension: "jar".into(),
+            classifier: request.classifier.clone(),
+        },
+        &Url::parse(&request.repository).unwrap(),
+        fetch,
+    )
 }
 
 /// Resolves a command's fixed release or movable version request.

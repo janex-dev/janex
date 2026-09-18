@@ -91,6 +91,10 @@ for the project's long-term direction and delivery priorities.
   Prevent command collisions and removal of active applications. Publish complete files before records.
 - Reuse native runtime selection, managed SDK leases, and both Java launch modes. Forward command
   arguments directly, including Unicode, empty strings, and exit codes, without shell-script quoting.
+- Let `run` reuse a matching installation or execute a Maven package from the shared dependency cache.
+  Resolve uninstalled JAR runtime graphs using the same Maven resolver; retain Janex signature checks.
+  Support offline cache reuse, explicit refresh, repository and cache overrides, and both launch modes.
+  Never create installation records or command entries, change defaults, or fall back on registry errors.
 - Verify mixed SDK/application dispatch, independent selectors, cache-independent execution, updates,
   pinning, command switching, failure cleanup, and native command entries in isolated homes.
 

@@ -291,8 +291,8 @@ janex install 'pkg:maven/org.example/tool@1.0[main-class=example.Main]'
 janex install 'maven:org.example:tool@1.0[classifier=all,dependencies=none]'
 ```
 
-The bracketed options are Janex installation settings, separate from the PURL. They work with both
-full PURLs and Maven shorthands. The selected main class must be present in the application JAR.
+The bracketed options are Janex settings, separate from the PURL. They work with both
+full PURLs and Maven shorthands, in `install` and `run`. The selected main class must be present in the application JAR.
 The default `dependencies=maven` requires a POM; a missing POM does not silently disable resolution.
 
 Resolution uses the selected Maven repository for the entire graph. POM repository declarations do
@@ -314,6 +314,25 @@ records under `applications`; `update --all` updates saved SDK and application r
 
 ## Run an application
 
+Run a Maven application without installing it:
+
+```shell
+janex run pkg:maven/org.benf/cfr@0.152 Example.class
+janex run maven:org.benf:cfr@0.152 --help
+janex run 'pkg:maven/org.example/tool@1.0?type=janex'
+```
+
+Janex reuses a matching installation when available. Otherwise it downloads the application and
+its runtime dependencies into the shared cache and runs them there. This creates no installation
+record or command entry and changes no defaults. JARs use the same POM resolution and per-target
+`main-class` and `dependencies` options as installation. Janex containers use their own descriptors.
+
+Use `--offline` to run previously cached packages without contacting a repository. Omitted versions
+use the repository's cached release metadata; `--refresh-dependencies` refreshes that metadata and
+the downloaded artifacts. It does not update a matching installed application; use `update` for that.
+Missing or corrupt cache entries fail offline. An `app-...` ID always requires an existing installation.
+Keep the cache in place while an application is running.
+
 For an unsigned package you trust:
 
 ```shell
@@ -321,11 +340,11 @@ janex run --allow-unsigned app.janex
 janex run --allow-unsigned app.janex --config settings.toml
 ```
 
-Put Janex options **before** the file name. Everything after it goes to the application, even
+Put Janex options **before** the target. Everything after it goes to the application, even
 arguments such as `--help` or `--java`. Arguments stored in the package come first.
 The application inherits your working directory and standard streams, and Janex returns its exit code.
 
-`run` accepts a local path or a local `file:` URI. It does not download the application itself.
+`run` also accepts a local Janex path or a local `file:` URI.
 It finds a compatible installed Java runtime, including SDKs managed by Janex, but does not install
 one automatically. Project toolchain files do not control application runtime selection.
 
@@ -353,6 +372,8 @@ janex run --trust-openpgp-key signer.asc app.janex
 Choose one signature type. Repeating `--trust-cms-certificate` requires every listed signer.
 Janex does not automatically trust embedded certificates, system certificate stores, or global
 OpenPGP keyrings. `--allow-unsigned` does not bypass signature checks on a signed package.
+Packages selected by PURL or Maven shorthand permit unsigned content, as installed applications do;
+signed Janex packages still require signer pins. These pins do not authenticate JAR signatures.
 
 For CMS revocation checks, supply `--cms-crl <FILE>` and, if needed, `--cms-issuer <FILE>`.
 Janex checks supplied revocation information; it does not fetch it from the network.
@@ -360,13 +381,14 @@ Janex checks supplied revocation information; it does not fetch it from the netw
 ### Dependencies and launch modes
 
 A package can refer to external JARs using HTTP(S) URLs or exact Maven coordinates. Janex downloads
-those dependencies on first use and caches them. It does not resolve POMs or transitive dependencies.
+those dependencies on first use and caches them. These descriptor entries do not resolve POMs or
+transitive dependencies; Maven JAR applications resolve their POM graph before launch instead.
 
 | Option | Use |
 | --- | --- |
-| `--offline` | Use cached dependencies only. Missing or corrupt entries cause an error. |
-| `--refresh-dependencies` | Download dependencies again. Cannot be combined with `--offline`. |
-| `--dependency-cache <DIRECTORY>` | Choose a different dependency cache. |
+| `--offline` | Use cached packages and dependencies only, or reuse an installation. |
+| `--refresh-dependencies` | Refresh cached packages, release metadata, and dependencies. Cannot be combined with `--offline`. |
+| `--dependency-cache <DIRECTORY>` | Choose a different package and dependency cache. |
 | `--maven-repository <URL>` | Replace Maven Central as the default repository. |
 
 The default `bootstrap` launch mode loads resources from the package and preserves Unicode program
