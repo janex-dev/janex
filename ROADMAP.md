@@ -40,6 +40,22 @@ acceptance criteria belong in [PLANS.md](PLANS.md).
 - Develop shared interfaces from working implementations in multiple ecosystems. Java is the
   first complete implementation; a second ecosystem will test which abstractions are reusable.
 
+## Design References
+
+| Reference | Design to study | Application to Janex |
+| --- | --- | --- |
+| [Docker / OCI](https://github.com/opencontainers/image-spec/blob/main/image-index.md) | Content identities and multi-platform publication indexes. | Separate package coordinates, version selection, platform variants, and content digests. Keep publication indexes in repository metadata. |
+| [Nix](https://nix.dev/manual/nix/stable/package-management/profiles) | Independent installations, environment generations, atomic switching, and rollback. | Select environments through references to retained installations; keep dependencies reachable from retained environments during cleanup. |
+| [mise](https://mise.jdx.dev/dev-tools/mise-lock.html) | Cross-language tool selection and platform-aware lockfiles. | Separate project SDK requirements from exact versions and platform artifacts selected during resolution. |
+| [Coursier](https://get-coursier.io/docs/cli-appdescriptors) | Maven application installation, application descriptors, and channels. | Supply entry points and launch settings missing from ordinary packages while preserving PURLs as authoritative package identities. |
+| [pnpm](https://pnpm.io/symlinked-node-modules-structure) | Content-addressed storage and independent dependency layouts. | Share stored dependency content while preserving each application's resolved dependency set. |
+| [Bazel](https://bazel.build/remote/caching) | Build actions, action-result caches, and content-addressed storage. | Model build inputs and outputs explicitly for incremental builds and shared local or remote caches. |
+| [BuildKit](https://github.com/moby/buildkit#exploring-llb) | Dependency-graph execution with separate build frontends. | Let language-specific build rules share scheduling and caching infrastructure. |
+| [Flatpak / OSTree](https://docs.flatpak.org/en/latest/under-the-hood.html) | Separate application and runtime deployments, versioned content, and deduplication. | Inform runtime sharing, application updates, and desktop distribution. |
+
+Prioritize Coursier, mise, and Nix for application installation, SDK selection, and environment
+management. Study OCI, BuildKit, and Bazel as distribution and build support expand.
+
 ## Delivery Sequence
 
 1. Complete the Java workflow: packaging, distribution, launching, SDK management, and application
